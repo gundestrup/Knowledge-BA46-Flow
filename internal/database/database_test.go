@@ -2168,3 +2168,55 @@ func TestRetargetPath(t *testing.T) {
 		t.Fatalf("unknown path retarget=%q,%v", got, ok)
 	}
 }
+
+// TestRenameRetargetsMergeTargets: a merge names the file to merge into —
+// when that file moves, live merge suggestions must follow it. A move
+// destination stays put: the vacated slot is still a valid landing spot.
+func TestRenameRetargetsMergeTargets(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	seed := func(path, sha string) Document {
+		t.Helper()
+		doc := Document{Path: path, SHA256: sha, Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}
+		if _, err := db.UpsertScanned(ctx, doc, "s1"); err != nil {
+			t.Fatal(err)
+		}
+		return doc
+	}
+	target := seed("target.md", "one")
+	source := seed("source.md", "two")
+	if err := db.SaveAnalysis(ctx, source, "m", "t", "s", nil, []Suggestion{
+		{Action: "merge", TargetPath: "target.md", Reason: "combine", Confidence: .9, ProposedContent: "merged"},
+		{Action: "move", TargetPath: "target.md", Reason: "relocate", Confidence: .9},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := db.PendingSuggestions(ctx)
+	if err != nil || len(pending) != 2 {
+		t.Fatalf("pending=%v err=%v", pending, err)
+	}
+	// Accept the merge; the move stays pending.
+	if err := db.Decide(ctx, pending[0].ID, "accepted", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// The target file moves elsewhere unchanged.
+	moved := target
+	moved.Path = "archive/target.md"
+	if _, err := db.UpsertScanned(ctx, moved, "s2"); err != nil {
+		t.Fatal(err)
+	}
+
+	accepted, err := db.Accepted(ctx)
+	if err != nil || len(accepted) != 1 || accepted[0].TargetPath != "archive/target.md" {
+		t.Fatalf("accepted merge target=%+v err=%v", accepted, err)
+	}
+	pending, _ = db.PendingSuggestions(ctx)
+	if len(pending) != 1 || pending[0].Action != "move" || pending[0].TargetPath != "target.md" {
+		t.Fatalf("move destination must not retarget: %+v", pending)
+	}
+}

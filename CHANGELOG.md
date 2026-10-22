@@ -29,7 +29,9 @@ tag is prepared.
   pipeline run deterministically proposes retargeting `related`/
   `contradicted_by` entries and body links that still point at the old path —
   following move chains to the live file, spending no model calls — rather
-  than dropping the links as unresolved.
+  than dropping the links as unresolved. Pending and accepted `merge`
+  suggestions follow the renamed target in the same transaction; `move`
+  destinations intentionally stay, since the vacated slot is still valid.
 
 ### Added
 

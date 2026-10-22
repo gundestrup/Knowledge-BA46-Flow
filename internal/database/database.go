@@ -619,6 +619,12 @@ func renameByHash(ctx context.Context, tx *sql.Tx, doc Document, seen string) (b
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO renames(old_path,new_path,moved_at) VALUES(?,?,?)`, paths[0], doc.Path, seen); err != nil {
 		return false, err
 	}
+	// A live merge into the renamed file follows it — the target names the
+	// entity, which now lives at the new path. Move destinations stay: the
+	// vacated slot remains a legitimate place to land.
+	if _, err := tx.ExecContext(ctx, `UPDATE suggestions SET target_path=? WHERE target_path=? AND action='merge' AND status IN ('pending','accepted')`, doc.Path, paths[0]); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
