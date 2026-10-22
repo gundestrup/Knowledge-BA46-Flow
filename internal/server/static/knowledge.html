@@ -1,0 +1,645 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>KBM-flow — knowledge review</title>
+    <link rel="stylesheet" href="/static/vendor/bulma.min.css" />
+    <link rel="stylesheet" href="/static/dashboard.css" />
+    <script defer src="/static/clientlog.js"></script>
+    <script defer src="/static/vendor/chart.umd.js"></script>
+    <script defer src="/static/dashboard.js"></script>
+    <script defer src="/static/vendor/alpine.min.js"></script>
+  </head>
+  <body x-data="knowledgeDashboard" x-init="init()">
+    <section class="hero kbm-hero">
+      <div class="hero-body">
+        <div class="container dashboard">
+          <p class="eyebrow mb-3">Local knowledge operations</p>
+          <h1 class="title is-1 mb-3">Knowledge, kept useful.</h1>
+          <p class="subtitle is-5 mb-5">
+            Review LLM suggestions before they touch your repository.
+          </p>
+          <div class="buttons">
+            <a class="button is-light" href="/">
+              <img class="kbm-icon" src="/static/icons/house.svg" alt="" />
+              Home
+            </a>
+            <button
+              type="button"
+              class="button is-light"
+              :disabled="busy || applying"
+              @click="startOperation('scan')"
+            >
+              <img
+                class="kbm-icon"
+                src="/static/icons/scan-search.svg"
+                alt=""
+              />
+              <span>Scan repository</span>
+            </button>
+            <button
+              type="button"
+              class="button is-light"
+              :disabled="busy || applying"
+              title="Probe external http(s) links in documents and record the verdict in each note's kbm.link_check block — no LLM involved"
+              @click="startOperation('link-check')"
+            >
+              <img class="kbm-icon" src="/static/icons/link-2.svg" alt="" />
+              <span>Check external links</span>
+            </button>
+            <button
+              type="button"
+              class="button is-light"
+              :disabled="busy || applying"
+              @click="startOperation('analyze')"
+            >
+              <img
+                class="kbm-icon"
+                src="/static/icons/file-search.svg"
+                alt=""
+              />
+              <span>Analyze changes</span>
+            </button>
+            <button
+              type="button"
+              class="button kbm-accent"
+              :disabled="busy || applying || discovering"
+              @click="startOperation('run')"
+            >
+              <img class="kbm-icon" src="/static/icons/play.svg" alt="" />
+              <span>Scan + analyze</span>
+            </button>
+            <button
+              type="button"
+              class="button is-warning"
+              :disabled="busy || applying || acceptedCount === 0"
+              @click="applyAccepted()"
+            >
+              <img class="kbm-icon" src="/static/icons/check.svg" alt="" />
+              <span x-text="applyLabel()"></span>
+            </button>
+            <a class="button is-light" href="/report">
+              <img
+                class="kbm-icon"
+                src="/static/icons/chart-column.svg"
+                alt=""
+              />
+              Repository report
+            </a>
+            <button
+              type="button"
+              class="button is-danger is-light"
+              :disabled="stopping"
+              title="Gracefully stop this KBM-flow server"
+              @click="stopServer()"
+            >
+              <img class="kbm-icon" src="/static/icons/power.svg" alt="" />
+              <span>Stop server</span>
+            </button>
+          </div>
+          <div class="model-controls mb-3">
+            <div class="model-control">
+              <label class="label is-small" for="generation-model"
+                >Generation model</label
+              >
+              <div class="select is-small is-fullwidth">
+                <select
+                  id="generation-model"
+                  x-model="model"
+                  @change="estimate = null"
+                  :disabled="busy || applying || discovering"
+                  title="Per-run generation override; never used for embeddings"
+                >
+                  <option value="">Configured generation/task defaults</option>
+                  <template x-for="m in generationChoices()" :key="m.name">
+                    <option
+                      :value="m.name"
+                      :disabled="modelUnavailable(m, discovered)"
+                      x-text="generationLabel(m)"
+                    ></option>
+                  </template>
+                </select>
+              </div>
+              <p
+                class="is-size-7 mt-1"
+                :class="generationMismatch() ? 'has-text-warning' : 'has-text-white-ter'"
+                x-show="generationStampLine()"
+                x-text="generationStampLine()"
+              ></p>
+              <p
+                class="is-size-7 has-text-warning"
+                x-show="generationMismatch()"
+              >
+                Differs from the model behind most existing analyses.
+              </p>
+            </div>
+            <div class="model-control">
+              <label class="label is-small" for="embedding-model"
+                >Embedding model</label
+              >
+              <div class="select is-small is-fullwidth">
+                <select
+                  id="embedding-model"
+                  x-model="embedModel"
+                  @change="estimate = null"
+                  :disabled="busy || applying || discovering"
+                  title="Independent per-run embedding override; changing models refreshes incompatible vectors"
+                >
+                  <option value="" x-text="embeddingDefaultLabel()"></option>
+                  <template x-for="m in embeddingChoices()" :key="m.name">
+                    <option
+                      :value="m.name"
+                      :disabled="modelUnavailable(m, discovered)"
+                      x-text="embedLabel(m)"
+                    ></option>
+                  </template>
+                </select>
+              </div>
+              <p
+                class="is-size-7 mt-1"
+                :class="embedMismatch() ? 'has-text-warning' : 'has-text-white-ter'"
+                x-show="embedStampLine()"
+                x-text="embedStampLine()"
+              ></p>
+              <p class="is-size-7 has-text-warning" x-show="embedMismatch()">
+                A different embedding model re-vectorizes every document and can
+                expand dependent analysis.
+              </p>
+            </div>
+            <button
+              type="button"
+              class="button is-small is-light"
+              :disabled="busy || applying || discovering"
+              @click="loadModels(true)"
+            >
+              <img class="kbm-icon" src="/static/icons/refresh-cw.svg" alt="" />
+              <span
+                x-text="discovering ? 'Querying Ollama...' : 'Refresh from Ollama'"
+              ></span>
+            </button>
+          </div>
+          <p class="is-size-7 has-text-white-ter mb-2">
+            Choices affect this run only. Refresh lists installed/registered
+            models, not the online catalog; it never downloads models.
+          </p>
+          <p
+            class="is-size-7 has-text-white-ter mb-2"
+            role="status"
+            x-text="modelNotice"
+          ></p>
+          <div class="model-controls mb-3">
+            <div class="select is-small">
+              <select
+                aria-label="Optional task"
+                x-model="task"
+                @change="estimate = null"
+                title="Single-purpose pass: enrichment, embedding backfill, stub expansion, or freshness review"
+              >
+                <option value="all">all LLM tasks</option>
+                <option value="expand">expand stubs</option>
+                <option value="freshness">freshness check</option>
+                <option value="enrich">enrich only</option>
+                <option value="embed">embed backfill</option>
+              </select>
+            </div>
+            <button
+              type="button"
+              class="button is-small is-light"
+              :disabled="busy || applying || discovering"
+              @click="startOperation(task)"
+            >
+              <img class="kbm-icon" src="/static/icons/play.svg" alt="" />
+              <span>Run task</span>
+            </button>
+            <button
+              type="button"
+              class="button is-small is-light"
+              :disabled="busy || applying || discovering || estimating"
+              title="Estimate how many documents this selection would queue — no models run, nothing changes"
+              @click="previewWork()"
+            >
+              <img
+                class="kbm-icon"
+                src="/static/icons/scan-search.svg"
+                alt=""
+              />
+              <span
+                x-text="estimating ? 'Estimating...' : 'Estimate work'"
+              ></span>
+            </button>
+          </div>
+          <div class="is-size-7 has-text-white-ter mb-2" x-show="estimate">
+            <template x-for="line in estimateLines()" :key="line">
+              <p x-text="line"></p>
+            </template>
+            <template x-for="w in estimateWarnings()" :key="w">
+              <p class="has-text-warning" x-text="w"></p>
+            </template>
+          </div>
+          <label
+            class="checkbox is-size-7 has-text-white-ter mb-2"
+            title="Also re-analyze documents whose last analysis used a different model than configured"
+          >
+            <input
+              type="checkbox"
+              x-model="reanalyze"
+              @change="estimate = null"
+            />
+            Re-analyze documents processed by a different model
+          </label>
+          <label
+            class="checkbox is-size-7 has-text-white-ter mb-2"
+            title="Run analysis with ollama_model_external (enhanced lane, e.g. a cloud model). Results stamp the external_* markers and leave the local lineage untouched; document content is sent to that model."
+          >
+            <input
+              type="checkbox"
+              x-model="external"
+              @change="estimate = null"
+            />
+            External generation lane (document content leaves this machine)
+          </label>
+          <label
+            class="checkbox is-size-7 has-text-white-ter mb-2"
+            title="Separate consent for off-machine embedding/enrichment; does not change the generation lane"
+          >
+            <input
+              type="checkbox"
+              x-model="allowCloud"
+              @change="estimate = null"
+            />
+            Allow cloud/remote embeddings and enrichment for this run
+          </label>
+          <p class="is-size-7 has-text-white-ter">
+            <span class="status-dot" :class="busy ? 'is-warning' : ''"></span>
+            <span
+              x-text="busy ? 'A background operation is running' : 'Nothing runs until you start it'"
+            ></span>
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <main class="section pt-5">
+      <div class="container dashboard">
+        <template x-if="error">
+          <article class="message is-danger" role="alert">
+            <div class="message-body" x-text="error"></div>
+          </article>
+        </template>
+        <template x-if="notice">
+          <div
+            class="notification is-light"
+            role="status"
+            x-text="notice"
+          ></div>
+        </template>
+
+        <div class="columns is-variable is-4 mb-2">
+          <div class="column">
+            <div class="box kbm-box stat-box">
+              <p class="stat-number" x-text="documents.length"></p>
+              <p class="stat-label mt-2">Tracked documents</p>
+            </div>
+          </div>
+          <div class="column">
+            <div class="box kbm-box stat-box">
+              <p class="stat-number" x-text="pendingCount"></p>
+              <p class="stat-label mt-2">Suggestions to review</p>
+            </div>
+          </div>
+          <div class="column">
+            <div class="box kbm-box stat-box">
+              <p class="stat-number" x-text="acceptedCount"></p>
+              <p class="stat-label mt-2">Accepted, not applied</p>
+            </div>
+          </div>
+        </div>
+
+        <section class="box kbm-box mb-5">
+          <div class="level is-mobile mb-4">
+            <div class="level-left">
+              <div>
+                <p class="eyebrow">Pipeline progress</p>
+                <h2 class="title is-4 section-heading mb-0">
+                  Notes and suggestions over time
+                </h2>
+              </div>
+            </div>
+          </div>
+          <p class="has-text-grey" x-show="progressDays.length === 0">
+            No activity recorded yet — run a scan to start the trend.
+          </p>
+          <div class="kbm-chart" x-show="progressDays.length > 0">
+            <canvas
+              id="knowledgeProgressChart"
+              role="img"
+              aria-label="Cumulative notes, analyses and suggestions over time"
+            ></canvas>
+          </div>
+        </section>
+
+        <section class="box kbm-box mb-5">
+          <div class="level is-mobile mb-4">
+            <div class="level-left">
+              <div>
+                <p class="eyebrow">Human review</p>
+                <h2 class="title is-3 section-heading mb-0">Suggestions</h2>
+              </div>
+            </div>
+            <div class="level-right">
+              <div class="select mr-2">
+                <select aria-label="Filter by origin" x-model="originFilter">
+                  <option value="all">All origins</option>
+                  <option value="analysis">Analysis</option>
+                  <option value="enrich">Enrichment</option>
+                  <option value="deterministic">Deterministic</option>
+                  <option value="expand">Expand</option>
+                  <option value="freshness">Freshness</option>
+                </select>
+              </div>
+              <div class="select">
+                <select
+                  aria-label="Filter suggestions"
+                  x-model="statusFilter"
+                  @change="loadSuggestions()"
+                >
+                  <option value="pending">Pending</option>
+                  <option value="accepted">Accepted</option>
+                  <option value="rejected">Rejected</option>
+                  <option value="applied">Applied</option>
+                  <option value="failed">Failed</option>
+                  <option value="superseded">Superseded</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <template x-if="filteredSuggestions().length === 0">
+            <div class="notification is-light">
+              <span x-text="'No ' + statusFilter + ' suggestions.'"></span>
+            </div>
+          </template>
+
+          <template
+            x-for="suggestion in filteredSuggestions()"
+            :key="suggestion.id"
+          >
+            <article
+              class="card suggestion-card mb-4"
+              :class="suggestion.status === 'failed' ? 'is-danger-card' : ''"
+            >
+              <div class="card-content">
+                <div class="level is-mobile mb-3">
+                  <div class="level-left">
+                    <div class="tags">
+                      <span class="tag is-success is-light">
+                        <img
+                          class="kbm-icon"
+                          :src="actionIcon(suggestion.action)"
+                          alt=""
+                          aria-hidden="true"
+                        />
+                        <span x-text="suggestion.action"></span>
+                      </span>
+                      <span
+                        class="tag is-light"
+                        x-text="confidenceLabel(suggestion)"
+                      ></span>
+                      <span
+                        class="tag is-info is-light"
+                        x-show="suggestion.origin && suggestion.origin !== 'analysis'"
+                        x-text="suggestion.origin"
+                      ></span>
+                      <span
+                        class="tag is-light"
+                        x-text="suggestion.status"
+                      ></span>
+                    </div>
+                  </div>
+                  <div class="level-right">
+                    <span
+                      class="is-mono has-text-grey"
+                      x-text="'#' + suggestion.id"
+                    ></span>
+                  </div>
+                </div>
+                <p class="mb-2 suggestion-path">
+                  <strong>File</strong>
+                  <code class="ml-2" x-text="suggestion.document_path"></code>
+                </p>
+                <p class="mb-2 suggestion-path" x-show="suggestion.target_path">
+                  <strong>Target</strong>
+                  <code class="ml-2" x-text="suggestion.target_path"></code>
+                </p>
+                <p class="mb-4">
+                  <strong>Reason</strong>
+                  <span x-text="suggestion.reason"></span>
+                </p>
+
+                <template
+                  x-if="suggestion.action === 'merge' || suggestion.action === 'expand'"
+                >
+                  <div class="mb-4">
+                    <button
+                      type="button"
+                      class="button is-small is-light"
+                      @click="toggleProposal(suggestion.id)"
+                    >
+                      <img
+                        class="kbm-icon"
+                        src="/static/icons/eye.svg"
+                        alt=""
+                      />
+                      <span
+                        x-text="proposalOpen[suggestion.id] ? 'Hide proposed content' : 'Inspect proposed content'"
+                      ></span>
+                    </button>
+                    <pre
+                      class="proposal-content mt-3"
+                      x-show="proposalOpen[suggestion.id]"
+                      x-text="proposalText(proposals[suggestion.id])"
+                      x-cloak
+                    ></pre>
+                  </div>
+                </template>
+
+                <div
+                  class="buttons mb-0"
+                  x-show="suggestion.status === 'pending'"
+                >
+                  <button
+                    type="button"
+                    class="button is-success is-light"
+                    :disabled="busy || applying"
+                    @click="decide(suggestion.id, 'accepted')"
+                  >
+                    <img
+                      class="kbm-icon"
+                      src="/static/icons/check.svg"
+                      alt=""
+                    />
+                    Accept suggestion
+                  </button>
+                  <button
+                    type="button"
+                    class="button is-danger is-light"
+                    :disabled="busy || applying"
+                    @click="decide(suggestion.id, 'rejected')"
+                  >
+                    <img class="kbm-icon" src="/static/icons/x.svg" alt="" />
+                    Reject
+                  </button>
+                </div>
+              </div>
+            </article>
+          </template>
+        </section>
+
+        <section class="box kbm-box mb-5">
+          <div class="level is-mobile mb-3">
+            <div class="level-left">
+              <div>
+                <p class="eyebrow">Background work</p>
+                <h2 class="title is-3 section-heading mb-0">
+                  Recent operations
+                </h2>
+              </div>
+            </div>
+            <div class="level-right">
+              <button
+                type="button"
+                class="button is-small is-light"
+                :disabled="busy"
+                @click="refreshJobs()"
+              >
+                <img
+                  class="kbm-icon"
+                  src="/static/icons/refresh-cw.svg"
+                  alt=""
+                />
+                Refresh
+              </button>
+            </div>
+          </div>
+          <template x-if="jobs.length === 0">
+            <p class="has-text-grey">No operations recorded yet.</p>
+          </template>
+          <template x-for="job in jobs.slice(0, 6)" :key="job.id">
+            <div class="job-row py-3">
+              <div class="level is-mobile mb-1">
+                <div class="level-left">
+                  <span
+                    class="tag"
+                    :class="jobTagClass(job.status)"
+                    x-text="job.status"
+                  ></span>
+                  <strong class="ml-2" x-text="job.op"></strong>
+                  <span
+                    class="is-mono has-text-grey ml-2"
+                    x-text="'#' + job.id"
+                  ></span>
+                </div>
+                <div
+                  class="level-right is-size-7 has-text-grey"
+                  x-text="job.started"
+                ></div>
+              </div>
+              <p
+                class="is-size-7"
+                x-text="job.error || job.detail || 'In progress…'"
+              ></p>
+            </div>
+          </template>
+        </section>
+
+        <section class="box kbm-box">
+          <p class="eyebrow">Repository index</p>
+          <h2 class="title is-3 section-heading">Documents</h2>
+          <div class="table-container">
+            <table class="table is-fullwidth is-hoverable">
+              <thead>
+                <tr>
+                  <th>Path</th>
+                  <th>Title</th>
+                  <th>Status</th>
+                  <th>Checks</th>
+                  <th>Tags</th>
+                  <th>Frontmatter</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="document in documents" :key="document.path">
+                  <tr>
+                    <td
+                      class="is-mono suggestion-path"
+                      x-text="document.path"
+                    ></td>
+                    <td x-text="document.title || '—'"></td>
+                    <td>
+                      <span
+                        class="tag is-light"
+                        x-text="document.status"
+                      ></span>
+                      <span
+                        class="tag is-warning is-light"
+                        x-show="changeKind(document)"
+                        title="Detected via split frontmatter/body hashes"
+                        x-text="changeKind(document)"
+                      ></span>
+                      <div
+                        class="has-text-grey is-size-7"
+                        x-show="document.analyzed_model"
+                        x-text="document.analyzed_model"
+                      ></div>
+                    </td>
+                    <td>
+                      <span
+                        class="tag is-size-7"
+                        :class="linkCheckBadge(document) === 'links ok' ? 'is-light' : 'is-danger is-light'"
+                        x-show="linkCheckBadge(document)"
+                        :title="linkCheckTooltip(document)"
+                        x-text="linkCheckBadge(document)"
+                      ></span>
+                      <span
+                        class="tag is-size-7"
+                        :class="freshnessBadge(document) === 'freshness: current' ? 'is-light' : 'is-warning is-light'"
+                        x-show="freshnessBadge(document)"
+                        :title="freshnessTooltip(document)"
+                        x-text="freshnessBadge(document)"
+                      ></span>
+                    </td>
+                    <td class="is-size-7" x-text="documentTags(document)"></td>
+                    <td>
+                      <span
+                        class="tag is-warning is-light"
+                        x-show="frontmatterIssues(document).length > 0"
+                        :title="frontmatterIssues(document).join('\n')"
+                        x-text="frontmatterIssues(document).length + ' issue(s)'"
+                      ></span>
+                      <span
+                        class="has-text-grey is-size-7"
+                        x-show="frontmatterIssues(document).length === 0"
+                        x-text="document.frontmatter_json ? 'ok' : '—'"
+                      ></span>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+          <p
+            class="has-text-grey is-size-7 mt-3"
+            x-show="documents.length === 0"
+          >
+            No documents indexed. Start with Scan or Scan + analyze.
+          </p>
+        </section>
+        <footer class="has-text-centered has-text-grey is-size-7 mt-5">
+          <p>Files change only after explicit acceptance and Apply.</p>
+        </footer>
+      </div>
+    </main>
+  </body>
+</html>

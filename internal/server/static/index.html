@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>KBM-flow — home</title>
+    <link rel="stylesheet" href="/static/vendor/bulma.min.css" />
+    <link rel="stylesheet" href="/static/dashboard.css" />
+    <link rel="stylesheet" href="/static/landing.css" />
+    <script defer src="/static/landing.js"></script>
+    <script defer src="/static/clientlog.js"></script>
+    <script defer src="/static/vendor/alpine.min.js"></script>
+  </head>
+  <body x-data="landingDashboard" x-init="init()">
+    <section class="hero kbm-hero landing-hero">
+      <div class="hero-body">
+        <div class="container dashboard">
+          <p class="eyebrow mb-3">Knowledge operations · home</p>
+          <div class="level landing-heading">
+            <div class="level-left">
+              <div>
+                <h1 class="title is-1 mb-3">Your repositories, at a glance.</h1>
+                <p class="subtitle is-5">
+                  Choose a workspace to inspect its current state and continue
+                  where you left off.
+                </p>
+              </div>
+            </div>
+            <div class="level-right">
+              <button
+                class="button is-light"
+                :disabled="loading"
+                @click="refresh()"
+              >
+                Refresh overview
+              </button>
+            </div>
+          </div>
+          <p class="is-size-7 has-text-white-ter" role="status">
+            <span
+              class="status-dot"
+              :class="loading ? 'is-warning' : ''"
+            ></span>
+            <span
+              x-text="loading ? 'Refreshing summaries…' : 'Local overview'"
+            ></span>
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <main class="section landing-main">
+      <div class="container dashboard">
+        <template x-if="error">
+          <article class="message is-danger" role="alert">
+            <div class="message-body" x-text="error"></div>
+          </article>
+        </template>
+
+        <div class="columns is-variable is-5 portal-grid">
+          <div class="column is-6-desktop">
+            <a class="card portal-card knowledge-portal" href="/knowledge">
+              <div class="card-content">
+                <div class="portal-card-heading">
+                  <div>
+                    <p class="eyebrow">Markdown knowledge base</p>
+                    <h2 class="title is-2 section-heading mt-2 mb-3">
+                      Review and tend.
+                    </h2>
+                  </div>
+                  <span class="portal-arrow" aria-hidden="true">↗</span>
+                </div>
+                <p class="portal-description">
+                  Inspect changed notes, review suggestions, and apply only the
+                  changes you accept.
+                </p>
+                <div class="portal-metrics">
+                  <div class="portal-metric">
+                    <strong x-text="knowledgeValue('changed_files')"></strong>
+                    <span>files changed since analysis</span>
+                  </div>
+                  <div class="portal-metric">
+                    <strong x-text="knowledgeValue('model_drift')"></strong>
+                    <span>analyzed with another model</span>
+                  </div>
+                  <div class="portal-metric">
+                    <strong x-text="cycleAge()"></strong>
+                    <span>since last full cycle</span>
+                  </div>
+                </div>
+                <p class="portal-freshness" x-text="lastCycleText()"></p>
+                <div class="portal-card-footer">
+                  <span>Open knowledge dashboard</span>
+                  <span aria-hidden="true">→</span>
+                </div>
+              </div>
+            </a>
+          </div>
+
+          <div class="column is-6-desktop">
+            <a class="card portal-card report-portal" href="/report">
+              <div class="card-content">
+                <div class="portal-card-heading">
+                  <div>
+                    <p class="eyebrow">Repository fleet</p>
+                    <h2 class="title is-2 section-heading mt-2 mb-3">
+                      See the wider picture.
+                    </h2>
+                  </div>
+                  <span class="portal-arrow" aria-hidden="true">↗</span>
+                </div>
+                <p class="portal-description">
+                  Check registered repositories, live service results, and Ruby
+                  gem health across the fleet.
+                </p>
+                <div class="portal-metrics portal-metrics-four">
+                  <div class="portal-metric">
+                    <strong x-text="reportValue('repositories')"></strong>
+                    <span>repositories</span>
+                  </div>
+                  <div class="portal-metric">
+                    <strong x-text="reportMetric('sonar_blocked')"></strong>
+                    <span>Sonar gates blocked</span>
+                  </div>
+                  <div class="portal-metric">
+                    <strong x-text="reportMetric('semgrep_blocked')"></strong>
+                    <span>repositories with Semgrep blocks</span>
+                  </div>
+                  <div class="portal-metric">
+                    <strong x-text="reportMetric('open_prs')"></strong>
+                    <span>open PRs</span>
+                  </div>
+                </div>
+                <p class="portal-freshness" x-text="reportFreshness()"></p>
+                <div class="portal-card-footer">
+                  <span>Open full repository report</span>
+                  <span aria-hidden="true">→</span>
+                </div>
+              </div>
+            </a>
+          </div>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

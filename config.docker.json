@@ -1,0 +1,22 @@
+{
+  "repository_path": "/knowledge/knowledge-base",
+  "database_path": "/data/kbm-flow.db",
+  "prompt_directory": "/app/prompts",
+  "ollama_url": "http://host.docker.internal:11434",
+  "ollama_model": "qwen3:14b",
+  "ollama_num_ctx": 0,
+  "request_timeout_seconds": 300,
+  "max_document_bytes": 200000,
+  "extensions": [".md", ".markdown"],
+  "exclude_directories": [
+    ".git",
+    ".km-trash",
+    ".kbm-trash",
+    "node_modules",
+    "vendor"
+  ],
+  "trash_directory": ".kbm-trash",
+  "http_addr": "0.0.0.0:8080",
+  "mcp_server": "knowledge-base-mcp-server",
+  "reindex_trigger_path": ".reindex-trigger"
+}

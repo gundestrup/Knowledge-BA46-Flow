@@ -1,0 +1,28 @@
+{
+  // Workspace-relevant extensions for this Go CLI + embedded-frontend repo.
+  "recommendations": [
+    "golang.go",
+    "ms-vscode.makefile-tools",
+    "davidanson.vscode-markdownlint",
+    "biomejs.biome",
+    "ms-azuretools.vscode-containers",
+    "semgrep.semgrep"
+  ],
+  // Installed-but-irrelevant toolchains: this repo has no Python, Ruby, Liquid,
+  // TypeScript or Playwright tests; git remote is GitHub (not Forgejo);
+  // SonarQube runs in CI so the IDE's SonarLint JVM is redundant here.
+  "unwantedRecommendations": [
+    "ms-python.python",
+    "ms-python.debugpy",
+    "ms-python.vscode-python-envs",
+    "codeium.windsurfpyright",
+    "shopify.ruby-lsp",
+    "sissel.shopify-liquid",
+    "ms-playwright.playwright",
+    "maxking.forgejo-vscode",
+    "dbaeumer.vscode-eslint",
+    "sonarsource.sonarlint-vscode",
+    "ms-azuretools.vscode-docker",
+    "gundestrup.jekyll-imgflow"
+  ]
+}

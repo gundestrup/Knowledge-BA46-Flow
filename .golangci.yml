@@ -1,0 +1,100 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    # Bugs
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+
+    # Smells/style
+    - revive
+    - gocritic
+
+    # Complexity (cyclop intentionally omitted — duplicates gocyclo and
+    # Sonar already tracks cognitive complexity)
+    - gocyclo
+
+    # Duplication
+    - dupl
+
+    # Security
+    - gosec
+
+    # HTTP hygiene
+    - bodyclose
+
+    # Context discipline: every outbound/blocking call carries a context
+    # (the migrate path was the last offender). exhaustive guards the
+    # action/status enum switches; zero-cost since none are missing a case.
+    - noctx
+    - exhaustive
+    # contextcheck evaluated and rejected: its findings are the deliberate
+    # background-job contexts (#nosec G118) and srv.Shutdown's fresh ctx —
+    # both correct by design. funlen/gofumpt likewise: length/style-only
+    # signal already covered by gocyclo and gofmt.
+
+  settings:
+    gocyclo:
+      # Deliberately above the textbook 15: flag only the monsters the
+      # decompositions were meant to prevent; Sonar owns the rest.
+      min-complexity: 25
+    dupl:
+      threshold: 100
+    revive:
+      rules:
+        # godoc-on-every-exported-type is noise in internal/ packages.
+        - name: exported
+          disabled: true
+    errcheck:
+      # Idiomatic ignore-where-the-error-is-not-actionable list; cleanup
+      # and CLI-print errors on a local tool are not worth checking.
+      exclude-functions:
+        - (*os.File).Close
+        - (*os.Root).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
+        - (*knowledge-ba46-flow/internal/database.DB).Close
+        - (*net/http.ResponseWriter).Write
+        - (*encoding/json.Encoder).Encode
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Println
+        - fmt.Printf
+        - os.MkdirAll
+        - io.Copy
+
+  exclusions:
+    generated: lax
+    rules:
+      # Test files: cleanup/setup error checks and path/subprocess warnings
+      # are noise — failures surface through test assertions.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - dupl
+          - gosec
+          - gocyclo
+          - noctx
+      # G304 (file inclusion via variable): repository paths are validated
+      # by internal/paths and confined with os.Root — the warning cannot
+      # see that contract.
+      - linters: [gosec]
+        text: "G304"
+      # G204 (subprocess with variable): exec-based git/gh invocations are
+      # the feature; arguments are fixed flag sets, not shell strings.
+      - linters: [gosec]
+        text: "G204"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

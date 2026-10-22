@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "taxonomy": {
+    "path": "taxonomy.yaml",
+    "sha256": "0d51ce07292969dbe7a352f41ef8866564237224c625bcab04b016d76feb65bc",
+    "case": "Human-approved tag vocabulary used by the local analyzer."
+  },
+  "documents": [
+    {
+      "path": "frameworks/README.md",
+      "sha256": "6dd3ef3aeac384b3a97cf9c385ed1a2de9569fa7fd0a271837170e8bb1be130e",
+      "case": "Curated language/framework catalog for local alias matching."
+    },
+    {
+      "path": "tools/shell/README.md",
+      "sha256": "a175ec48629c9b59dfb15f6bdfda2c6dd8af925eb3daba1298e4111d35eaa5ec",
+      "case": "Do not move a README to asset paths it describes."
+    },
+    {
+      "path": "languages/shell.md",
+      "sha256": "2decc3f5bc409d79a77d7572c0a219a555784c5fe4668d688481191ff57a5baa",
+      "case": "Related-note candidate for the shell assets; preserve POSIX constraints."
+    },
+    {
+      "path": "lessons-learned/codeql-redos-end-anchored-runs.md",
+      "sha256": "63d3341b75828f5b4f9a7f7257b718103face97539e35c0f467a6cda1c2c5ba4",
+      "case": "Preserve regex escapes and code spans exactly."
+    },
+    {
+      "path": "lessons-learned/sonar-test-inclusions-community-build.md",
+      "sha256": "6ceb596ccb838079d5474bd89680e8581e01963ef2aa003fa881cb10165e13db",
+      "case": "Preserve SonarQube property names and distinguish Community Build behavior."
+    },
+    {
+      "path": "libraries/ruby/rspec.md",
+      "sha256": "6a6a2c7b19660b30faa202309c26041b54ef2854e83a3d2bcc2d9786cebc29f6",
+      "case": "Reference target and negative control for unrelated recommendations."
+    },
+    {
+      "path": "patterns/local-llm.md",
+      "sha256": "e7c99b0abbadd2bd415b85b106a30b854a1f7ce0babe8fc82d00a6502f83e959",
+      "case": "Local-model workflow and its privacy/offline constraints."
+    },
+    {
+      "path": "tools/ollama.md",
+      "sha256": "f7dd2f413f40bfbd439576c2932261e8541917f014d3961af026c5a785b206e9",
+      "case": "Related-note candidate for local-LLM operations; preserve context limits."
+    },
+    {
+      "path": "cms/jekyll/README.md",
+      "sha256": "69ab34f543b4584e9962fd1d8c1993f5a92a4890be4cfd2f20a30602f8427ecb",
+      "case": "Framework overview and cross-language candidate context."
+    },
+    {
+      "path": "lessons-learned/browser-system-specs-need-chromium-in-ci.md",
+      "sha256": "9c9fad57101a51843009a89f2b22bb5ca44d5f74885e26de1718fcda51065556",
+      "case": "Browser-test CI requirement and a known RSpec reference."
+    },
+    {
+      "path": "lessons-learned/coverage-never-fail-suite.md",
+      "sha256": "29c589e012d8c28015ca45027f1857dedcae1b0ff1292f0a2d2573beb9b025c2",
+      "case": "Coverage policy and false-positive control."
+    },
+    {
+      "path": "tools/semgrep.md",
+      "sha256": "cf37113eede520acec9eec65f3d1962961d6dc4e543f9a6f3bc3923750a98b96",
+      "case": "Security-tool facts; distinguish documented environment variables from secrets."
+    },
+    {
+      "path": "tools/sonarqube.md",
+      "sha256": "db7771a70301d11839aa194f26efbb921cd161fac0e8dd262808b829c2345626",
+      "case": "SonarQube details with explicit placeholder credentials only."
+    },
+    {
+      "path": "tools/tech-entity-datasets.md",
+      "sha256": "0939b3354b9278b176b39d6a88de65bc2998f5e195bc7501885e9dd4dd03fb97",
+      "case": "Curated NLP data-source inventory; distinguish references from installed dependencies."
+    }
+  ]
+}

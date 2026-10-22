@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "source": "engineering-memory",
+  "documents": 14,
+  "global_invariants": [
+    "Never move a README to a script or configuration path it merely describes.",
+    "Preserve original headings, caveats, links, code, and regex escapes.",
+    "Do not invent publication dates, versions, provenance, or lifecycle fields.",
+    "Do not treat an exact name mention, shared tag, or similarity score as proof of a relationship or contradiction.",
+    "Keep all proposals pending; accept/apply is never part of this live evaluation."
+  ],
+  "review_cases": [
+    {
+      "document": "languages/shell.md",
+      "check": "Consider tools/shell/README.md only when the POSIX shell and reusable-asset content supports the relation."
+    },
+    {
+      "document": "tools/shell/README.md",
+      "check": "Do not move this overview to ci.yml, a script path, or another copied asset destination."
+    },
+    {
+      "document": "lessons-learned/codeql-redos-end-anchored-runs.md",
+      "check": "Any proposal preserves regexes and code spans byte-for-byte."
+    },
+    {
+      "document": "lessons-learned/sonar-test-inclusions-community-build.md",
+      "check": "Keep the Community Build distinction and exact SonarQube property names."
+    },
+    {
+      "document": "patterns/local-llm.md",
+      "check": "Compare with tools/ollama.md using supplied passages; do not infer unsupported provider behavior."
+    },
+    {
+      "document": "lessons-learned/browser-system-specs-need-chromium-in-ci.md",
+      "check": "Verify the supplied libraries/ruby/rspec.md target and preserve the concrete Chromium/CI caveat."
+    },
+    {
+      "document": "lessons-learned/coverage-never-fail-suite.md",
+      "check": "Do not generalize the coverage policy into an unrelated deletion or merge."
+    },
+    {
+      "document": "tools/semgrep.md",
+      "check": "Do not turn documented environment-variable names into invented credentials or values."
+    },
+    {
+      "document": "tools/sonarqube.md",
+      "check": "Keep environment variables as placeholders; do not invent real tokens or deployment facts."
+    },
+    {
+      "document": "tools/tech-entity-datasets.md",
+      "check": "Treat Wappalyzer, Linguist, and NER corpora as source references to assess; do not claim they are installed or fetch them implicitly."
+    }
+  ],
+  "limitations": [
+    "Live output is reviewed against these invariants, not compared as exact prose.",
+    "This selected set tests representative real notes, not full-corpus recall.",
+    "Review precision, rejected edits, stage time, and missed expected cases before expanding the set."
+  ]
+}

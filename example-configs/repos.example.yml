@@ -1,0 +1,38 @@
+# Example registry for KBM-flow's read-only repository report.
+#
+# Wire it up in config.json:
+#   "report": { "registry_path": "path/to/repos.yml", "remote_enabled": false }
+# `registry_path` resolves relative to the config file; each repo's `path`
+# resolves relative to THIS registry file. remote_enabled defaults to true
+# once a registry is set — pin it false for local-only runs.
+#
+# One entry per Git working tree. Hand-edited fields: url, path, tags,
+# semgrep_repo. The sync fields (synced_at, repo_commit, kb_commit) are
+# generated bookkeeping — an external sync workflow stamps them and the
+# report uses them to flag drift; leave them out entirely when nothing
+# maintains them (the report then shows "no marker"/"unknown").
+---
+repos:
+  # Key = the display name used in the report table and per-repo refresh.
+  example-project:
+    # url: canonical clone URL — shown as the repo link; also derives the
+    # default owner/repo slug for Semgrep project lookups.
+    url: https://github.com/example/example-project.git
+    # path: the local working tree, relative to this registry file (or
+    # absolute). Missing paths show as "missing" rows, not errors.
+    path: ../path/to/example-project
+    # synced_at/repo_commit/kb_commit: last recorded sync point, stamped by
+    # your sync tooling (e.g. kb-sync.rb). Compared against remote HEAD when
+    # remote_enabled is true.
+    synced_at: "2026-01-01"
+    repo_commit: "0123456"
+    kb_commit: "89abcde"
+    # semgrep_repo: override the detected owner/repository project name when
+    # the Semgrep AppSec Platform project does not match the clone URL slug.
+    # semgrep_repo: example/example-project
+    # tags: drive policy checks — e.g. require_ruby_version_file applies to
+    # repos tagged language:ruby. Free-form, grouped by facet.
+    tags:
+      language: [ruby]
+      framework: [jekyll]
+      tools: [rubocop, semgrep]

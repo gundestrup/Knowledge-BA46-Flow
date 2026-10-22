@@ -1,0 +1,65 @@
+# Combined stack: knowledge-base-mcp-server (FAISS index + MCP tools) and
+# KBM-flow (scan/analyze/review/apply + dashboard) sharing one corpus volume.
+#
+#   cp .env.example .env   # set KB_SHELF and MCP_AUTH_TOKEN
+#   docker compose up -d
+#
+# ./data/ on the host holds everything mutable: the markdown shelves, the
+# FAISS indexes and the KBM-flow SQLite database — rebuilds lose nothing.
+# Both services run as the host user so uid 1000 owns the shared files.
+#
+# KBM-flow's `apply` touches <shelf>/.reindex-trigger after a successful
+# batch; the MCP server's trigger watcher (REINDEX_TRIGGER_PATH) picks the
+# mtime change up and reindexes — no manual `kb reindex` needed.
+services:
+  mcp-server:
+    # Latest stable tag; switch to a local checkout for development:
+    #   build: ../knowledge-base-mcp-server
+    build:
+      context: https://github.com/gundestrup/knowledge-base-mcp-server.git#v0.2.1
+    user: "1000:1000"
+    env_file: .env
+    environment:
+      KNOWLEDGE_BASES_ROOT_DIR: /knowledge
+      FAISS_INDEX_PATH: /faiss
+      # Inside the shelf so KBM-flow can reach it through its os.Root jail.
+      REINDEX_TRIGGER_PATH: /knowledge/${KB_SHELF}/.reindex-trigger
+      MCP_TRANSPORT: http
+      MCP_BIND_ADDR: 0.0.0.0
+      MCP_PORT: 8080
+      # OLLAMA_BASE_URL, EMBEDDING_PROVIDER, OLLAMA_MODEL, MCP_AUTH_TOKEN
+      # arrive via env_file.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data/knowledge:/knowledge
+      - ./data/faiss:/faiss
+    ports:
+      # MCP endpoint for host clients; token-protected, loopback-published.
+      - "127.0.0.1:8081:8080"
+    restart: unless-stopped
+
+  kbm-flow:
+    build: .
+    user: "1000:1000"
+    env_file: .env
+    environment:
+      # Shared .env values reach config.Load's env overrides.
+      KBM_REPOSITORY_PATH: /knowledge/${KB_SHELF}
+      KBM_DATABASE_PATH: /data/kbm-flow.db
+      # OLLAMA_BASE_URL and KBM_OLLAMA_MODEL arrive via env_file.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data/knowledge:/knowledge
+      - ./data/kbm:/data
+      - ./prompts:/app/prompts:ro
+      - ./config.docker.json:/app/config.json:ro
+    working_dir: /app
+    # Dashboard + API; use `docker compose run kbm-flow run` for a batch
+    # scan+analyze instead.
+    command: ["serve"]
+    ports:
+      # /api/apply mutates the filesystem — keep the binding loopback-only.
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped

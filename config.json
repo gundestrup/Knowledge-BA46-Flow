@@ -1,0 +1,27 @@
+{
+  "repository_path": "./knowledge",
+  "database_path": "./data/knowledge.db",
+  "prompt_directory": "./prompts",
+  "report": {
+    "registry_path": "../engineering-memory/repos.yml",
+    "policy_path": "../engineering-memory/policy.yml",
+    "comparison_path": "../engineering-memory/report/data.json",
+    "remote_enabled": true
+  },
+  "ollama_url": "http://localhost:11434",
+  "ollama_model": "qwen3:14b",
+  "ollama_num_ctx": 0,
+  "request_timeout_seconds": 300,
+  "max_document_bytes": 200000,
+  "extensions": [".md", ".markdown"],
+  "exclude_directories": [
+    ".git",
+    ".km-trash",
+    ".kbm-trash",
+    "node_modules",
+    "vendor"
+  ],
+  "trash_directory": ".kbm-trash",
+  "http_addr": "127.0.0.1:8080",
+  "mcp_server": "knowledge-base-mcp-server"
+}

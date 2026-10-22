@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    container:
+      image: golang:1.27.2-trixie@sha256:47667934874913a449b96faa7ef4777fa285d9ec29126ee80ed61c45b7cccf0e
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+      - name: Check formatting, vet, tests, race safety and build
+        run: make check
+      - name: Report package coverage
+        run: make coverage
+
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Codecov OIDC tokenless upload
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      # Self-hosted SonarQube users: also set the SONAR_HOST_URL secret;
+      # when absent the scan defaults to SonarCloud.
+      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Produce coverage and test report artifacts
+        run: make coverage-ci
+      # Audit the same -json stream for errors that pass silently inside
+      # otherwise-passing tests (panics, WARNINGs, relayed client errors).
+      - name: Audit test logs for silent errors
+        run: go run ./scripts/audit-test-logs -file test-report.json
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@04b047e8bb82a0c002c8312c1c880fbc6a999d45 # v5
+        with:
+          files: coverage.out
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+      - name: SonarQube/SonarCloud scan
+        if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+      # Hard gate: the Ollama SDK was replaced with a thin stdlib client, so
+      # the dependency tree no longer carries server-side code with open,
+      # unfixable advisories. Fail the job on any reachable advisory.
+      - name: govulncheck reachable-vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  semgrep:
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:1.181.0@sha256:81474464c1f07483ba0682a44787fd93c91397419762a04abe2bafaae396304b
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+      # Registry rulesets need network to semgrep.dev; .semgrepignore keeps
+      # vendored assets and the intentionally-odd example corpus out. --error
+      # makes any finding fail the job.
+      - name: Semgrep SAST
+        run: semgrep scan --config p/golang --config p/security-audit --metrics=off --error
+
+  frontend:
+    runs-on: ubuntu-latest
+    container:
+      image: node:26.12.0-bookworm@sha256:a856ae5e25d498bbe5ec85fde88f00f5ed99908fda803ba39d7735ab8574f58c
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+      - name: Install locked frontend tools
+        run: npm ci --ignore-scripts
+      - name: Check bundled assets, JavaScript, CSS, and formatting
+        run: npm run check
+      - name: Test version and release scripts
+        run: npm run version:test
+      - name: Audit frontend tool dependencies
+        run: npm audit --audit-level=high
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+      - name: Build the pinned Trixie image
+        run: docker buildx build --platform linux/amd64 --load --tag kbm-flow:ci .
+      - name: Smoke-test the image entrypoint
+        run: docker run --rm kbm-flow:ci --help
+      # Image scan: OS packages inside the built image — govulncheck only sees
+      # Go module code. Strict on HIGH/CRITICAL; if the Trixie base flags
+      # unfixable findings, add a .trivyignore rather than going advisory.
+      - name: Scan the built image for CVEs
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: kbm-flow:ci
+          severity: HIGH,CRITICAL
+          exit-code: "1"

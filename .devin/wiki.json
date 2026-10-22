@@ -1,0 +1,54 @@
+{
+  "repo_notes": [
+    { "content": "KBM-flow (Go 1.26+, Cobra CLI + embedded web dashboard) maintains a Markdown knowledge repository: scan stores documents in SQLite, analyze asks a local Ollama model for structured suggestions, a human reviews them, and only apply writes repository files." },
+    { "content": "Architecture: internal/scanner walks the repo and computes hashes + similarity sketches -> internal/frontmatter parses/validates YAML metadata -> internal/analyzer runs deterministic repair, optional fast-model enrichment, and full analysis -> suggestions persist in internal/database (modernc.org/sqlite) -> internal/review applies accepted actions via os.Root-confined writes -> internal/server exposes the loopback HTTP API/dashboard; internal/linkcheck probes external URLs on explicit request." },
+    { "content": "Key gotcha: scan/analyze/run never mutate repository files — only apply does. The single documented exception is the tool-owned kbm frontmatter block written by check-links; frontmatter.Canonical excises kbm byte-for-byte before hashing so bookkeeping never requeues analysis or invalidates accepted suggestions." },
+    { "content": "Key gotcha: apply honors .kb-policy.json (missing=allow, deny/invalid blocks), verifies the canonical source hash, uses os.Root-confined atomic writes, and moves deletions to .kbm-trash — never hard-deletes." },
+    { "content": "Key gotcha: frontmatter kb_policy.no_llm_context: true keeps a document out of every Ollama prompt; a malformed kb_policy fails closed. repository_path must point at one Knowledge Base MCP Server shelf, not the multi-shelf parent." },
+    { "content": "Three model lanes: ollama_model (full analysis), ollama_model_fast (optional local enrichment), ollama_model_external (opt-in enhanced lane via --external; stamps external_sha256/external_model instead of the local analyzed_* lineage and sends content off-machine — a documented privacy boundary)." },
+    { "content": "Quality gates: make check (gofmt, vet, race tests, build) and make frontend-check (pinned vendored assets, biome, prettier). Tests must use fake generators/local HTTP servers — never a live Ollama or external calls." },
+    { "content": "See AGENTS.md for full safety rules, architecture boundaries, and conventions; CHANGELOG.md for unreleased changes." }
+  ],
+  "pages": [
+    {
+      "title": "Architecture Overview",
+      "purpose": "High-level pipeline: CLI commands (scan/analyze/run/check-links/review/apply/serve), the internal/ package layout, SQLite state, Ollama integration, and the embedded web dashboard",
+      "page_notes": [{ "content": "Include a Mermaid diagram of the suggestion lifecycle: scan -> analyze -> pending suggestion -> human accept -> apply -> filesystem write" }]
+    },
+    {
+      "title": "Safety Model",
+      "purpose": "The human-in-the-loop guarantees: suggestions vs applied mutations, canonical source-hash verification, os.Root-confined atomic writes, .kb-policy.json honoring, .kbm-trash deletion, no_llm_context privacy, and loopback-only HTTP",
+      "parent": "Architecture Overview"
+    },
+    {
+      "title": "Frontmatter and the kbm Block",
+      "purpose": "YAML frontmatter parsing/validation, the tool-owned kbm operational-metadata block (link_check verdicts), canonical hashing that ignores it, and which keys models may or may not edit",
+      "parent": "Architecture Overview"
+    },
+    {
+      "title": "Analysis Pipeline",
+      "purpose": "The three stages (deterministic repair, optional fast-model enrichment, full analysis), model lanes and their *_sha256/*_model lineage columns, embedding-based candidate ranking, stub documents, and incremental re-analyze semantics",
+      "parent": "Architecture Overview"
+    },
+    {
+      "title": "Link Checking",
+      "purpose": "Two layers: the mandatory internal body-link check inside every scan (link_issues column, prompt surface) and the opt-in external check-links op that probes http(s) URLs and records kbm.link_check verdicts",
+      "parent": "Architecture Overview"
+    },
+    {
+      "title": "HTTP API and Dashboard",
+      "purpose": "The loopback-only server, /api/ops operations, suggestion review endpoints, /api/apply mutation path, job tracking, and the Alpine.js/Bulma static frontend",
+      "parent": "Architecture Overview"
+    },
+    {
+      "title": "Configuration",
+      "purpose": "config.json fields (repository_path, database_path, prompt_directory, ollama_*, model lanes, exclude patterns, report paths, reindex_trigger_path), environment overrides, and shipped variants including Docker",
+      "parent": "Architecture Overview"
+    },
+    {
+      "title": "Testing and Quality",
+      "purpose": "make check / make frontend-check gates, race-tested Go suite, fake-generator test convention, pinned vendored frontend assets, and version/release workflow (VERSION file, make version-bump, changelog discipline)",
+      "parent": "Architecture Overview"
+    }
+  ]
+}

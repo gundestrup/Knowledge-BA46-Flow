@@ -1,0 +1,14 @@
+# Third-party vendored/minified frontend assets.
+internal/server/static/vendor/
+
+# Test fixture corpus — intentionally malformed/odd Markdown, not real code.
+example-knowledge/
+example-knowledge-real-test/
+
+# Local runtime state (SQLite database and working files).
+data/
+
+# semgrep-core's taint-mode name resolution crashes on this file's bash
+# constructs (engine bug, not a syntax error — file parses 100% under
+# generic rules). Excluded until the crash is fixed upstream.
+scripts/run-example-ollama.sh

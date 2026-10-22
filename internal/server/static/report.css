@@ -1,0 +1,291 @@
+.report-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 2rem;
+}
+
+.report-hero .title {
+  max-width: 14ch;
+}
+
+.report-hero .subtitle {
+  max-width: 66ch;
+}
+
+.report-scope {
+  min-width: 10rem;
+  border-left: 1px solid rgb(255 250 240 / 36%);
+  padding: 0.25rem 0 0.25rem 1rem;
+}
+
+.report-scope-mark {
+  display: block;
+  margin-bottom: 0.75rem;
+  color: #f2b77f;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 3rem;
+  line-height: 1;
+}
+
+.report-toolbar {
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.report-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.report-filter {
+  width: min(18rem, 100%);
+}
+
+.report-signal-filter {
+  width: min(17rem, 100%);
+}
+
+.report-filter-count {
+  color: var(--kbm-muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.report-sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.report-sort-button:hover {
+  color: var(--kbm-moss);
+}
+
+.report-sort-button:focus-visible {
+  outline: 2px solid var(--kbm-moss);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.report-generated,
+.report-path {
+  color: var(--kbm-muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.report-comparison-number {
+  color: var(--kbm-ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 2.1rem;
+  line-height: 1;
+}
+
+.report-url {
+  max-width: 22rem;
+  color: var(--kbm-muted);
+  overflow-wrap: anywhere;
+}
+
+.report-repo-link {
+  display: inline-block;
+  margin-top: 0.25rem;
+  color: var(--kbm-moss);
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: rgb(40 84 68 / 35%);
+  text-underline-offset: 0.15em;
+}
+
+.report-repo-link:hover {
+  color: var(--kbm-orange);
+  text-decoration-color: currentcolor;
+}
+
+.report-detail-links {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.78rem;
+}
+
+.report-error,
+.report-check-issue,
+.report-problem {
+  color: #a64035;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.report-problem + .report-problem {
+  margin-top: 0.35rem;
+}
+
+.report-table-container {
+  max-height: 72vh;
+  overflow: auto;
+}
+
+.report-table thead {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  background: var(--kbm-paper);
+}
+
+.report-table td {
+  min-width: 8rem;
+  vertical-align: top;
+}
+
+.report-table td:first-child {
+  min-width: 13rem;
+}
+
+.report-table td:last-child {
+  min-width: 24rem;
+}
+
+.report-row-details summary {
+  color: var(--kbm-moss);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.report-fleet-constrained summary {
+  color: var(--kbm-moss);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.report-detail-content {
+  max-height: 34rem;
+  margin-top: 0.5rem;
+  overflow: auto;
+  padding: 0.75rem;
+  background: #f2eee5;
+  color: var(--kbm-ink);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (width <= 768px) {
+  .report-hero-grid {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+
+  .report-scope {
+    min-width: 0;
+    border-left: 0;
+    border-top: 1px solid rgb(255 250 240 / 36%);
+    padding: 0.75rem 0 0;
+  }
+
+  .report-scope-mark {
+    display: none;
+  }
+
+  .report-table-container {
+    max-height: none;
+  }
+
+  .report-controls {
+    width: 100%;
+  }
+
+  .report-filter,
+  .report-signal-filter {
+    flex: 1 1 14rem;
+    width: auto;
+  }
+
+  .report-table td:last-child {
+    min-width: 20rem;
+  }
+}
+
+/* Brand icons shown next to scanner/check names in the repository table. */
+.report-icon {
+  height: 1em;
+  width: auto;
+  vertical-align: -0.125em;
+}
+
+.report-scanners {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+}
+
+.report-scanner {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  white-space: nowrap;
+}
+
+.tag .report-icon {
+  margin-right: 0.25em;
+}
+
+/* Findings status icons (Lucide, stroke=currentColor). */
+.report-findings-status {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+}
+
+.report-findings-status .report-icon {
+  height: 1.25em;
+}
+
+.report-icon-ok {
+  color: var(--kbm-moss);
+}
+
+.report-icon-danger {
+  color: #a64035;
+}
+
+/* Scanner chips and remote-check lines link to the tool's dashboard. */
+a.report-scanner,
+.report-path a {
+  color: inherit;
+  text-decoration: none;
+}
+
+a.report-scanner:hover,
+.report-path a:hover {
+  color: var(--kbm-moss);
+  text-decoration: underline;
+}
+
+.report-sort-icon {
+  height: 0.9em;
+}
+
+.button .report-icon {
+  margin-right: 0.3em;
+}
+
+/* Chart.js needs an explicit-height wrapper — the canvas fills it when
+   maintainAspectRatio is off. */
+.report-chart {
+  position: relative;
+  height: 260px;
+}

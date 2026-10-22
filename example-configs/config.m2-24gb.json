@@ -1,0 +1,33 @@
+{
+  "// profile": "M2 / 24 GB model pairing — see docs/MODELS.md; for the full option reference use config.example-data.json",
+  "repository_path": "../example-knowledge",
+  "database_path": "../data/example-m2-gemma.db",
+  "prompt_directory": "../prompts",
+  "ollama_url": "http://localhost:11434",
+  "ollama_model": "gemma3:12b",
+  "ollama_model_fast": "phi4-mini:latest",
+  "ollama_embed_model": "embeddinggemma:300m",
+  "ollama_task_models": {
+    "expand": ["gemma3:12b"],
+    "freshness": ["gemma3:12b", "phi4-mini:latest"]
+  },
+  "ollama_num_ctx": 0,
+  "ollama_think": false,
+  "ollama_keep_alive": "5m",
+  "request_timeout_seconds": 600,
+  "enrichment_timeout_seconds": 120,
+  "enrichment_max_tokens": 512,
+  "enrichment_mode": "local-first",
+  "max_document_bytes": 200000,
+  "extensions": [".md", ".markdown"],
+  "exclude": ["basic", "intermediate", "e2e", "llm-eval"],
+  "exclude_directories": [
+    ".git",
+    ".kbm-trash",
+    "node_modules",
+    "vendor"
+  ],
+  "trash_directory": ".kbm-trash",
+  "http_addr": "127.0.0.1:8081",
+  "mcp_server": "knowledge-base-mcp-server"
+}

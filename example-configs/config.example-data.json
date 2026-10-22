@@ -1,0 +1,66 @@
+{
+  "// paths": "required trio — relative values resolve against this file's directory",
+  "repository_path": "../example-knowledge",
+  "database_path": "../data/example.db",
+  "prompt_directory": "../prompts",
+
+  "// models": "lanes: normal analysis, optional cheap fast model, opt-in external lane, embeddings",
+  "ollama_url": "http://localhost:11434",
+  "ollama_model": "qwen3:14b",
+  "ollama_model_fast": "qwen3:8b",
+  "ollama_model_external": "gpt-oss:120b-cloud",
+  "ollama_embed_model": "embeddinggemma:300m",
+  "// ollama_task_models": "per-task model lists — first entry is the default, rest are UI alternatives",
+  "ollama_task_models": {
+    "enrich": ["qwen3:8b"],
+    "analyze": ["qwen3:14b"],
+    "expand": ["qwen3:14b"],
+    "freshness": ["qwen3:14b"],
+    "embed": ["embeddinggemma:300m"]
+  },
+  "ollama_num_ctx": 0,
+  "ollama_think": false,
+  "ollama_keep_alive": "5m",
+
+  "// limits": "request_timeout_seconds covers full analysis; enrichment_* bound the optional fast pass",
+  "request_timeout_seconds": 300,
+  "enrichment_timeout_seconds": 120,
+  "enrichment_max_tokens": 512,
+  "enrichment_mode": "local-first",
+  "stub_max_body_lines": -1,
+  "max_document_bytes": 200000,
+
+  "// scanning": "what the filesystem walk picks up and skips",
+  "extensions": [".md", ".markdown"],
+  "exclude": ["basic", "intermediate", "e2e", "llm-eval"],
+  "exclude_directories": [
+    ".git",
+    ".km-trash",
+    ".kbm-trash",
+    "node_modules",
+    "vendor"
+  ],
+  "// exclude_extensions": "removes entries from the extensions allowlist — here .markdown is ignored",
+  "exclude_extensions": [".markdown"],
+  "trash_directory": ".kbm-trash",
+
+  "// server + logging": "loopback-only HTTP; log_file tees stderr to a file, log_level 'debug' adds request/job lines",
+  "http_addr": "127.0.0.1:8080",
+  "log_file": "../data/kbm-flow.log",
+  "log_level": "info",
+
+  "// validate": "exempt paths skip frontmatter/index requirements in `KBM-flow validate`",
+  "reindex_trigger_path": ".reindex-trigger",
+  "mcp_server": "knowledge-base-mcp-server",
+  "validate": {
+    "exempt": ["README.md"]
+  },
+
+  "// report": "read-only fleet report — registry/policy resolve relative to this file; remote_enabled false = local checks only",
+  "report": {
+    "registry_path": "repos.example.yml",
+    "policy_path": "policy.example.yml",
+    "comparison_path": "",
+    "remote_enabled": false
+  }
+}

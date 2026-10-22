@@ -1,0 +1,846 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>KBM-flow — repository report</title>
+    <link rel="stylesheet" href="/static/vendor/bulma.min.css" />
+    <link rel="stylesheet" href="/static/dashboard.css" />
+    <link rel="stylesheet" href="/static/report.css" />
+    <script defer src="/static/clientlog.js"></script>
+    <script defer src="/static/vendor/chart.umd.js"></script>
+    <script defer src="/static/report.js"></script>
+    <script defer src="/static/vendor/alpine.min.js"></script>
+  </head>
+  <body x-data="repoReportDashboard" x-init="init()">
+    <section class="hero kbm-hero report-hero">
+      <div class="hero-body">
+        <div class="container dashboard">
+          <p class="eyebrow mb-3">Repository health · read-only checks</p>
+          <div class="report-hero-grid">
+            <div>
+              <h1 class="title is-1 mb-3">One view across the fleet.</h1>
+              <p class="subtitle is-5 mb-5">
+                Read-only checks from your repository registry. This report does
+                not sync, commit, or edit registered repositories.
+              </p>
+            </div>
+            <div class="report-scope">
+              <span class="report-scope-mark" aria-hidden="true">R</span>
+              <p class="has-text-weight-bold">Read-only report</p>
+              <p
+                class="is-size-7"
+                x-text="snapshot.remote_enabled ? 'Local and remote checks' : 'Local checks only'"
+              ></p>
+            </div>
+          </div>
+          <div class="buttons">
+            <a class="button is-light" href="/">
+              <img class="report-icon" src="/static/icons/house.svg" alt="" />
+              Home
+            </a>
+            <a class="button is-light" href="/knowledge">
+              <img
+                class="report-icon"
+                src="/static/icons/book-open.svg"
+                alt=""
+              />
+              Knowledge
+            </a>
+            <button
+              class="button kbm-accent"
+              :disabled="busy || !snapshot.configured"
+              @click="startReport()"
+            >
+              <img
+                class="report-icon"
+                src="/static/icons/refresh-cw.svg"
+                alt=""
+              />
+              <span
+                x-text="busy ? 'Checking repositories…' : 'Refresh report'"
+              ></span>
+            </button>
+            <button
+              class="button is-light"
+              :disabled="busy || !snapshot.configured"
+              @click="startReport({ localOnly: true })"
+            >
+              <img
+                class="report-icon"
+                src="/static/icons/hard-drive.svg"
+                alt=""
+              />
+              Local checks only
+            </button>
+            <button
+              class="button is-warning is-light"
+              :disabled="busy || !snapshot.configured"
+              @click="startReport({ force: true })"
+            >
+              <img class="report-icon" src="/static/icons/zap.svg" alt="" />
+              Force remote refresh
+            </button>
+          </div>
+          <p class="is-size-7 has-text-white-ter" role="status">
+            <span class="status-dot" :class="busy ? 'is-warning' : ''"></span>
+            <span
+              x-text="busy ? 'A report run is in progress' : statusText()"
+            ></span>
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <main class="section pt-5">
+      <div class="container dashboard">
+        <template x-if="error">
+          <article class="message is-danger" role="alert">
+            <div class="message-body" x-text="error"></div>
+          </article>
+        </template>
+        <template x-if="notice">
+          <div
+            class="notification is-light"
+            role="status"
+            x-text="notice"
+          ></div>
+        </template>
+        <template x-if="!snapshot.configured">
+          <article class="message is-warning">
+            <div class="message-body">
+              Configure <code>report.registry_path</code> in the JSON config to
+              enable this dashboard. The report reads the YAML registry and
+              optional policy file in place.
+            </div>
+          </article>
+        </template>
+        <template x-if="snapshot.configured && !snapshot.generated_at && !busy">
+          <div class="notification is-light">
+            No snapshot yet. Start a report to inspect the configured
+            repositories.
+          </div>
+        </template>
+
+        <template x-if="snapshot.generated_at">
+          <div>
+            <div class="columns is-variable is-4 mb-2 is-multiline">
+              <div class="column">
+                <div class="box kbm-box stat-box">
+                  <p
+                    class="stat-number"
+                    x-text="snapshot.summary.repositories"
+                  ></p>
+                  <p class="stat-label mt-2">Registered repositories</p>
+                </div>
+              </div>
+              <div class="column">
+                <div class="box kbm-box stat-box">
+                  <p class="stat-number" x-text="snapshot.summary.dirty"></p>
+                  <p class="stat-label mt-2">Dirty working trees</p>
+                </div>
+              </div>
+              <div class="column">
+                <div class="box kbm-box stat-box">
+                  <p class="stat-number" x-text="snapshot.summary.problems"></p>
+                  <p class="stat-label mt-2">Findings</p>
+                </div>
+              </div>
+              <div class="column">
+                <div class="box kbm-box stat-box">
+                  <p
+                    class="stat-number"
+                    x-text="snapshot.summary.sonar_projects"
+                  ></p>
+                  <p class="stat-label mt-2">Sonar configurations</p>
+                </div>
+              </div>
+              <div class="column">
+                <div class="box kbm-box stat-box">
+                  <p
+                    class="stat-number"
+                    x-text="snapshot.summary.semgrep_projects"
+                  ></p>
+                  <p class="stat-label mt-2">Semgrep configurations</p>
+                </div>
+              </div>
+              <div class="column">
+                <div class="box kbm-box stat-box">
+                  <p
+                    class="stat-number"
+                    x-text="snapshot.summary.node_projects"
+                  ></p>
+                  <p class="stat-label mt-2">Node projects</p>
+                </div>
+              </div>
+              <div class="column">
+                <div class="box kbm-box stat-box">
+                  <p
+                    class="stat-number"
+                    x-text="snapshot.summary.npm_outdated == null ? '—' : snapshot.summary.npm_outdated"
+                  ></p>
+                  <p class="stat-label mt-2">Outdated npm packages</p>
+                </div>
+              </div>
+              <div class="column">
+                <div class="box kbm-box stat-box">
+                  <p
+                    class="stat-number"
+                    x-text="snapshot.summary.node_outdated == null ? '—' : snapshot.summary.node_outdated"
+                  ></p>
+                  <p class="stat-label mt-2">Outdated Node pins</p>
+                </div>
+              </div>
+            </div>
+
+            <template x-if="snapshot.remote_enabled">
+              <section class="box kbm-box mb-5 report-comparison">
+                <div class="level is-mobile mb-3">
+                  <div class="level-left">
+                    <div>
+                      <p class="eyebrow">Current Go collectors</p>
+                      <h2 class="title is-4 section-heading mb-0">
+                        Remote checks
+                      </h2>
+                    </div>
+                  </div>
+                  <div class="level-right">
+                    <p
+                      class="report-generated"
+                      x-text="'Remote check run · ' + formatTime(snapshot.remote_generated_at) + (snapshot.summary.remote_stale_repositories ? ' · ' + snapshot.summary.remote_stale_repositories + ' stale repos' : '')"
+                    ></p>
+                  </div>
+                </div>
+                <div class="columns is-variable is-3 mb-0">
+                  <div class="column">
+                    <p
+                      class="report-comparison-number"
+                      x-text="snapshot.summary.sonar_blocked == null ? '—' : snapshot.summary.sonar_blocked"
+                    ></p>
+                    <p class="stat-label">Sonar gates blocked</p>
+                    <p
+                      class="report-generated"
+                      x-text="snapshot.summary.sonar_reported_projects + ' projects reported'"
+                    ></p>
+                  </div>
+                  <div class="column">
+                    <p
+                      class="report-comparison-number"
+                      x-text="snapshot.summary.semgrep_blocked == null ? '—' : snapshot.summary.semgrep_blocked"
+                    ></p>
+                    <p class="stat-label">Repositories with Semgrep blocks</p>
+                    <p
+                      class="report-generated"
+                      x-text="snapshot.summary.semgrep_open_findings == null ? 'Not collected' : snapshot.summary.semgrep_open_findings + ' open findings'"
+                    ></p>
+                  </div>
+                  <div class="column">
+                    <p
+                      class="report-comparison-number"
+                      x-text="snapshot.summary.open_prs == null ? '—' : snapshot.summary.open_prs"
+                    ></p>
+                    <p class="stat-label">Open PRs</p>
+                    <p
+                      class="report-generated"
+                      x-text="snapshot.summary.open_pr_repositories + ' repositories reported'"
+                    ></p>
+                  </div>
+                </div>
+              </section>
+            </template>
+            <template x-if="!snapshot.remote_enabled">
+              <div class="notification is-light mb-5">
+                Remote checks were not refreshed on this run. Any remote values
+                shown below are the last known results.
+                <span
+                  x-show="snapshot.remote_generated_at"
+                  x-text="' Last remote run · ' + formatTime(snapshot.remote_generated_at)"
+                ></span>
+              </div>
+            </template>
+
+            <template
+              x-if="snapshot.comparison && snapshot.comparison.available"
+            >
+              <section class="box kbm-box mb-5 report-comparison">
+                <div class="level is-mobile mb-3">
+                  <div class="level-left">
+                    <div>
+                      <p class="eyebrow">Ruby report reference</p>
+                      <h2 class="title is-4 section-heading mb-0">
+                        Comparison totals
+                      </h2>
+                    </div>
+                  </div>
+                  <div class="level-right">
+                    <p
+                      class="is-size-7 has-text-grey"
+                      x-text="'Source snapshot · ' + formatTime(snapshot.comparison.generated_at)"
+                    ></p>
+                  </div>
+                </div>
+                <div class="columns is-variable is-3 mb-0">
+                  <div class="column">
+                    <p
+                      class="report-comparison-number"
+                      x-text="snapshot.comparison.sonar_blocked == null ? '—' : snapshot.comparison.sonar_blocked"
+                    ></p>
+                    <p class="stat-label">Sonar gates blocked</p>
+                    <p
+                      class="report-generated"
+                      x-text="snapshot.comparison.sonar_reported_projects + ' projects reported'"
+                    ></p>
+                  </div>
+                  <div class="column">
+                    <p
+                      class="report-comparison-number"
+                      x-text="snapshot.comparison.semgrep_blocked == null ? '—' : snapshot.comparison.semgrep_blocked"
+                    ></p>
+                    <p class="stat-label">Repositories with Semgrep blocks</p>
+                    <p
+                      class="report-generated"
+                      x-text="snapshot.comparison.semgrep_open_findings == null ? 'Not collected in source snapshot' : snapshot.comparison.semgrep_open_findings + ' open findings'"
+                    ></p>
+                  </div>
+                  <div class="column">
+                    <p
+                      class="report-comparison-number"
+                      x-text="snapshot.comparison.open_prs == null ? '—' : snapshot.comparison.open_prs"
+                    ></p>
+                    <p class="stat-label">Open PRs</p>
+                    <p
+                      class="report-generated"
+                      x-text="snapshot.comparison.open_prs == null ? 'Not collected in source snapshot' : snapshot.comparison.open_pr_repositories + ' repositories reported'"
+                    ></p>
+                  </div>
+                </div>
+              </section>
+            </template>
+            <template
+              x-if="snapshot.comparison && snapshot.comparison.error && snapshot.comparison.error !== 'not configured'"
+            >
+              <div
+                class="notification is-warning"
+                role="status"
+                x-text="snapshot.comparison.error"
+              ></div>
+            </template>
+
+            <section class="box kbm-box mb-5">
+              <div class="level is-mobile mb-4 report-toolbar">
+                <div class="level-left">
+                  <div>
+                    <p class="eyebrow">Local inventory</p>
+                    <h2 class="title is-3 section-heading mb-0">
+                      Repositories
+                    </h2>
+                  </div>
+                </div>
+                <div class="level-right">
+                  <div class="report-controls">
+                    <label class="report-filter">
+                      <span class="is-sr-only">Search repositories</span>
+                      <input
+                        class="input"
+                        type="search"
+                        placeholder="Search names, paths, packages"
+                        x-model="filter"
+                      />
+                    </label>
+                    <label class="report-signal-filter">
+                      <span class="is-sr-only">Filter by working tree</span>
+                      <span class="select is-fullwidth">
+                        <select x-model="treeFilter">
+                          <option value="all">All working trees</option>
+                          <option value="dirty">Dirty working trees</option>
+                          <option value="clean">Clean working trees</option>
+                        </select>
+                      </span>
+                    </label>
+                    <label class="report-signal-filter">
+                      <span class="is-sr-only">Filter by checks</span>
+                      <span class="select is-fullwidth">
+                        <select x-model="checksFilter">
+                          <option value="all">All check states</option>
+                          <option value="has">Has checks</option>
+                          <option value="none">No checks</option>
+                        </select>
+                      </span>
+                    </label>
+                    <label class="report-signal-filter">
+                      <span class="is-sr-only"
+                        >Filter by repository signals</span
+                      >
+                      <span class="select is-fullwidth">
+                        <select x-model="signalFilter">
+                          <option value="all">All signals</option>
+                          <option value="pull-requests">
+                            Open pull requests
+                          </option>
+                          <option value="dependabot">Dependabot alerts</option>
+                          <option value="code-scanning">
+                            Code scanning alerts
+                          </option>
+                          <option value="semgrep">Semgrep issues</option>
+                          <option value="sonar">Sonar gate issues</option>
+                          <option value="codefactor">
+                            CodeFactor below B−
+                          </option>
+                          <option value="coverage">Codecov below target</option>
+                          <option value="any">Any signal</option>
+                          <option value="all-signals">
+                            PR + Semgrep + Sonar
+                          </option>
+                        </select>
+                      </span>
+                    </label>
+                    <span
+                      class="report-filter-count"
+                      aria-live="polite"
+                      x-text="repoCountText()"
+                    ></span>
+                  </div>
+                </div>
+              </div>
+              <p class="report-generated mb-4">
+                Snapshot
+                <time x-text="formatTime(snapshot.generated_at)"></time>
+                <template x-for="pin in policyPins()" :key="pin.key">
+                  <span>· <code x-text="pin.text"></code></span>
+                </template>
+              </p>
+
+              <div class="table-container report-table-container">
+                <table class="table is-fullwidth report-table">
+                  <thead>
+                    <tr>
+                      <th scope="col" :aria-sort="sortAria('name')">
+                        <button
+                          class="report-sort-button"
+                          type="button"
+                          @click="sortBy('name')"
+                        >
+                          Repository
+                          <img
+                            class="report-icon report-sort-icon"
+                            aria-hidden="true"
+                            :src="iconUrl(sortIcon('name'))"
+                            alt=""
+                          />
+                        </button>
+                      </th>
+                      <th scope="col" :aria-sort="sortAria('working-tree')">
+                        <button
+                          class="report-sort-button"
+                          type="button"
+                          @click="sortBy('working-tree')"
+                        >
+                          Working tree
+                          <img
+                            class="report-icon report-sort-icon"
+                            aria-hidden="true"
+                            :src="iconUrl(sortIcon('working-tree'))"
+                            alt=""
+                          />
+                        </button>
+                      </th>
+                      <th scope="col" :aria-sort="sortAria('sync')">
+                        <button
+                          class="report-sort-button"
+                          type="button"
+                          @click="sortBy('sync')"
+                        >
+                          Sync baseline
+                          <img
+                            class="report-icon report-sort-icon"
+                            aria-hidden="true"
+                            :src="iconUrl(sortIcon('sync'))"
+                            alt=""
+                          />
+                        </button>
+                      </th>
+                      <th scope="col" :aria-sort="sortAria('checks')">
+                        <button
+                          class="report-sort-button"
+                          type="button"
+                          @click="sortBy('checks')"
+                        >
+                          Checks
+                          <img
+                            class="report-icon report-sort-icon"
+                            aria-hidden="true"
+                            :src="iconUrl(sortIcon('checks'))"
+                            alt=""
+                          />
+                        </button>
+                      </th>
+                      <th scope="col" :aria-sort="sortAria('findings')">
+                        <button
+                          class="report-sort-button"
+                          type="button"
+                          @click="sortBy('findings')"
+                        >
+                          Findings
+                          <img
+                            class="report-icon report-sort-icon"
+                            aria-hidden="true"
+                            :src="iconUrl(sortIcon('findings'))"
+                            alt=""
+                          />
+                        </button>
+                      </th>
+                      <th scope="col">Full report</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="repo in filteredRepos" :key="repo.name">
+                      <tr>
+                        <td>
+                          <strong x-text="repo.name"></strong>
+                          <p class="report-path is-mono" x-text="repo.path"></p>
+                          <p
+                            class="report-url is-size-7"
+                            x-show="repo.url"
+                            x-text="repo.url"
+                          ></p>
+                          <img
+                            x-show="repo.github"
+                            class="report-icon"
+                            src="/static/icons/github.svg"
+                            alt=""
+                          />
+                          <img
+                            x-show="repo.forgejo"
+                            class="report-icon"
+                            src="/static/icons/forgejo.svg"
+                            alt=""
+                          />
+                          <a
+                            class="report-repo-link is-size-7"
+                            x-show="repo.web_url"
+                            :href="repo.web_url"
+                            :aria-label="'Open ' + repo.name + ' repository in a new tab'"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            Open repository ↗
+                          </a>
+                          <button
+                            class="button is-small is-light mt-2"
+                            :disabled="busy"
+                            @click.stop="startReport({ repo: repo.name })"
+                          >
+                            <img
+                              class="report-icon"
+                              src="/static/icons/refresh-cw.svg"
+                              alt=""
+                            />
+                            Refresh this repo
+                          </button>
+                          <span
+                            class="tag is-light mt-2"
+                            :class="repo.path_exists ? 'is-success' : 'is-danger'"
+                            x-text="repo.path_exists ? 'present' : 'missing'"
+                          ></span>
+                        </td>
+                        <td>
+                          <p
+                            class="is-mono"
+                            x-text="repo.head_sha || 'no Git HEAD'"
+                          ></p>
+                          <span
+                            class="tag is-light mt-2"
+                            :class="repo.dirty ? 'is-warning' : 'is-success'"
+                          >
+                            <img
+                              class="report-icon"
+                              src="/static/icons/git.svg"
+                              alt=""
+                            />
+                            <span
+                              x-text="repo.dirty ? 'dirty' : 'clean'"
+                            ></span>
+                          </span>
+                          <p
+                            class="report-error mt-2"
+                            x-show="repo.error"
+                            x-text="repo.error"
+                          ></p>
+                        </td>
+                        <td>
+                          <p class="is-mono" x-text="driftText(repo)"></p>
+                          <p
+                            class="report-path is-mono"
+                            x-text="repo.sync.repo_commit || '—'"
+                          ></p>
+                          <span
+                            class="tag is-light mt-2"
+                            :class="repo.sync.marker === 'present' ? 'is-success' : 'is-warning'"
+                            x-text="repo.sync.marker === 'present' ? 'marker present' : repo.sync.marker || 'no marker'"
+                          ></span>
+                        </td>
+                        <td>
+                          <p x-show="repo.scanners.length === 0">
+                            No scanner config
+                          </p>
+                          <div class="report-scanners">
+                            <template
+                              x-for="scanner in repo.scanners"
+                              :key="scanner"
+                            >
+                              <a
+                                class="report-scanner"
+                                :href="scannerUrl(repo, scanner) || null"
+                                :title="scannerTitle(repo, scanner)"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                <img
+                                  x-show="scannerIcon(scanner)"
+                                  class="report-icon"
+                                  :src="iconUrl(scannerIcon(scanner))"
+                                  :alt="''"
+                                />
+                                <span
+                                  x-text="scannerLabel(repo, scanner)"
+                                ></span>
+                              </a>
+                            </template>
+                          </div>
+                          <p class="report-path mt-2" x-show="repo.github">
+                            <a
+                              :href="codefactorUrl(repo) || null"
+                              :title="codefactorUrl(repo) ? 'CodeFactor report — ' + codefactorUrl(repo) : 'CodeFactor'"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              <img
+                                class="report-icon"
+                                src="/static/icons/codefactor.svg"
+                                alt=""
+                              />
+                              CodeFactor:
+                              <span
+                                x-text="(repo.codefactor || 'n/a') + (repo.codefactor_stale ? ' (stale)' : '')"
+                              ></span>
+                            </a>
+                          </p>
+                          <p class="report-path mt-2" x-show="repo.github">
+                            <a
+                              :href="codecovUrl(repo) || null"
+                              :title="codecovUrl(repo) ? 'Codecov — ' + codecovUrl(repo) : 'Codecov'"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              <img
+                                class="report-icon"
+                                src="/static/icons/codecov.svg"
+                                alt=""
+                              />
+                              Codecov:
+                              <span x-text="codecovLabel(repo)"></span>
+                            </a>
+                          </p>
+                          <p
+                            class="report-path mt-2"
+                            x-show="repo.semgrep_license && !repo.scanners.includes('semgrep')"
+                          >
+                            Semgrep: <span x-text="repo.semgrep_license"></span>
+                          </p>
+                          <template
+                            x-for="issue in repo.ruby_issues"
+                            :key="issue"
+                          >
+                            <p
+                              class="report-check-issue mt-2"
+                              x-text="issue"
+                            ></p>
+                          </template>
+                          <p
+                            class="report-path mt-2"
+                            x-show="(repo.npm_projects || []).length"
+                            x-text="npmProjectText(repo)"
+                          ></p>
+                          <template
+                            x-for="issue in repo.node_issues || []"
+                            :key="issue"
+                          >
+                            <p
+                              class="report-check-issue mt-2"
+                              x-text="issue"
+                            ></p>
+                          </template>
+                          <template
+                            x-for="issue in repo.toolchain_issues || []"
+                            :key="issue"
+                          >
+                            <p
+                              class="report-check-issue mt-2"
+                              x-text="issue"
+                            ></p>
+                          </template>
+                        </td>
+                        <td>
+                          <template x-if="repo.problems.length === 0">
+                            <p class="report-findings-status">
+                              <img
+                                class="report-icon report-icon-ok"
+                                src="/static/icons/square-check-big.svg"
+                                alt=""
+                              />
+                              <span class="is-sr-only">no findings</span>
+                            </p>
+                          </template>
+                          <template x-if="repo.problems.length > 0">
+                            <p class="report-findings-status">
+                              <img
+                                class="report-icon report-icon-danger"
+                                src="/static/icons/square-x.svg"
+                                alt=""
+                              />
+                              <span x-text="repo.problems.length"></span>
+                              <span class="is-sr-only">findings</span>
+                            </p>
+                          </template>
+                          <template
+                            x-for="problem in repo.problems"
+                            :key="problem"
+                          >
+                            <p class="report-problem" x-text="problem"></p>
+                          </template>
+                        </td>
+                        <td>
+                          <div class="report-detail-links">
+                            <template
+                              x-for="link in repoLinks(repo)"
+                              :key="link.url"
+                            >
+                              <a
+                                :href="link.url"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                x-text="link.label"
+                              ></a>
+                            </template>
+                          </div>
+                          <details class="report-row-details">
+                            <summary>
+                              <img
+                                class="report-icon"
+                                src="/static/icons/chevron-down.svg"
+                                alt=""
+                              />
+                              Expand
+                            </summary>
+                            <pre
+                              class="report-detail-content"
+                              x-text="repoDetails(repo, snapshot)"
+                            ></pre>
+                          </details>
+                        </td>
+                      </tr>
+                    </template>
+                    <tr x-show="filteredRepos.length === 0">
+                      <td colspan="6" class="has-text-centered has-text-grey">
+                        No repositories match this filter.
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="box kbm-box mb-5">
+              <p class="eyebrow">Fleet-wide package analysis</p>
+              <h2 class="title is-4 section-heading">Gem health</h2>
+              <pre
+                class="report-detail-content"
+                x-text="gemFleetDetails()"
+              ></pre>
+              <details
+                class="report-fleet-constrained mt-3"
+                x-show="gemFleetConstrained()"
+              >
+                <summary x-text="gemFleetConstrainedSummary()"></summary>
+                <pre
+                  class="report-detail-content"
+                  x-text="gemFleetConstrained()"
+                ></pre>
+              </details>
+            </section>
+
+            <section class="box kbm-box mb-5">
+              <p class="eyebrow">Fleet-wide package analysis</p>
+              <h2 class="title is-4 section-heading">Node and npm health</h2>
+              <pre
+                class="report-detail-content"
+                x-text="nodeFleetDetails()"
+              ></pre>
+              <details
+                class="report-fleet-constrained mt-3"
+                x-show="nodeFleetConstrained()"
+              >
+                <summary x-text="nodeFleetConstrainedSummary()"></summary>
+                <pre
+                  class="report-detail-content"
+                  x-text="nodeFleetConstrained()"
+                ></pre>
+              </details>
+            </section>
+          </div>
+        </template>
+
+        <section class="box kbm-box">
+          <div class="level is-mobile mb-4">
+            <div class="level-left">
+              <div>
+                <p class="eyebrow">Durable history</p>
+                <h2 class="title is-4 section-heading mb-0">
+                  Recent report runs
+                </h2>
+              </div>
+            </div>
+          </div>
+          <p class="has-text-grey mb-4" x-show="reportHistory.length === 0">
+            Trend points appear here once the report has run.
+          </p>
+          <div class="report-chart mb-4" x-show="reportHistory.length > 0">
+            <canvas
+              id="reportHistoryChart"
+              role="img"
+              aria-label="Report metrics over time"
+            ></canvas>
+          </div>
+          <template x-if="jobs.length === 0">
+            <p class="has-text-grey">No report runs recorded yet.</p>
+          </template>
+          <template x-for="job in jobs" :key="job.id">
+            <article class="job-row py-3">
+              <div class="level is-mobile mb-1">
+                <div class="level-left">
+                  <div class="tags mb-0">
+                    <span
+                      class="tag"
+                      :class="jobTagClass(job.status)"
+                      x-text="job.status"
+                    ></span>
+                    <span class="tag is-light" x-text="'#' + job.id"></span>
+                  </div>
+                </div>
+                <div class="level-right">
+                  <time
+                    class="is-size-7 has-text-grey"
+                    x-text="formatTime(job.started)"
+                  ></time>
+                </div>
+              </div>
+              <p x-show="job.detail" x-text="job.detail"></p>
+              <p class="report-error" x-show="job.error" x-text="job.error"></p>
+            </article>
+          </template>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "reference_date": "2026-10-19",
+  "documents": ["frameworks/deploy/README.md", "languages/rollback.md"],
+  "excluded_markdown": [
+    ".hidden/secret.md",
+    ".kbm-trash/retired.md",
+    "_seen.jsonl/sidecar.md",
+    "languages/drafts/work-in-progress.md",
+    "logs/run.md",
+    "note.draft.md",
+    "reference.markdown",
+    "sandbox/scratch.md",
+    "vendor/generated/README.md"
+  ],
+  "non_markdown": ["frameworks/deploy/deploy.sh"],
+  "exclude": ["sandbox", "languages/drafts/**", "**/*.draft.md"],
+  "exclude_extensions": [".markdown"],
+  "private_documents": [],
+  "enrichment_failures": [],
+  "analysis_failures": [],
+  "frontmatter_issue_contains": {},
+  "expected_suggestions": [
+    {
+      "document": "frameworks/deploy/README.md",
+      "origin": "analysis",
+      "action": "expand",
+      "frontmatter_equals": {
+        "related": ["languages/rollback.md"]
+      }
+    },
+    {
+      "document": "frameworks/deploy/README.md",
+      "origin": "enrich",
+      "action": "expand",
+      "frontmatter_equals": {
+        "tags": ["fixture"],
+        "title": "Deploy a service"
+      }
+    },
+    {
+      "document": "languages/rollback.md",
+      "origin": "enrich",
+      "action": "expand",
+      "frontmatter_equals": {
+        "tags": ["fixture"],
+        "title": "Rollback a service"
+      }
+    }
+  ],
+  "expected_rejections": [],
+  "prompt_contains": {
+    "frameworks/deploy/README.md": [
+      "Sibling files the document does not mention:",
+      "deploy.sh",
+      "exact mention:",
+      "rollback",
+      "Exact-name evidence from candidate notes",
+      "body lines 3-5:",
+      "Disable new traffic"
+    ]
+  },
+  "duplicate_candidates": [],
+  "apply_policy": "deny"
+}

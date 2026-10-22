@@ -1,0 +1,12 @@
+{
+    "sonarlint.connectedMode.project": {
+        "connectionId": "gundestrup",
+        "projectKey": "gundestrup_Knowledge-BA46-Flow"
+    },
+    "makefile.configureOnOpen": false,
+    "semgrep.scan.pro_intrafile": true,
+    "semgrep.metrics": false,
+    "files.associations": {
+        ".devin/*.json": "jsonc"
+    }
+}

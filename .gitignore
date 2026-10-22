@@ -1,0 +1,22 @@
+# Build artifacts (anchored to repo root — cmd/KBM-flow is source, not a binary)
+/KBM-flow
+coverage.out
+coverage.html
+test-report.json
+
+# Local runtime state
+data/
+knowledge/
+.kbm/
+.env
+*.db
+*.db-wal
+*.db-shm
+config.local.json
+node_modules/
+
+# Local test corpus copied from a real knowledge base — never commit
+/example-knowledge-real-test/
+
+# OS noise
+.DS_Store

@@ -1,0 +1,36 @@
+{
+  "name": "knowledge-ba46-flow-frontend",
+  "version": "0.1.0",
+  "description": "A small Go MVP for maintaining a markdown-based knowledge repository. The command-line tool is called KBM-flow.",
+  "author": "Svend Gundestrup",
+  "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gundestrup/Knowledge-BA46-Flow.git"
+  },
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26.12.0"
+  },
+  "scripts": {
+    "assets:vendor": "node scripts/vendor-frontend-assets.mjs",
+    "assets:check": "node scripts/vendor-frontend-assets.mjs --check",
+    "version:sync": "node scripts/sync-version-metadata.mjs",
+    "version:bump": "node scripts/bump-version.mjs",
+    "version:test": "sh scripts/test-version.sh",
+    "check:js": "node --check internal/server/static/dashboard.js && node --check internal/server/static/landing.js && node --check internal/server/static/report.js && node --check internal/server/static/clientlog.js && node scripts/test-report-filters.mjs && node scripts/test-model-selection.mjs && node scripts/test-knowledge-progress.mjs",
+    "lint:frontend": "biome lint internal/server/static/dashboard.js internal/server/static/landing.js internal/server/static/report.js internal/server/static/clientlog.js internal/server/static/dashboard.css internal/server/static/landing.css internal/server/static/report.css scripts/test-report-filters.mjs scripts/test-model-selection.mjs scripts/test-knowledge-progress.mjs scripts/e2e/run.mjs scripts/e2e/lib/browser.mjs",
+    "format:check": "prettier --check package.json biome.json scripts/vendor-frontend-assets.mjs scripts/sync-version-metadata.mjs scripts/bump-version.mjs scripts/test-report-filters.mjs scripts/test-model-selection.mjs scripts/test-knowledge-progress.mjs scripts/e2e/run.mjs scripts/e2e/lib/browser.mjs internal/server/static/index.html internal/server/static/knowledge.html internal/server/static/landing.css internal/server/static/landing.js internal/server/static/report.html internal/server/static/dashboard.css internal/server/static/report.css internal/server/static/dashboard.js internal/server/static/report.js README.md CHANGELOG.md \"docs/**/*.md\" \"example-knowledge/**/*.md\" \"example-knowledge/**/*.json\" \"example-knowledge/**/.kb-policy.json\"",
+    "check": "npm run assets:check && npm run check:js && npm run lint:frontend && npm run format:check",
+    "format": "prettier --write package.json biome.json scripts/vendor-frontend-assets.mjs scripts/sync-version-metadata.mjs scripts/bump-version.mjs scripts/test-report-filters.mjs scripts/test-model-selection.mjs scripts/test-knowledge-progress.mjs scripts/e2e/run.mjs scripts/e2e/lib/browser.mjs internal/server/static/index.html internal/server/static/knowledge.html internal/server/static/landing.css internal/server/static/landing.js internal/server/static/report.html internal/server/static/dashboard.css internal/server/static/report.css internal/server/static/dashboard.js internal/server/static/report.js README.md CHANGELOG.md \"docs/**/*.md\"",
+    "e2e": "node scripts/e2e/run.mjs"
+  },
+  "devDependencies": {
+    "@alpinejs/csp": "3.17.4",
+    "@biomejs/biome": "2.5.15",
+    "bulma": "1.0.4",
+    "chart.js": "4.4.9",
+    "prettier": "3.9.10"
+  }
+}

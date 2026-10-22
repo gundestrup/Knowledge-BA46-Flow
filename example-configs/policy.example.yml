@@ -1,0 +1,108 @@
+# Example policy for KBM-flow's read-only repository report.
+#
+# Point at it with "report": { "policy_path": "path/to/policy.yml" } —
+# entirely optional; omit it to get an inventory without expectation checks.
+# repos.yml states WHAT the repos are; this file states what they should
+# CONFORM TO. Every section is optional.
+---
+versions:
+  # Compared against every version file found in a repo, top-level and
+  # nested. Detected pins: .ruby-version, .nvmrc/.node-version,
+  # .python-version, .go-version, go.mod (go + toolchain directives),
+  # .tool-versions (ruby/nodejs/python/golang/bundler/rubygems lines),
+  # Gemfile.lock "BUNDLED WITH", and a "rubygems:" key in CI workflows
+  # (the ruby/setup-ruby input). A leading "ruby-" prefix in
+  # .ruby-version is stripped but flagged as a format inconsistency.
+  #
+  # Values are version expressions, evaluated with range semantics:
+  #   "3.4.11"      exact patch level
+  #   "3.4", "3.4.x", "3.x"   version family (prefix match)
+  #   ">=3.4 <4"    range — npm-style expressions incl. || and "a - b"
+  # plus dynamic channels resolved against upstream release data when the
+  # report runs with remote data (the resolved version is recorded in the
+  # snapshot, cached 24h, and carried stale on local-only runs):
+  #   "stable"      newest released cycle (endoflife.date / rubygems.org)
+  #   "lts"         newest LTS cycle — meaningful for node only
+  #   "eol-floor"   oldest still-supported cycle
+  # Channels on bundler/rubygems support "stable" only.
+  ruby: "3.4.x" # fleet stays on 3.x — Rails support for 4.x lags
+  node: "22"
+  python: ">=3.13"
+  go: ">=1.26"
+  php: ">=8.2"
+  bundler: ">=2.5"
+  rubygems: ">=3.5"
+  # custom: the same expressions and channels for products without a
+  # built-in field. The key is the product name — it doubles as the
+  # endoflife.date slug for channels — and matches .tool-versions plugin
+  # names and .<name>-version files (e.g. .terraform-version). Built-in
+  # product names are reserved: a custom key like "ruby" is ignored with
+  # a note. (TypeScript has no toolchain pin of its own — it runs on the
+  # repo's Node version and its package version is npm dependency data.)
+  custom:
+    terraform: ">=1.6"
+    elixir: "stable"
+
+checks:
+  # Applied per repo language tag: language:ruby must pin .ruby-version,
+  # language:javascript/node must pin .nvmrc or .node-version when enabled.
+  require_ruby_version_file: true
+  require_node_version_file: false
+
+  # Documented orphaned tags/releases that must NOT count as mismatches —
+  # "*" accepts every tag; a list names the forgiven tags or releases.
+  # Record the reason so the exception is auditable, not silent.
+  tag_release_exceptions:
+    tag-only-site:
+      tags_without_release: ["*"]
+      # releases_without_tag: ["v0.9-legacy"]
+
+  # Optional Codecov coverage floor in percent: a repository whose reported
+  # coverage falls below it gains a "codecov coverage …" finding. Omit to
+  # display coverage without enforcing a minimum; "not reported" is never
+  # treated as below target.
+  # min_coverage: 80
+
+gems:
+  # slots: a shared dependency slot — "prefer" is the wanted gem, "ok" lists
+  # tolerated alternatives; anything else in that slot is flagged.
+  slots:
+    pagination:
+      prefer: pagy
+      ok: [kaminari]
+  # watch: gems flagged wherever they appear — retired or against policy.
+  watch:
+    retired-gem: "replace with the maintained project standard"
+  # drift_ok: multiple versions of the same gem across the fleet are
+  # flagged as drift — name a gem here, with a reason, to accept it.
+  drift_ok:
+    shared-gem: "document why the fleet uses multiple versions"
+  # dormant_ok: a gem with no release for review_after+ months is flagged
+  # as dormant — record a dated review to accept the staleness.
+  dormant_ok:
+    reviewed-gem:
+      reviewed: "2026-01-01"
+      review_after: 6
+      reason: "reviewed upstream health; documented replacement constraints"
+  # hold: a gem behind the latest upstream release is normally flagged
+  # "Behind … → latest". Holds cover the cases where that lag is deliberate
+  # policy rather than neglect — e.g. the newest upstream release is not yet
+  # supported by a depender. Held gems render as "Held name — reason" and
+  # leave the outdated list. This complements the automatic "constrained"
+  # severity, which fires when a lockfile dependency edge already records
+  # the blocker (e.g. liquid held by "jekyll ~> 4.0"): use hold when the
+  # reason is a decision, not a visible constraint.
+  hold:
+    liquid: "stay on 4.x — jekyll does not support liquid 5 yet"
+
+npm:
+  # Same ideas as gems.*, applied to detected npm projects: version drift
+  # between projects is drift, watched packages are flagged anywhere.
+  drift_ok:
+    shared-tool: "document why separate Node projects remain on different majors"
+  watch:
+    retired-cli: "replace with the maintained project standard"
+  # hold: same as gems.hold — a package behind latest renders "Held",
+  # not "Behind", with the documented reason.
+  hold:
+    eslint: "stay on 9.x — flat-config plugins not migrated yet"

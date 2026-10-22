@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "reference_date": "2026-10-19",
+  "documents": [
+    "frameworks/deploy/README.md",
+    "frameworks/shell/README.md",
+    "languages/rollback.md",
+    "lessons-learned/old-runner.md",
+    "lessons-learned/private-runbook.md",
+    "patterns/known-broken-link.md",
+    "tools/fixture-catalog.md"
+  ],
+  "excluded_markdown": [
+    ".hidden/secret.md",
+    ".kbm-trash/retired.md",
+    "_seen.jsonl/sidecar.md",
+    "logs/run.md",
+    "node_modules/generated/README.md",
+    "tmp/job.md",
+    "vendor/generated/README.md"
+  ],
+  "non_markdown": ["frameworks/deploy/deploy.sh"],
+  "private_documents": ["lessons-learned/private-runbook.md"],
+  "enrichment_failures": ["languages/rollback.md"],
+  "analysis_failures": ["tools/fixture-catalog.md"],
+  "frontmatter_issue_contains": {
+    "lessons-learned/old-runner.md": [
+      "tier \"legacy\" is not one of working|validated|wisdom"
+    ]
+  },
+  "expected_suggestions": [
+    {
+      "document": "frameworks/deploy/README.md",
+      "origin": "enrich",
+      "action": "expand",
+      "frontmatter_equals": {
+        "tags": ["fixture"],
+        "title": "Deploy a service"
+      }
+    },
+    {
+      "document": "frameworks/shell/README.md",
+      "origin": "enrich",
+      "action": "expand",
+      "frontmatter_equals": {
+        "tags": ["fixture"],
+        "title": "Shell test harness"
+      }
+    },
+    {
+      "document": "patterns/known-broken-link.md",
+      "origin": "deterministic",
+      "action": "expand",
+      "frontmatter_absent": ["related"]
+    },
+    {
+      "document": "lessons-learned/private-runbook.md",
+      "origin": "deterministic",
+      "action": "expand",
+      "frontmatter_absent": ["related"]
+    }
+  ],
+  "expected_rejections": [
+    {
+      "document": "frameworks/deploy/README.md",
+      "stage": "analysis",
+      "contains": "not a known repository document"
+    }
+  ],
+  "prompt_contains": {
+    "frameworks/deploy/README.md": [
+      "Sibling files the document does not mention:",
+      "deploy.sh"
+    ],
+    "lessons-learned/old-runner.md": [
+      "Frontmatter issue: tier \"legacy\" is not one of working|validated|wisdom"
+    ],
+    "patterns/known-broken-link.md": [
+      "Frontmatter related target \"missing-target.md\" does not match any known document"
+    ]
+  },
+  "duplicate_candidates": [],
+  "never_delete_documents": ["lessons-learned/old-runner.md"],
+  "apply_policy": "deny"
+}
