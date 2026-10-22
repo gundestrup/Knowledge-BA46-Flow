@@ -17,6 +17,11 @@ tag is prepared.
   returns. A source file that vanished before apply now ends `superseded`
   rather than `failed`, and a missing document that reappears unchanged has
   its `analyzed` status restored instead of staying `missing`.
+- The review-backlog line on `/knowledge` no longer stays inflated by
+  superseded suggestions: leaving the pending queue (supersede, apply
+  failure) now stamps `decided_at`, and existing superseded/failed rows are
+  backfilled to their creation day so historical backlog approximates what
+  was actually open.
 - Scan recognizes renames by canonical hash: a moved file keeps its analysis
   lineage, embeddings and pending suggestions instead of being treated as a
   deletion plus a brand-new document (only for an unambiguous single match —

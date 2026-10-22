@@ -34,8 +34,10 @@ status, hashes). Ordered by path.
 Per-day pipeline counts derived from the immutable timestamps on documents
 and suggestions — `{"days": [{"date", "notes", "analyzed", "suggestions",
 "handled", "applied"}]}` sorted by date. `notes` counts first-seen documents,
-`handled` counts suggestions decided (accepted or rejected). Powers the
-cumulative progress chart on `/knowledge`.
+`handled` counts suggestions that left the review queue (accepted, rejected,
+superseded, or apply-failed). Powers the cumulative progress chart on
+`/knowledge`, where the review-backlog line is `suggestions − handled` — an
+approximation of suggestions still awaiting review on each date.
 
 ### `GET /api/suggestions?status=pending`
 

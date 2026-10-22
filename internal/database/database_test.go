@@ -2220,3 +2220,86 @@ func TestRenameRetargetsMergeTargets(t *testing.T) {
 		t.Fatalf("move destination must not retarget: %+v", pending)
 	}
 }
+
+func TestProgressBacklogCountsQueueExits(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "km.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	doc := Document{Path: "a.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}
+	if _, err := db.UpsertScanned(ctx, doc, "s"); err != nil {
+		t.Fatal(err)
+	}
+	sug := []Suggestion{{Action: "expand", Reason: "v1", Confidence: .5, Origin: "expand"}}
+	if err := db.SaveTask(ctx, doc, "expand", "m", sug); err != nil {
+		t.Fatal(err)
+	}
+	// Replacing the pending set supersedes the old row — it left the queue, so
+	// the progress graph must not count it as open backlog forever.
+	if err := db.SaveTask(ctx, doc, "expand", "m", []Suggestion{{Action: "expand", Reason: "v2", Confidence: .5, Origin: "expand"}}); err != nil {
+		t.Fatal(err)
+	}
+	days, err := db.KnowledgeProgress(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created, handled int
+	for _, d := range days {
+		created += d.Suggestions
+		handled += d.Handled
+	}
+	if created != 2 || handled != 1 {
+		t.Fatalf("created=%d handled=%d — superseded row should count as handled once decided", created, handled)
+	}
+	if created-handled != 1 {
+		t.Fatalf("backlog=%d, want 1 (the live pending v2)", created-handled)
+	}
+}
+
+func TestMigrationBackfillsSupersededDecidedAt(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "km.db")
+	db, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := Document{Path: "a.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}
+	if _, err := db.UpsertScanned(ctx, doc, "s"); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	// Simulate the v10-era state: a superseded row with no decided_at — it
+	// left the queue but the graph's handled series could not see it.
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO suggestions (document_path,source_sha256,action,reason,confidence,origin,status,created_at) VALUES ('a.md','one','expand','stale fix',.5,'enrich','superseded','2025-10-20T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`PRAGMA user_version = 10`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	db, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	days, err := db.KnowledgeProgress(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var handled int
+	for _, d := range days {
+		handled += d.Handled
+	}
+	if handled != 1 {
+		t.Fatalf("handled=%d — legacy superseded row should be backfilled", handled)
+	}
+}

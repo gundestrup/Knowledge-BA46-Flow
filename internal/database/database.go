@@ -148,7 +148,7 @@ func Open(ctx context.Context, path string) (*DB, error) {
 // schemaVersion stamps the shape migrate() produces — bump it on every schema
 // change. A database stamped newer than this build is refused at Open so an
 // old binary cannot silently half-migrate a future layout.
-const schemaVersion = 10
+const schemaVersion = 11
 
 func (d *DB) migrate(ctx context.Context) error {
 	var stamped int
@@ -268,6 +268,15 @@ CREATE TABLE IF NOT EXISTS repo_report_history (
 	}
 	if _, err := d.ExecContext(ctx, stageResultsSchema); err != nil {
 		return err
+	}
+	// v11: decided_at means "left the review queue" — rows superseded or failed
+	// before that column existed get a synthetic timestamp so the progress
+	// graph's backlog series (created − handled) stops counting them open.
+	// created_at approximates the supersede day for bulk pipeline runs.
+	if stamped < 11 {
+		if _, err := d.ExecContext(ctx, `UPDATE suggestions SET decided_at=created_at WHERE decided_at IS NULL AND status<>'pending'`); err != nil {
+			return err
+		}
 	}
 	_, err = d.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion))
 	return err
@@ -576,7 +585,7 @@ last_error=CASE WHEN documents.sha256<>excluded.sha256 THEN '' ELSE documents.la
 		return false, err
 	}
 	if changed {
-		if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded' WHERE document_path=? AND status IN ('pending','accepted')`, doc.Path); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded',decided_at=COALESCE(decided_at,?) WHERE document_path=? AND status IN ('pending','accepted')`, time.Now().UTC().Format(time.RFC3339), doc.Path); err != nil {
 			return false, err
 		}
 	}
@@ -682,7 +691,7 @@ func (d *DB) SaveLinkFix(ctx context.Context, doc Document, suggestions []Sugges
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded' WHERE document_path=? AND status='pending' AND origin='deterministic'`, doc.Path); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded',decided_at=COALESCE(decided_at,?) WHERE document_path=? AND status='pending' AND origin='deterministic'`, time.Now().UTC().Format(time.RFC3339), doc.Path); err != nil {
 		return err
 	}
 	if err := insertSuggestions(ctx, tx, doc, suggestions); err != nil {
@@ -888,7 +897,7 @@ func (d *DB) SaveTask(ctx context.Context, doc Document, task, model string, sug
 		taskCurrent(doc, task), model, doc.Path); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded' WHERE document_path=? AND status='pending' AND origin=?`, doc.Path, task); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded',decided_at=COALESCE(decided_at,?) WHERE document_path=? AND status='pending' AND origin=?`, time.Now().UTC().Format(time.RFC3339), doc.Path, task); err != nil {
 		return err
 	}
 	if err := insertSuggestions(ctx, tx, doc, suggestions); err != nil {
@@ -1133,11 +1142,11 @@ func (d *DB) saveAnalysis(ctx context.Context, doc Document, shaCol, modelCol, m
 	// standalone deterministic metadata suggestion when analysis proposes only
 	// a move; the person may reject the move and still want the local metadata.
 	// Accepted/rejected decisions and enrichment-owned suggestions are retained.
-	if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded' WHERE document_path=? AND status='pending' AND origin='analysis'`, doc.Path); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded',decided_at=COALESCE(decided_at,?) WHERE document_path=? AND status='pending' AND origin='analysis'`, time.Now().UTC().Format(time.RFC3339), doc.Path); err != nil {
 		return err
 	}
 	if analysisReplacesDeterministic(suggestions, results) {
-		if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded' WHERE document_path=? AND status='pending' AND origin='deterministic'`, doc.Path); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded',decided_at=COALESCE(decided_at,?) WHERE document_path=? AND status='pending' AND origin='deterministic'`, time.Now().UTC().Format(time.RFC3339), doc.Path); err != nil {
 			return err
 		}
 	}
@@ -1190,7 +1199,7 @@ tags_json=CASE WHEN analyzed_sha256=sha256 THEN tags_json ELSE ? END WHERE path=
 		doc.SHA256, model, title, summary, string(tj), doc.Path); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded' WHERE document_path=? AND status='pending' AND origin IN ('enrich','deterministic')`, doc.Path); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded',decided_at=COALESCE(decided_at,?) WHERE document_path=? AND status='pending' AND origin IN ('enrich','deterministic')`, time.Now().UTC().Format(time.RFC3339), doc.Path); err != nil {
 		return err
 	}
 	if err := insertSuggestions(ctx, tx, doc, suggestions); err != nil {
@@ -1345,14 +1354,14 @@ func (d *DB) MarkApplied(ctx context.Context, id int64) error {
 
 // MarkApplyFailed records an apply failure; the suggestion is kept (status='failed') for inspection.
 func (d *DB) MarkApplyFailed(ctx context.Context, id int64, msg string) error {
-	_, err := d.ExecContext(ctx, `UPDATE suggestions SET status='failed',error=? WHERE id=?`, msg, id)
+	_, err := d.ExecContext(ctx, `UPDATE suggestions SET status='failed',error=?,decided_at=COALESCE(decided_at,?) WHERE id=?`, msg, time.Now().UTC().Format(time.RFC3339), id)
 	return err
 }
 
 // MarkSuperseded prevents an accepted suggestion from applying after its source
 // document has changed since the analysis was generated.
 func (d *DB) MarkSuperseded(ctx context.Context, id int64) error {
-	_, err := d.ExecContext(ctx, `UPDATE suggestions SET status='superseded' WHERE id=? AND status IN ('pending','accepted')`, id)
+	_, err := d.ExecContext(ctx, `UPDATE suggestions SET status='superseded',decided_at=COALESCE(decided_at,?) WHERE id=? AND status IN ('pending','accepted')`, time.Now().UTC().Format(time.RFC3339), id)
 	return err
 }
 
