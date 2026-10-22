@@ -499,7 +499,7 @@ func assertDeniedApply(t *testing.T, c config.Config, db *database.DB, suggestio
 	if selected.ID == 0 {
 		t.Fatal("no golden merge suggestion available for the apply-policy test")
 	}
-	if err := review.Decide(t.Context(), db, strconv.FormatInt(selected.ID, 10), "accepted"); err != nil {
+	if err := review.Decide(t.Context(), db, strconv.FormatInt(selected.ID, 10), "accepted", ""); err != nil {
 		t.Fatal(err)
 	}
 	results, err := review.Apply(t.Context(), c, db)

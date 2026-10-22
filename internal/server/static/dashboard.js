@@ -577,11 +577,22 @@ window.knowledgeDashboard = () => ({
 
   async decide(id, status) {
     this.error = "";
+    // A short "why" on rejections is stored with the suggestion and shown
+    // back to the model on later runs — the feedback channel for stale facts.
+    let note = "";
+    if (status === "rejected") {
+      const answer = window.prompt(
+        "Optional: why is this wrong? (shown to the model on future runs)",
+        "",
+      );
+      if (answer === null) return; // Cancel aborts the rejection, not just the note
+      note = answer;
+    }
     try {
       await this.requestJSON(`/api/suggestions/${id}/decide`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, note }),
       });
       this.notice = `Suggestion #${id} ${status}.`;
       await this.refreshData();

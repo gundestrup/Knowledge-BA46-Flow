@@ -204,6 +204,28 @@ const markup = readFileSync(
 assert.match(markup, /id="generation-model"/);
 assert.match(markup, /id="embedding-model"/);
 assert.match(markup, /Refresh from Ollama/);
+// Rejection captures the reviewer's optional "why" and sends it with the
+// decision; Cancel aborts without touching the server; accept sends no note.
+dashboard.requestJSON = async (path, options) => {
+  requests.push({ path, body: options?.body && JSON.parse(options.body) });
+  return payload;
+};
+dashboard.refreshData = async () => {};
+context.window.prompt = () => "b.md is the canonical note";
+await dashboard.decide(7, "rejected");
+assert.deepEqual(requests.at(-1), {
+  path: "/api/suggestions/7/decide",
+  body: { status: "rejected", note: "b.md is the canonical note" },
+});
+context.window.prompt = () => null; // Cancel
+{
+  const count = requests.length;
+  await dashboard.decide(8, "rejected");
+  assert.equal(requests.length, count);
+}
+await dashboard.decide(9, "accepted");
+assert.equal(requests.at(-1).body.note, "");
+
 console.log(
-  "Independent model selection, discovery, cloud consent, and lineage/estimate preview passed.",
+  "Independent model selection, discovery, cloud consent, lineage/estimate preview, and rejection notes passed.",
 );

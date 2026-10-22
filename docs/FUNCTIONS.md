@@ -344,11 +344,17 @@ Shows all suggestions with status `pending`.
 
 ## `review`
 
-Interactive walkthrough. `y` accepts, `n` rejects, `q` stops — any other input skips the suggestion for now.
+Interactive walkthrough. `y` accepts, `n` rejects — followed by an optional
+one-line "why" stored as reviewer feedback — `q` stops, any other input skips
+the suggestion for now.
 
 ## `accept ID` and `reject ID`
 
 Makes it possible to decide a single suggestion without interactive review.
+`reject ID --note "why this is wrong"` stores a short reviewer reason with the
+decision. Rejected proposals — including their notes — are shown back to the
+model as context on later analysis, expand and freshness runs for that
+document, and an identical re-proposal is suppressed instead of queued again.
 
 ## `apply`
 

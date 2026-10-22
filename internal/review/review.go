@@ -61,11 +61,16 @@ func Interactive(ctx context.Context, db *database.DB) error {
 		}
 		switch strings.ToLower(strings.TrimSpace(in.Text())) {
 		case "y", "yes":
-			if err = db.Decide(ctx, s.ID, "accepted"); err != nil {
+			if err = db.Decide(ctx, s.ID, "accepted", ""); err != nil {
 				return err
 			}
 		case "n", "no":
-			if err = db.Decide(ctx, s.ID, "rejected"); err != nil {
+			fmt.Print("Why? (optional — shown back to the model on later runs): ")
+			note := ""
+			if in.Scan() {
+				note = in.Text()
+			}
+			if err = db.Decide(ctx, s.ID, "rejected", note); err != nil {
 				return err
 			}
 		case "q":
@@ -75,13 +80,15 @@ func Interactive(ctx context.Context, db *database.DB) error {
 	return in.Err()
 }
 
-// Decide is the non-interactive variant behind `KBM-flow accept ID` / `KBM-flow reject ID`.
-func Decide(ctx context.Context, db *database.DB, idText, status string) error {
+// Decide is the non-interactive variant behind `KBM-flow accept ID` /
+// `KBM-flow reject ID`. note carries the reviewer's optional "why" — kept for
+// prompt feedback on rejected proposals.
+func Decide(ctx context.Context, db *database.DB, idText, status, note string) error {
 	id, err := strconv.ParseInt(idText, 10, 64)
 	if err != nil {
 		return fmt.Errorf("invalid id: %w", err)
 	}
-	return db.Decide(ctx, id, status)
+	return db.Decide(ctx, id, status, note)
 }
 
 // ApplyResult reports the outcome of one applied suggestion: Applied means the

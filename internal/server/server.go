@@ -237,6 +237,9 @@ func suggestion(db *database.DB) http.HandlerFunc {
 // decideBody is the POST body for the decide endpoint.
 type decideBody struct {
 	Status string `json:"status"` // "accepted" or "rejected"
+	// Note is the reviewer's optional "why" — stored on the suggestion and
+	// shown back to the model as review feedback on later runs.
+	Note string `json:"note"`
 }
 
 // decide transitions a pending suggestion to accepted/rejected — the HTTP
@@ -252,7 +255,7 @@ func decide(db *database.DB) http.HandlerFunc {
 			writeErr(w, http.StatusBadRequest, fmt.Errorf("status must be 'accepted' or 'rejected'"))
 			return
 		}
-		if err := db.Decide(r.Context(), pathID(r), b.Status); err != nil {
+		if err := db.Decide(r.Context(), pathID(r), b.Status, b.Note); err != nil {
 			writeErr(w, http.StatusConflict, err) // already decided or unknown id
 			return
 		}

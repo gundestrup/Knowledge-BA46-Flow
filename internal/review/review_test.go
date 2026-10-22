@@ -401,7 +401,7 @@ func TestApplyMarksFailuresAndContinues(t *testing.T) {
 		}
 		for _, suggestion := range pending {
 			if suggestion.DocumentPath == path {
-				if err := db.Decide(ctx, suggestion.ID, "accepted"); err != nil {
+				if err := db.Decide(ctx, suggestion.ID, "accepted", ""); err != nil {
 					t.Fatal(err)
 				}
 				break
@@ -460,7 +460,7 @@ func TestApplySupersedesSuggestionIfSourceChangedAfterReview(t *testing.T) {
 	if len(pending) != 1 {
 		t.Fatalf("pending=%+v", pending)
 	}
-	if err := db.Decide(ctx, pending[0].ID, "accepted"); err != nil {
+	if err := db.Decide(ctx, pending[0].ID, "accepted", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -599,14 +599,14 @@ func TestInteractiveQuitLeavesRemainingSuggestionsPending(t *testing.T) {
 
 func TestDecideRejectsNonNumericID(t *testing.T) {
 	db, _ := seedReviewSuggestions(t)
-	if err := Decide(context.Background(), db, "not-an-id", "accepted"); err == nil {
+	if err := Decide(context.Background(), db, "not-an-id", "accepted", ""); err == nil {
 		t.Fatal("expected invalid ID error")
 	}
 }
 
 func TestDecideAcceptsNumericID(t *testing.T) {
 	db, suggestions := seedReviewSuggestions(t)
-	if err := Decide(context.Background(), db, fmt.Sprintf("%d", suggestions[0].ID), "accepted"); err != nil {
+	if err := Decide(context.Background(), db, fmt.Sprintf("%d", suggestions[0].ID), "accepted", ""); err != nil {
 		t.Fatal(err)
 	}
 	got, err := db.Suggestion(context.Background(), suggestions[0].ID)
@@ -645,7 +645,7 @@ func TestApplyFailsWhenSourceFileDisappeared(t *testing.T) {
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("pending=%+v err=%v", pending, err)
 	}
-	if err := db.Decide(ctx, pending[0].ID, "accepted"); err != nil {
+	if err := db.Decide(ctx, pending[0].ID, "accepted", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(path); err != nil {
@@ -919,7 +919,7 @@ func TestApplyRejectsMalformedProposedFrontmatter(t *testing.T) {
 		t.Fatal(err)
 	}
 	sugs, _ := db.PendingSuggestions(ctx)
-	if err := db.Decide(ctx, sugs[0].ID, "accepted"); err != nil {
+	if err := db.Decide(ctx, sugs[0].ID, "accepted", ""); err != nil {
 		t.Fatal(err)
 	}
 	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
@@ -997,7 +997,7 @@ func TestApplyTouchesReindexTriggerAfterSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, s := range pending {
-		if err := db.Decide(ctx, s.ID, "accepted"); err != nil {
+		if err := db.Decide(ctx, s.ID, "accepted", ""); err != nil {
 			t.Fatal(err)
 		}
 	}

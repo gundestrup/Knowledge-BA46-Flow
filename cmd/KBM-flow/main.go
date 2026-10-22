@@ -731,7 +731,7 @@ func decideCmd(name string) *cobra.Command {
 	if name == "reject" {
 		status = "rejected"
 	}
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   name + " ID",
 		Short: name + " a single pending suggestion",
 		Args:  cobra.ExactArgs(1),
@@ -741,9 +741,14 @@ func decideCmd(name string) *cobra.Command {
 				return err
 			}
 			defer db.Close()
-			return review.Decide(cmd.Context(), db, args[0], status)
+			note, _ := cmd.Flags().GetString("note")
+			return review.Decide(cmd.Context(), db, args[0], status, note)
 		},
 	}
+	if status == "rejected" {
+		cmd.Flags().String("note", "", "why the suggestion is wrong — stored on the row and shown back to the model on later runs")
+	}
+	return cmd
 }
 
 // apply: execute every accepted suggestion (move/merge/expand/delete) on disk.

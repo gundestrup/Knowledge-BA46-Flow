@@ -1528,3 +1528,43 @@ func TestOpsDryRunWarnsAndCountsDependents(t *testing.T) {
 		t.Fatalf("warnings=%v, want embed mismatch + dependents warnings and no deterministic one", estimate.Warnings)
 	}
 }
+
+// TestDecideStoresReviewerNote exercises the feedback path end to end: the
+// HTTP rejection carries a note, the suggestion row keeps it, and the API
+// returns it so the UI (and future prompts) can use it.
+func TestDecideStoresReviewerNote(t *testing.T) {
+	_, db, srv := setup(t)
+	defer srv.Close()
+
+	res, err := http.Post(srv.URL+"/api/suggestions/1/decide", "application/json",
+		strings.NewReader(`{"status":"rejected","note":"b.md is the canonical note"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("decide status=%d", res.StatusCode)
+	}
+	sug, err := db.Suggestion(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sug.Status != "rejected" || sug.DecisionNote != "b.md is the canonical note" {
+		t.Fatalf("suggestion=%+v", sug)
+	}
+
+	res, err = http.Get(srv.URL + "/api/suggestions/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		DecisionNote string `json:"decision_note"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if got.DecisionNote != "b.md is the canonical note" {
+		t.Fatalf("api response missing note: %+v", got)
+	}
+}

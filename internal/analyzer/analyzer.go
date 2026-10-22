@@ -955,7 +955,7 @@ func (p *pipeline) analyzeDoc(doc database.Document, fm map[string]any, candidat
 	inbound = filterLLMVisiblePaths(inbound, p.visiblePaths)
 	inbound = slices.DeleteFunc(inbound, func(path string) bool { return !p.currentlyVisible(path) })
 	siblings, _ := scanner.SiblingFiles(p.c, doc.Path)
-	contextText := fmt.Sprintf("Current path: %s\nFile modified: %s\nPath tags: %s\nDocument frontmatter: %s\n%s%s%s%s%s%s%sExisting documents (possible relations/merge candidates; annotated with title, tags and content similarity):\n%s",
+	contextText := fmt.Sprintf("Current path: %s\nFile modified: %s\nPath tags: %s\nDocument frontmatter: %s\n%s%s%s%s%s%s%s%sExisting documents (possible relations/merge candidates; annotated with title, tags and content similarity):\n%s",
 		doc.Path,
 		time.Unix(doc.ModifiedUnix, 0).UTC().Format("2006-01-02"),
 		doc.TagsJSON, cmp.Or(doc.FrontmatterJSON, "none"),
@@ -963,6 +963,7 @@ func (p *pipeline) analyzeDoc(doc database.Document, fm map[string]any, candidat
 		frontmatterContext(doc, fm, p.knownDocs),
 		localMetadataContext(localPatch),
 		entityEvidenceContext(p.c, ranked),
+		p.rejectionContext(doc.Path),
 		inboundContext(inbound),
 		siblingContext(siblings, content),
 		overlapContext(ranked),
@@ -1303,6 +1304,32 @@ func frontmatterContext(doc database.Document, fm map[string]any, knownDocs []da
 		return ""
 	}
 	return strings.Join(lines, "\n") + "\n"
+}
+
+// rejectionContext summarizes the suggestions a human reviewer refused for
+// this note — the strongest feedback signal the pipeline has. The reviewer
+// note carries ground truth the model may lack (post-cutoff facts, house
+// rules), so it is quoted verbatim, bounded to the most recent entries.
+func (p *pipeline) rejectionContext(path string) string {
+	rejected, err := p.db.RejectedSuggestions(p.ctx, path, 5)
+	if err != nil || len(rejected) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(rejected))
+	for _, s := range rejected {
+		line := "- " + s.Action
+		if s.TargetPath != "" {
+			line += " → " + s.TargetPath
+		}
+		if s.Reason != "" {
+			line += ": " + truncate(s.Reason, 160)
+		}
+		if s.DecisionNote != "" {
+			line += " (reviewer: " + truncate(s.DecisionNote, 200) + ")"
+		}
+		lines = append(lines, line)
+	}
+	return "Human reviewers previously REJECTED these suggestions for this note — do not re-propose them; a reviewer note is ground truth you may lack:\n" + strings.Join(lines, "\n") + "\n"
 }
 
 // inboundContext lists documents whose frontmatter already links to this one —

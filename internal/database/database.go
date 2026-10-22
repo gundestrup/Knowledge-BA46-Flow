@@ -100,6 +100,9 @@ type Suggestion struct {
 	Confidence      float64 `json:"confidence"`
 	Origin          string  `json:"origin"`
 	CreatedAt       string  `json:"created_at"`
+	// DecisionNote carries the reviewer's "why" on reject/accept decisions —
+	// the ground-truth feedback the analysis prompt shows back to the model.
+	DecisionNote string `json:"decision_note,omitempty"`
 }
 
 // KnowledgeDashboard summarizes current analysis work and the most recent
@@ -145,7 +148,7 @@ func Open(ctx context.Context, path string) (*DB, error) {
 // schemaVersion stamps the shape migrate() produces — bump it on every schema
 // change. A database stamped newer than this build is refused at Open so an
 // old binary cannot silently half-migrate a future layout.
-const schemaVersion = 8
+const schemaVersion = 9
 
 func (d *DB) migrate(ctx context.Context) error {
 	var stamped int
@@ -204,6 +207,7 @@ CREATE TABLE IF NOT EXISTS suggestions (
  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','rejected','applied','failed','superseded')),
  created_at TEXT NOT NULL,
  decided_at TEXT,
+ decision_note TEXT NOT NULL DEFAULT '',
  applied_at TEXT,
  error TEXT NOT NULL DEFAULT '',
  FOREIGN KEY(document_path) REFERENCES documents(path) ON UPDATE CASCADE ON DELETE CASCADE
@@ -370,6 +374,7 @@ func (d *DB) upgradeSuggestionColumns(ctx context.Context) error {
 	}{
 		{"origin", `ALTER TABLE suggestions ADD COLUMN origin TEXT NOT NULL DEFAULT 'analysis'`},
 		{"decided_at", `ALTER TABLE suggestions ADD COLUMN decided_at TEXT`},
+		{"decision_note", `ALTER TABLE suggestions ADD COLUMN decision_note TEXT NOT NULL DEFAULT ''`},
 		{"applied_at", `ALTER TABLE suggestions ADD COLUMN applied_at TEXT`},
 		{"error", `ALTER TABLE suggestions ADD COLUMN error TEXT NOT NULL DEFAULT ''`},
 	} {
@@ -442,10 +447,11 @@ func (d *DB) upgradeTaskConstraints(ctx context.Context) error {
  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','rejected','applied','failed','superseded')),
  created_at TEXT NOT NULL,
  decided_at TEXT,
+ decision_note TEXT NOT NULL DEFAULT '',
  applied_at TEXT,
  error TEXT NOT NULL DEFAULT '',
  FOREIGN KEY(document_path) REFERENCES documents(path) ON UPDATE CASCADE ON DELETE CASCADE
-);`, "id,document_path,source_sha256,action,target_path,reason,confidence,proposed_content,origin,status,created_at,decided_at,applied_at,error",
+);`, "id,document_path,source_sha256,action,target_path,reason,confidence,proposed_content,origin,status,created_at,decided_at,decision_note,applied_at,error",
 		`CREATE INDEX IF NOT EXISTS idx_suggestions_status ON suggestions(status);`)
 	if err != nil {
 		return err
@@ -868,11 +874,27 @@ func fmLinksTo(fields map[string]any, target string) bool {
 	return false
 }
 
+// truncateRunes bounds a free-text field at max runes — reviewer notes and
+// error strings stay small enough to quote in a prompt or a job detail.
+func truncateRunes(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max])
+}
+
 // insertSuggestions appends pending suggestion rows inside tx, skipping
-// 'none' actions. Empty origin defaults to 'analysis'.
+// 'none' actions — and anything matching a suggestion the reviewer already
+// rejected, so a re-run cannot resurrect a refused proposal. Empty origin
+// defaults to 'analysis'.
 func insertSuggestions(ctx context.Context, tx *sql.Tx, doc Document, suggestions []Suggestion) error {
+	rejected, err := rejectedSuggestionKeys(ctx, tx, doc.Path)
+	if err != nil {
+		return err
+	}
 	for _, s := range suggestions {
-		if s.Action == "none" {
+		if s.Action == "none" || slices.ContainsFunc(suggestionKeys(s), func(k string) bool { return rejected[k] }) {
 			continue
 		}
 		origin := s.Origin
@@ -885,6 +907,72 @@ func insertSuggestions(ctx context.Context, tx *sql.Tx, doc Document, suggestion
 		}
 	}
 	return nil
+}
+
+// suggestionKeys derives the identity keys a proposal shares with a rejected
+// one: targeted actions match on (action, target); document-level actions
+// (expand) match on a normalized reason or identical proposed content — so a
+// differently-phrased proposal still reaches review while an exact repeat of
+// a refused one is suppressed.
+func suggestionKeys(s Suggestion) []string {
+	if s.TargetPath != "" {
+		return []string{s.Action + "|" + s.TargetPath}
+	}
+	keys := []string{}
+	if s.Reason != "" {
+		keys = append(keys, s.Action+"|reason|"+normalizeSuggestionText(s.Reason))
+	}
+	if s.ProposedContent != "" {
+		keys = append(keys, s.Action+"|content|"+normalizeSuggestionText(s.ProposedContent))
+	}
+	return keys
+}
+
+// normalizeSuggestionText folds case and whitespace so a rephrased or
+// reformatted re-proposal still matches what a reviewer already refused.
+func normalizeSuggestionText(s string) string {
+	return strings.ToLower(strings.Join(strings.Fields(s), " "))
+}
+
+// rejectedSuggestionKeys loads the identity keys of every rejected suggestion
+// on a document — one small query per save, before the insert loop.
+func rejectedSuggestionKeys(ctx context.Context, tx *sql.Tx, path string) (map[string]bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT action,target_path,reason,proposed_content FROM suggestions WHERE document_path=? AND status='rejected'`, path)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	keys := map[string]bool{}
+	for rows.Next() {
+		var s Suggestion
+		if err := rows.Scan(&s.Action, &s.TargetPath, &s.Reason, &s.ProposedContent); err != nil {
+			return nil, err
+		}
+		for _, k := range suggestionKeys(s) {
+			keys[k] = true
+		}
+	}
+	return keys, rows.Err()
+}
+
+// RejectedSuggestions returns a document's most recent rejected suggestions —
+// review feedback for the prompt: the rejected proposal plus the reviewer's
+// note on why, newest first.
+func (d *DB) RejectedSuggestions(ctx context.Context, path string, limit int) ([]Suggestion, error) {
+	rows, err := d.QueryContext(ctx, `SELECT action,target_path,reason,decision_note FROM suggestions WHERE document_path=? AND status='rejected' ORDER BY id DESC LIMIT ?`, path, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Suggestion{}
+	for rows.Next() {
+		var s Suggestion
+		if err := rows.Scan(&s.Action, &s.TargetPath, &s.Reason, &s.DecisionNote); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
 }
 
 // SaveAnalysis atomically records a successful analysis — title, summary, merged
@@ -1026,8 +1114,8 @@ func (d *DB) Suggestions(ctx context.Context, status string) ([]Suggestion, erro
 // Returns sql.ErrNoRows if the id does not exist.
 func (d *DB) Suggestion(ctx context.Context, id int64) (Suggestion, error) {
 	var s Suggestion
-	err := d.QueryRowContext(ctx, `SELECT id,document_path,source_sha256,action,target_path,reason,confidence,proposed_content,status,origin,created_at FROM suggestions WHERE id=?`, id).
-		Scan(&s.ID, &s.DocumentPath, &s.SourceSHA256, &s.Action, &s.TargetPath, &s.Reason, &s.Confidence, &s.ProposedContent, &s.Status, &s.Origin, &s.CreatedAt)
+	err := d.QueryRowContext(ctx, `SELECT id,document_path,source_sha256,action,target_path,reason,confidence,proposed_content,status,origin,created_at,decision_note FROM suggestions WHERE id=?`, id).
+		Scan(&s.ID, &s.DocumentPath, &s.SourceSHA256, &s.Action, &s.TargetPath, &s.Reason, &s.Confidence, &s.ProposedContent, &s.Status, &s.Origin, &s.CreatedAt, &s.DecisionNote)
 	return s, err
 }
 
@@ -1073,7 +1161,7 @@ ORDER BY id DESC LIMIT 1
 
 // suggestions is the shared query helper behind PendingSuggestions and Accepted.
 func (d *DB) suggestions(ctx context.Context, status string) ([]Suggestion, error) {
-	rows, err := d.QueryContext(ctx, `SELECT id,document_path,source_sha256,action,target_path,reason,confidence,proposed_content,status,origin,created_at FROM suggestions WHERE status=? ORDER BY id`, status)
+	rows, err := d.QueryContext(ctx, `SELECT id,document_path,source_sha256,action,target_path,reason,confidence,proposed_content,status,origin,created_at,decision_note FROM suggestions WHERE status=? ORDER BY id`, status)
 	if err != nil {
 		return nil, err
 	}
@@ -1081,7 +1169,7 @@ func (d *DB) suggestions(ctx context.Context, status string) ([]Suggestion, erro
 	out := []Suggestion{} // non-nil so JSON responses are [] rather than null
 	for rows.Next() {
 		var s Suggestion
-		if err := rows.Scan(&s.ID, &s.DocumentPath, &s.SourceSHA256, &s.Action, &s.TargetPath, &s.Reason, &s.Confidence, &s.ProposedContent, &s.Status, &s.Origin, &s.CreatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.DocumentPath, &s.SourceSHA256, &s.Action, &s.TargetPath, &s.Reason, &s.Confidence, &s.ProposedContent, &s.Status, &s.Origin, &s.CreatedAt, &s.DecisionNote); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -1091,9 +1179,16 @@ func (d *DB) suggestions(ctx context.Context, status string) ([]Suggestion, erro
 
 // Decide transitions a pending suggestion to 'accepted' or 'rejected'. The
 // WHERE ... AND status='pending' guard plus the RowsAffected check means it
-// errors cleanly if the id doesn't exist or was already decided.
-func (d *DB) Decide(ctx context.Context, id int64, status string) error {
-	r, err := d.ExecContext(ctx, `UPDATE suggestions SET status=?,decided_at=? WHERE id=? AND status='pending'`, status, time.Now().UTC().Format(time.RFC3339), id)
+// errors cleanly if the id doesn't exist or was already decided. note is the
+// reviewer's optional "why" — bounded and stored for prompt feedback.
+func (d *DB) Decide(ctx context.Context, id int64, status, note string) error {
+	// The note is reviewer feedback for future prompts — only rejections
+	// carry it; "accepted" needs no explanation and would pollute context.
+	if status != "rejected" {
+		note = ""
+	}
+	r, err := d.ExecContext(ctx, `UPDATE suggestions SET status=?,decided_at=?,decision_note=? WHERE id=? AND status='pending'`,
+		status, time.Now().UTC().Format(time.RFC3339), truncateRunes(strings.TrimSpace(note), 500), id)
 	if err != nil {
 		return err
 	}

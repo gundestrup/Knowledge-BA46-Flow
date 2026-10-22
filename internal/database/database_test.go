@@ -70,7 +70,7 @@ func TestDocumentLifecycle(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT analyzed_model FROM documents WHERE path='a.md'`).Scan(&model); err != nil || model != "other-model" {
 		t.Fatalf("analyzed_model=%q err=%v", model, err)
 	}
-	if err := db.Decide(ctx, suggestions[0].ID, "accepted"); err != nil {
+	if err := db.Decide(ctx, suggestions[0].ID, "accepted", ""); err != nil {
 		t.Fatal(err)
 	}
 	accepted, err := db.Accepted(ctx)
@@ -172,10 +172,10 @@ func TestDocumentsAndSuggestionLookup(t *testing.T) {
 	if _, err := db.Suggestion(ctx, 999); err == nil {
 		t.Fatal("expected missing suggestion error")
 	}
-	if err := db.Decide(ctx, 999, "accepted"); err == nil {
+	if err := db.Decide(ctx, 999, "accepted", ""); err == nil {
 		t.Fatal("expected deciding missing suggestion to fail")
 	}
-	if err := db.Decide(ctx, suggestions[0].ID, "invalid-status"); err == nil {
+	if err := db.Decide(ctx, suggestions[0].ID, "invalid-status", ""); err == nil {
 		t.Fatal("expected invalid status to fail")
 	}
 }
@@ -540,7 +540,7 @@ func TestMarkAppliedAndApplyFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, suggestion := range pending {
-		if err := db.Decide(ctx, suggestion.ID, "accepted"); err != nil {
+		if err := db.Decide(ctx, suggestion.ID, "accepted", ""); err != nil {
 			t.Fatal(err)
 		}
 		if suggestion.DocumentPath == "applied.md" {
@@ -586,7 +586,7 @@ func TestMarkSupersededAcceptedSuggestion(t *testing.T) {
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("pending=%+v err=%v", pending, err)
 	}
-	if err := db.Decide(ctx, pending[0].ID, "accepted"); err != nil {
+	if err := db.Decide(ctx, pending[0].ID, "accepted", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.MarkSuperseded(ctx, pending[0].ID); err != nil {
@@ -1036,7 +1036,7 @@ func TestMarkSupersededLeavesRejectedSuggestionsAlone(t *testing.T) {
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("pending=%+v err=%v", pending, err)
 	}
-	if err := db.Decide(ctx, pending[0].ID, "rejected"); err != nil {
+	if err := db.Decide(ctx, pending[0].ID, "rejected", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.MarkSuperseded(ctx, pending[0].ID); err != nil {
@@ -1785,5 +1785,143 @@ func TestModelStampsReportsDominantModel(t *testing.T) {
 		if _, ok := stamps[lane]; ok {
 			t.Fatalf("lane %q must stay absent when nothing recorded it: %+v", lane, stamps[lane])
 		}
+	}
+}
+
+// TestRejectedSuggestionSuppressionAndNote covers the review-feedback loop:
+// a rejected proposal is never re-inserted on a later pass, its identity keys
+// (action+target, normalized reason, content) are the matching rule, and the
+// reviewer's note rides along for prompt context.
+func TestRejectedSuggestionSuppressionAndNote(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	doc := Document{Path: "a.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}
+	if _, err := db.UpsertScanned(ctx, doc, "s"); err != nil {
+		t.Fatal(err)
+	}
+	save := func(sugs ...Suggestion) {
+		t.Helper()
+		if err := db.SaveAnalysis(ctx, doc, "m", "t", "s", nil, sugs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending := func() []Suggestion {
+		t.Helper()
+		sugs, err := db.PendingSuggestions(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sugs
+	}
+
+	save(
+		Suggestion{Action: "move", TargetPath: "b.md", Reason: "better place", Confidence: .9},
+		Suggestion{Action: "expand", Reason: "PostgreSQL 16 is the latest release", ProposedContent: "# a\n\nnew body", Confidence: .8},
+	)
+	rows := pending()
+	if len(rows) != 2 {
+		t.Fatalf("pending=%v", rows)
+	}
+	if err := db.Decide(ctx, rows[0].ID, "rejected", "b.md exists on another shelf"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Decide(ctx, rows[1].ID, "rejected", "PG 18 was released Sep 2025 — claim is backwards"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The identical proposals must not come back — not even a rephrased
+	// reason on a targeted action, nor the same expand content under a new
+	// reason. A genuinely different proposal still lands.
+	save(
+		Suggestion{Action: "move", TargetPath: "b.md", Reason: "reorganize shelf", Confidence: .9},
+		Suggestion{Action: "expand", Reason: "correct version claim", ProposedContent: "# a\n\nnew body", Confidence: .8},
+		Suggestion{Action: "expand", Reason: "add a troubleshooting section", Confidence: .7},
+		Suggestion{Action: "merge", TargetPath: "c.md", Reason: "duplicates", Confidence: .7},
+	)
+	rows = pending()
+	if len(rows) != 2 {
+		t.Fatalf("pending=%v, want the fresh expand + merge only", rows)
+	}
+	for _, s := range rows {
+		if s.Reason == "add a troubleshooting section" || s.Action == "merge" {
+			continue
+		}
+		t.Fatalf("suppressed proposal resurfaced: %+v", s)
+	}
+
+	// The reviewer's notes survive for prompt feedback, newest first.
+	rejected, err := db.RejectedSuggestions(ctx, "a.md", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rejected) != 2 || rejected[0].DecisionNote == "" || rejected[1].DecisionNote == "" {
+		t.Fatalf("rejected=%+v", rejected)
+	}
+	if rejected[0].Action != "expand" || !strings.Contains(rejected[0].DecisionNote, "PG 18") {
+		t.Fatalf("newest rejected=%+v", rejected[0])
+	}
+
+	// A long note is bounded.
+	if err := db.Decide(ctx, pending()[0].ID, "rejected", strings.Repeat("x", 900)); err != nil {
+		t.Fatal(err)
+	}
+	rejected, _ = db.RejectedSuggestions(ctx, "a.md", 5)
+	if got := len([]rune(rejected[0].DecisionNote)); got > 500 {
+		t.Fatalf("decision_note length=%d", got)
+	}
+}
+
+// TestMigrationAddsDecisionNote opens a v8-era database whose suggestions
+// table predates reviewer notes: migrate must add the column so Decide can
+// store feedback and RejectedSuggestions can return it.
+func TestMigrationAddsDecisionNote(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "km.db")
+	db, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Rebuild the v8-era suggestions table (no decision_note) and stamp the
+	// schema one version back so migrate runs the column upgrade.
+	if _, err := raw.Exec(`ALTER TABLE suggestions DROP COLUMN decision_note`); err != nil {
+		raw.Close()
+		t.Skipf("sqlite build cannot DROP COLUMN: %v", err)
+	}
+	if _, err := raw.Exec(`PRAGMA user_version = 8`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+	db, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	doc := Document{Path: "a.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}
+	if _, err := db.UpsertScanned(ctx, doc, "s"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveAnalysis(ctx, doc, "m", "t", "s", nil, []Suggestion{{Action: "expand", Reason: "old claim", Confidence: .8}}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.PendingSuggestions(ctx)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("pending=%v err=%v", rows, err)
+	}
+	if err := db.Decide(ctx, rows[0].ID, "rejected", "not true anymore"); err != nil {
+		t.Fatalf("Decide on migrated schema: %v", err)
+	}
+	rejected, err := db.RejectedSuggestions(ctx, "a.md", 5)
+	if err != nil || len(rejected) != 1 || rejected[0].DecisionNote != "not true anymore" {
+		t.Fatalf("rejected=%+v err=%v", rejected, err)
 	}
 }

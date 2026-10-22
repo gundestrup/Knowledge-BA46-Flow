@@ -11,6 +11,13 @@ tag is prepared.
 
 ### Added
 
+- Reviewer feedback loop: rejecting a suggestion may carry a short reason —
+  `reject ID --note "why"`, `POST /api/suggestions/{id}/decide` `{"note": ...}`,
+  or the dashboard's reject prompt. The note is stored on the row
+  (`decision_note`, schema v9) and quoted back to the model on later analysis,
+  expand and freshness runs for that document only, and a re-proposal matching
+  a rejected suggestion (same action+target, normalized reason, or proposed
+  content) is suppressed instead of queued again.
 - Pre-flight work estimate: `POST /api/ops` accepts `dry_run`, reporting the
   documents each stage would queue, the unchanged dependents the evidence
   sweep would add, and warnings when a selection differs from the recorded

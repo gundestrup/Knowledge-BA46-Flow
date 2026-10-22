@@ -536,3 +536,88 @@ func TestAddLocalMetadataToProposalMergesMissingFields(t *testing.T) {
 		t.Fatal("malformed proposed frontmatter must fail")
 	}
 }
+
+// TestRejectionFeedbackLoop covers the whole reviewer-feedback circuit: a
+// suggestion the reviewer refused (with their reason why) is quoted back in
+// the next analysis and freshness prompts for that document only, and an
+// identical re-proposal is suppressed before it reaches the review queue.
+func TestRejectionFeedbackLoop(t *testing.T) {
+	ctx := context.Background()
+	c, db := taskSetup(t)
+	writeDoc(t, c.RepositoryPath, "b.md", "# Beta\n\nUnrelated note body here.")
+	if _, err := scanner.Scan(ctx, c, db); err != nil {
+		t.Fatal(err)
+	}
+	aDoc := docByPath(t, db, "a.md")
+
+	// A prior pass proposed a wrong version claim; the reviewer rejected it
+	// with the post-cutoff correction the model cannot know.
+	if err := db.SaveAnalysis(ctx, aDoc, "test-model", "T", "S", nil, []database.Suggestion{
+		{Action: "expand", Reason: "PostgreSQL 16 is the latest release", ProposedContent: "# a\n\noutdated body", Confidence: .9},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pend, err := db.PendingSuggestions(ctx)
+	if err != nil || len(pend) != 1 {
+		t.Fatalf("pending=%v err=%v", pend, err)
+	}
+	if err := db.Decide(ctx, pend[0].ID, "rejected", "PG 18 shipped Sep 2025 — claim is backwards"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Edit a.md so the analysis lane queues it again.
+	if err := os.WriteFile(filepath.Join(c.RepositoryPath, "a.md"), []byte("# Alpha doc revised"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(ctx, c, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// The model re-proposes the identical expand — hard dedup must swallow
+	// it before it reaches review, and the prompt must carry the rejection.
+	reply := `{"title":"T","summary":"S","tags":[],"obsolete":false,"suggestions":[{"action":"expand","target_path":"","reason":"PostgreSQL 16 is the latest release","confidence":0.9,"proposed_content":"# a\n\noutdated body"}]}`
+	llm := &fakeLLM{reply: reply}
+	if _, err := RunProgress(ctx, c, db, Generators{Analysis: llm}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var aPrompt, bPrompt string
+	for _, p := range llm.prompts {
+		if strings.Contains(p, "Current path: a.md") {
+			aPrompt = p
+		}
+		if strings.Contains(p, "Current path: b.md") {
+			bPrompt = p
+		}
+	}
+	if !strings.Contains(aPrompt, "REJECTED") || !strings.Contains(aPrompt, "PG 18 shipped Sep 2025") {
+		t.Fatalf("analysis prompt lost reviewer feedback:\n%s", aPrompt)
+	}
+	if strings.Contains(bPrompt, "REJECTED") {
+		t.Fatalf("rejection context leaked into b.md's prompt:\n%s", bPrompt)
+	}
+	rows, err := db.PendingSuggestions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r.Origin != "deterministic" {
+			t.Fatalf("re-proposal reached the review queue: %+v", r)
+		}
+	}
+
+	// Freshness prompts carry the same feedback for that document.
+	fresh := &fakeLLM{reply: `{"current":true,"summary":"","flags":[],"suggestions":[]}`}
+	if _, err := RunTask(ctx, c, db, Generators{Analysis: fresh}, config.TaskFreshness, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	var freshA string
+	for _, p := range fresh.prompts {
+		if strings.Contains(p, "Current path: a.md") {
+			freshA = p
+		}
+	}
+	if !strings.Contains(freshA, "PG 18 shipped Sep 2025") {
+		t.Fatalf("freshness prompt lost reviewer feedback:\n%s", freshA)
+	}
+}

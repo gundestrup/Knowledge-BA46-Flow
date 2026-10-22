@@ -80,7 +80,7 @@ func TestApplyRevalidatesUnsafePreviouslyAcceptedSuggestions(t *testing.T) {
 			if err != nil || len(pending) != 1 {
 				t.Fatalf("pending=%v error=%v", pending, err)
 			}
-			if err := db.Decide(t.Context(), pending[0].ID, "accepted"); err != nil {
+			if err := db.Decide(t.Context(), pending[0].ID, "accepted", ""); err != nil {
 				t.Fatal(err)
 			}
 			results, err := Apply(t.Context(), config.Config{RepositoryPath: repo}, db)

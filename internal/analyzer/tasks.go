@@ -251,9 +251,10 @@ func (p *pipeline) expandDoc(root *os.Root, doc database.Document, model string,
 		return nil
 	}
 	p.emit(Progress{Index: base.Index, Total: base.Total, Path: base.Path, Outcome: "expanding"})
-	contextText := fmt.Sprintf("Current path: %s\nCategory template (follow its section structure exactly):\n%s\nDocument frontmatter: %s\n%s%sRelated documents in this repository (link candidates for related:):\n%s",
+	contextText := fmt.Sprintf("Current path: %s\nCategory template (follow its section structure exactly):\n%s\nDocument frontmatter: %s\n%s%s%sRelated documents in this repository (link candidates for related:):\n%s",
 		doc.Path, template, cmp.Or(doc.FrontmatterJSON, "none"),
 		p.taxonomyPrompt(doc, fm), frontmatterContext(doc, fm, p.knownDocs),
+		p.rejectionContext(doc.Path),
 		renderTaskCandidates(doc.Path, fm, p.knownDocs, p.visiblePaths))
 	prompt, err := prompts.ComposeTask(p.c.PromptDirectory, p.mcpServer, "expand.md", contextText, content)
 	if err != nil {
@@ -306,9 +307,9 @@ func (p *pipeline) freshnessDoc(root *os.Root, doc database.Document, model stri
 			kbmNote = "Latest external link check result: " + string(b) + "\n"
 		}
 	}
-	contextText := fmt.Sprintf("Current path: %s\nFile modified: %s\nDocument frontmatter: %s\n%s",
+	contextText := fmt.Sprintf("Current path: %s\nFile modified: %s\nDocument frontmatter: %s\n%s%s",
 		doc.Path, time.Unix(doc.ModifiedUnix, 0).UTC().Format("2006-01-02"),
-		cmp.Or(doc.FrontmatterJSON, "none"), kbmNote)
+		cmp.Or(doc.FrontmatterJSON, "none"), kbmNote, p.rejectionContext(doc.Path))
 	prompt, err := prompts.ComposeTask(p.c.PromptDirectory, p.mcpServer, "freshness.md", contextText, content)
 	if err != nil {
 		return err

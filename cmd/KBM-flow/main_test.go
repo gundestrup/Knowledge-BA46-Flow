@@ -423,7 +423,7 @@ func TestApplyCommandSkipsStaleSuggestion(t *testing.T) {
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("pending=%+v err=%v", pending, err)
 	}
-	if err := db.Decide(ctx, pending[0].ID, "accepted"); err != nil {
+	if err := db.Decide(ctx, pending[0].ID, "accepted", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {

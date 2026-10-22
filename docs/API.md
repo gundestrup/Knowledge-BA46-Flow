@@ -51,8 +51,11 @@ Full suggestion row including `proposed_content`. `404` if the id does not exist
 ### `POST /api/suggestions/{id}/decide`
 
 Body: `{"status": "accepted"}` or `{"status": "rejected"}` — the HTTP
-equivalent of `accept ID` / `reject ID`. Returns `409` if the suggestion is not
-pending or does not exist.
+equivalent of `accept ID` / `reject ID`. An optional `"note"` string stores a
+short reviewer reason on rejections; it is kept on the row (returned as
+`decision_note` by `GET /api/suggestions/{id}`) and shown back to the model as
+review feedback on later runs for that document. Returns `409` if the
+suggestion is not pending or does not exist.
 
 ### `POST /api/apply`
 
