@@ -1786,6 +1786,22 @@ func TestModelStampsReportsDominantModel(t *testing.T) {
 			t.Fatalf("lane %q must stay absent when nothing recorded it: %+v", lane, stamps[lane])
 		}
 	}
+
+	// Vanished files must not keep voting: once the model-a notes go missing,
+	// the minority live model becomes the dominant lineage answer.
+	if err := db.MarkMissing(ctx, "scan-later"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.UpsertScanned(ctx, Document{Path: "d3.md", SHA256: "sha-3", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}, "scan-later"); err != nil {
+		t.Fatal(err)
+	}
+	stamps, err = db.ModelStamps(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stamps["analyzed"]; got.Model != "model-b" || got.Docs != 1 {
+		t.Fatalf("analyzed stamp after missing=%+v, want model-b over the live doc", got)
+	}
 }
 
 // TestRejectedSuggestionSuppressionAndNote covers the review-feedback loop:
@@ -1923,5 +1939,232 @@ func TestMigrationAddsDecisionNote(t *testing.T) {
 	rejected, err := db.RejectedSuggestions(ctx, "a.md", 5)
 	if err != nil || len(rejected) != 1 || rejected[0].DecisionNote != "not true anymore" {
 		t.Fatalf("rejected=%+v err=%v", rejected, err)
+	}
+}
+
+// TestSuggestionsSkipMissingDocuments: a suggestion for a file the scanner no
+// longer sees must leave the review and apply queues — but only while the
+// file is gone. Rescanning a reappeared file restores its document status and
+// the still-valid suggestions resurface with it.
+func TestSuggestionsSkipMissingDocuments(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	doc := Document{Path: "a.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}
+	if _, err := db.UpsertScanned(ctx, doc, "scan-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveAnalysis(ctx, doc, "m", "t", "s", nil, []Suggestion{
+		{Action: "expand", Reason: "fix me", Confidence: .8},
+		{Action: "move", TargetPath: "b.md", Reason: "better", Confidence: .8},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := db.PendingSuggestions(ctx)
+	if err != nil || len(pending) != 2 {
+		t.Fatalf("pending=%v err=%v", pending, err)
+	}
+	if err := db.Decide(ctx, pending[1].ID, "accepted", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// The next scan does not see a.md: both queues drop its suggestions.
+	if err := db.MarkMissing(ctx, "scan-2"); err != nil {
+		t.Fatal(err)
+	}
+	for name, list := range map[string]func(context.Context) ([]Suggestion, error){
+		"pending":  db.PendingSuggestions,
+		"accepted": db.Accepted,
+	} {
+		if rows, err := list(ctx); err != nil || len(rows) != 0 {
+			t.Fatalf("%s for missing doc=%v err=%v", name, rows, err)
+		}
+	}
+	// Direct id access still works — the rows are hidden, not deleted.
+	if got, err := db.Suggestion(ctx, pending[0].ID); err != nil || got.Status != "pending" {
+		t.Fatalf("row lookup=%+v err=%v", got, err)
+	}
+
+	// The file reappears unchanged: its document status is restored
+	// (analyzed, since the hash still matches the stamp) and its
+	// suggestions re-enter the queues.
+	if _, err := db.UpsertScanned(ctx, doc, "scan-3"); err != nil {
+		t.Fatal(err)
+	}
+	docs, err := db.Documents(ctx)
+	if err != nil || len(docs) != 1 || docs[0].Status != "analyzed" {
+		t.Fatalf("resurrected doc=%+v err=%v", docs, err)
+	}
+	if rows, err := db.PendingSuggestions(ctx); err != nil || len(rows) != 1 {
+		t.Fatalf("pending after resurrection=%v err=%v", rows, err)
+	}
+	if rows, err := db.Accepted(ctx); err != nil || len(rows) != 1 {
+		t.Fatalf("accepted after resurrection=%v err=%v", rows, err)
+	}
+}
+
+// TestRenameByHashPreservesLineage: a moved file is the same entity — its
+// canonical hash is its identity. Scan must re-key the row rather than treat
+// the new path as a fresh document, so analysis stamps, embeddings, and
+// review decisions (FK cascade) all survive the move.
+func TestRenameByHashPreservesLineage(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	doc := Document{Path: "a.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}
+	if _, err := db.UpsertScanned(ctx, doc, "scan-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveAnalysis(ctx, doc, "model-x", "T", "S", []string{"x"}, []Suggestion{
+		{Action: "expand", Reason: "polish", Confidence: .8},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveEmbedding(ctx, doc, "embed-m", []byte{0, 0, 128, 63}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The file moves to a new location with identical content.
+	moved := doc
+	moved.Path = "sub/b.md"
+	changed, err := db.UpsertScanned(ctx, moved, "scan-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("rename must report unchanged — the entity did not change")
+	}
+	if err := db.MarkMissing(ctx, "scan-2"); err != nil {
+		t.Fatal(err)
+	}
+
+	docs, err := db.Documents(ctx)
+	if err != nil || len(docs) != 1 {
+		t.Fatalf("docs=%v err=%v", docs, err)
+	}
+	got := docs[0]
+	if got.Path != "sub/b.md" || got.Status != "analyzed" || got.AnalyzedModel != "model-x" {
+		t.Fatalf("renamed row lost lineage: %+v", got)
+	}
+	if got.EmbeddedSHA256 != "one" || got.EmbeddedModel != "embed-m" || len(got.Embedding) == 0 {
+		t.Fatalf("renamed row lost embedding: %+v", got)
+	}
+	// The pending suggestion followed the row — same entity, new path.
+	rows, err := db.PendingSuggestions(ctx)
+	if err != nil || len(rows) != 1 || rows[0].DocumentPath != "sub/b.md" {
+		t.Fatalf("pending=%v err=%v", rows, err)
+	}
+	// And it is not queued for re-analysis.
+	pendingDocs, err := db.Pending(ctx, "model-x", "model-x", false)
+	if err != nil || len(pendingDocs) != 0 {
+		t.Fatalf("moved doc should not be pending: %v err=%v", pendingDocs, err)
+	}
+}
+
+// TestRenameByHashAmbiguousAndDuplicate: hash equality must only re-key when
+// the match is unambiguous — two vanished same-hash files, or a live file at
+// the old path, mean the new path is a separate document.
+func TestRenameByHashAmbiguousAndDuplicate(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	seed := func(path string) {
+		t.Helper()
+		if _, err := db.UpsertScanned(ctx, Document{Path: path, SHA256: "dup", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}, "scan-1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("a1.md")
+	seed("a2.md")
+
+	// Both vanish; a new same-hash path is ambiguous — plain new document.
+	if err := db.MarkMissing(ctx, "scan-2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.UpsertScanned(ctx, Document{Path: "c.md", SHA256: "dup", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}, "scan-3"); err != nil {
+		t.Fatal(err)
+	}
+	docs, _ := db.Documents(ctx)
+	var cDoc Document
+	count := 0
+	for _, d := range docs {
+		if d.Path == "c.md" {
+			cDoc, count = d, count+1
+		}
+	}
+	if count != 1 || cDoc.Status == "missing" {
+		t.Fatalf("ambiguous same-hash insert=%+v", docs)
+	}
+	for _, d := range docs {
+		if (d.Path == "a1.md" || d.Path == "a2.md") && d.Status != "missing" {
+			t.Fatalf("vanished originals should stay missing: %+v", d)
+		}
+	}
+
+	// A live same-hash sibling means the new path is a duplicate, not a move.
+	if _, err := db.UpsertScanned(ctx, Document{Path: "d.md", SHA256: "dup", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}, "scan-3"); err != nil {
+		t.Fatal(err)
+	}
+	docs, _ = db.Documents(ctx)
+	count = 0
+	for _, d := range docs {
+		if d.SHA256 == "dup" {
+			count++
+		}
+	}
+	if count != 4 {
+		t.Fatalf("live duplicate must not steal the row: %v", docs)
+	}
+}
+
+// TestRetargetPath follows rename chains to the live endpoint and refuses
+// dead ends — a link is only retargeted to a document that actually exists.
+func TestRetargetPath(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	seed := func(path, sha, seen string) {
+		t.Helper()
+		if _, err := db.UpsertScanned(ctx, Document{Path: path, SHA256: sha, Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}, seen); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// a.md → b.md → c.md across three scans (the file keeps moving).
+	seed("a.md", "one", "s1")
+	seed("b.md", "one", "s2")
+	seed("c.md", "one", "s3")
+	if got, ok := db.RetargetPath(ctx, "a.md"); !ok || got != "c.md" {
+		t.Fatalf("a.md retarget=%q,%v want c.md,true", got, ok)
+	}
+	if got, ok := db.RetargetPath(ctx, "b.md"); !ok || got != "c.md" {
+		t.Fatalf("b.md retarget=%q,%v want c.md,true", got, ok)
+	}
+
+	// A renamed-then-deleted file offers no retarget.
+	seed("gone.md", "two", "s1")
+	seed("gone-new.md", "two", "s4")
+	if err := db.MarkMissing(ctx, "s5"); err != nil { // nothing seen at s5
+		t.Fatal(err)
+	}
+	if got, ok := db.RetargetPath(ctx, "gone.md"); ok || got != "" {
+		t.Fatalf("deleted endpoint must not retarget: %q,%v", got, ok)
+	}
+
+	// No rename recorded → no retarget.
+	if got, ok := db.RetargetPath(ctx, "never.md"); ok || got != "" {
+		t.Fatalf("unknown path retarget=%q,%v", got, ok)
 	}
 }

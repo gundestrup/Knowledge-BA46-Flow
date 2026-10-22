@@ -621,3 +621,75 @@ func TestRejectionFeedbackLoop(t *testing.T) {
 		t.Fatalf("freshness prompt lost reviewer feedback:\n%s", freshA)
 	}
 }
+
+// TestRelinkAfterRename exercises the whole deterministic chain: a file move
+// is recorded at scan, and the next pipeline run — with no pending analysis
+// and no model call — proposes retargeting references to the new path instead
+// of dropping them.
+func TestRelinkAfterRename(t *testing.T) {
+	ctx := context.Background()
+	c, db := taskSetup(t)
+	writeDoc(t, c.RepositoryPath, "note.md", "# Note\n\nbody content here.")
+	writeDoc(t, c.RepositoryPath, "linker.md",
+		"---\nrelated: [note.md]\n---\n# Linker\n\nSee [the note](note.md) for details and more words.")
+	if _, err := scanner.Scan(ctx, c, db); err != nil {
+		t.Fatal(err)
+	}
+	for _, doc := range []database.Document{docByPath(t, db, "note.md"), docByPath(t, db, "linker.md")} {
+		if err := db.SaveAnalysis(ctx, doc, "test-model", "T", "S", nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The user moves the file; the rescan must record the rename.
+	if err := os.MkdirAll(filepath.Join(c.RepositoryPath, "archive"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(c.RepositoryPath, "note.md"), filepath.Join(c.RepositoryPath, "archive", "note.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(ctx, c, db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing is pending — the moved file kept its stamps — but the linker
+	// still gets its repair through the deterministic relink pass.
+	llm := &fakeLLM{reply: `{"title":"T","summary":"S","tags":[],"obsolete":false,"suggestions":[]}`}
+	result, err := RunProgress(ctx, c, db, Generators{Analysis: llm}, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, prompt := range llm.prompts {
+		if strings.Contains(prompt, "Current path: linker.md") || strings.Contains(prompt, "Current path: archive/note.md") {
+			t.Fatalf("relink should not spend model calls on moved docs/linkers: %s", prompt[:200])
+		}
+	}
+	if result.Relinked != 1 {
+		t.Fatalf("Relinked=%d, want 1", result.Relinked)
+	}
+	rows, err := db.PendingSuggestions(ctx)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("pending=%v err=%v", rows, err)
+	}
+	sug := rows[0]
+	if sug.DocumentPath != "linker.md" || sug.Origin != "deterministic" {
+		t.Fatalf("suggestion=%+v", sug)
+	}
+	if !strings.Contains(sug.Reason, "Retargeted") || strings.Contains(sug.Reason, "Removed unresolved") {
+		t.Fatalf("fix should retarget, not remove: %q", sug.Reason)
+	}
+	if !strings.Contains(sug.ProposedContent, "archive/note.md") {
+		t.Fatalf("proposed content does not point at the new path:\n%s", sug.ProposedContent)
+	}
+	// Frontmatter entry rewritten, not dropped.
+	fm, body, err := frontmatter.Parse(sug.ProposedContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel := frontmatter.StringList(fm, "related"); len(rel) != 1 || rel[0] != "archive/note.md" {
+		t.Fatalf("related=%v body=%s", rel, body)
+	}
+	if !strings.Contains(body, "](archive/note.md)") {
+		t.Fatalf("body link not retargeted:\n%s", body)
+	}
+}

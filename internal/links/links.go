@@ -121,3 +121,77 @@ func IsDocumentTarget(target string) bool {
 	ext := strings.ToLower(path.Ext(strings.SplitN(target, "#", 2)[0]))
 	return ext == ".md" || ext == ".markdown"
 }
+
+// Retarget rewrites markdown link destinations whose target resolves to a
+// path that no longer exists but whose document moved — retarget maps a
+// resolved old path to its new live path. The replacement destination is the
+// new repository-relative path (every candidate resolver accepts root-
+// relative targets), with the original #fragment or ?query preserved.
+// Fenced code blocks and inline code spans are left untouched, matching the
+// extractors. Returns the (possibly unchanged) body.
+func Retarget(docPath, body string, retarget func(oldPath string) (string, bool)) string {
+	var b strings.Builder
+	fenced := false
+	var fence string
+	for _, line := range strings.SplitAfter(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			mark := trimmed[:3]
+			if !fenced {
+				fenced, fence = true, mark
+			} else if mark == fence {
+				fenced = false
+			}
+			b.WriteString(line)
+			continue
+		}
+		if fenced {
+			b.WriteString(line)
+			continue
+		}
+		b.WriteString(retargetLine(docPath, line, retarget))
+	}
+	return b.String()
+}
+
+// retargetLine rewrites link destinations on a single non-fenced line. Inline
+// code spans are blanked with length-preserving spaces so match offsets stay
+// valid for splicing into the original line (replacements applied
+// right-to-left).
+func retargetLine(docPath, line string, retarget func(string) (string, bool)) string {
+	if !strings.Contains(line, "](") {
+		return line
+	}
+	blanked := inlineRaw.ReplaceAllStringFunc(line, func(m string) string {
+		return strings.Repeat(" ", len(m))
+	})
+	type splice struct {
+		start, end int
+		repl       string
+	}
+	var splices []splice
+	for _, m := range mdLink.FindAllStringSubmatchIndex(blanked, -1) {
+		target := strings.TrimSpace(blanked[m[2]:m[3]])
+		if target == "" || strings.HasPrefix(target, "#") ||
+			strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:") ||
+			strings.HasPrefix(target, "/") {
+			continue
+		}
+		// Fragments and queries ride along to the new location.
+		stem := strings.SplitN(strings.SplitN(target, "#", 2)[0], "?", 2)[0]
+		suffix := target[len(stem):]
+		for _, candidate := range InternalCandidates(docPath, target) {
+			next, ok := retarget(candidate)
+			if !ok {
+				continue
+			}
+			splices = append(splices, splice{m[2], m[3], next + suffix})
+			break
+		}
+	}
+	for i := len(splices) - 1; i >= 0; i-- {
+		s := splices[i]
+		line = line[:s.start] + s.repl + line[s.end:]
+	}
+	return line
+}

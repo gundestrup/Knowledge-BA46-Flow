@@ -37,6 +37,27 @@ repository filesystem for assets. Unresolved targets land in the document's
 `related`/`contradicted_by` targets were always checked by the deterministic
 repair; this extends the same guarantee to body links.
 
+Files the scanner no longer sees are marked `missing` rather than deleted —
+the row (and its history and suggestions) survives a temporary move or a
+git branch switch. Pending and accepted suggestions for missing documents
+stay out of the review and apply queues while the file is gone; if the file
+reappears unchanged its status — and those suggestions — resurface.
+
+A moved or renamed file is recognized by its canonical hash: when content
+seen at a new path matches exactly one document that vanished in the same
+scan, the database row is re-keyed — analysis stamps, embeddings, and
+suggestions follow the move (an unchanged file is never re-analyzed for a
+rename alone). A move combined with an edit, an ambiguous match (several
+vanished files with identical content), or a live duplicate at the old path
+is treated as a separate document instead.
+
+Each detected rename is also recorded in a `renames` table. The next
+pipeline run — no model needed — finds documents whose `related`/
+`contradicted_by` entries or body links still point at the old path and
+proposes a deterministic `expand` that retargets them to the new location
+(following move chains to the live endpoint) instead of dropping the links
+as unresolved. Like every suggestion it waits for a human accept.
+
 ## `check-links`
 
 The optional **external** link check — an explicit opt-in (`KBM-flow
@@ -366,7 +387,8 @@ Executes only suggestions with status `accepted`.
 - `delete`: moves the source document to `.kbm-trash`.
 
 Before each action, `apply` re-hashes the source file. If it changed after LLM
-analysis, the suggestion is marked `superseded` and not applied.
+analysis — or no longer exists — the suggestion is marked `superseded` and
+not applied.
 
 `apply` also revalidates old accepted suggestions: protected metadata must be
 unchanged, frontmatter values must be valid, graph links must resolve to regular

@@ -97,3 +97,39 @@ func FuzzInternalTargets(f *testing.F) {
 		}
 	})
 }
+
+// TestRetarget rewrites destinations to a moved document's new path while
+// leaving live links, code, external URLs and anchors untouched.
+func TestRetarget(t *testing.T) {
+	renames := map[string]string{"sub/old.md": "archive/old.md", "a.md": "b.md"}
+	retarget := func(old string) (string, bool) {
+		n, ok := renames[old]
+		return n, ok
+	}
+	body := `# Doc
+
+See [old note](old.md) and [root link](a.md#section) and [live](keep.md).
+Link in inline code stays: ` + "`[x](old.md)`" + `.
+
+` + "```" + `
+[code link](old.md)
+` + "```" + `
+
+[external](https://example.com/old.md) [anchor](#here) [dup](old.md)
+`
+	got := Retarget("sub/doc.md", body, retarget)
+	want := `# Doc
+
+See [old note](archive/old.md) and [root link](b.md#section) and [live](keep.md).
+Link in inline code stays: ` + "`[x](old.md)`" + `.
+
+` + "```" + `
+[code link](old.md)
+` + "```" + `
+
+[external](https://example.com/old.md) [anchor](#here) [dup](archive/old.md)
+`
+	if got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}

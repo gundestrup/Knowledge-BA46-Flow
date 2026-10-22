@@ -596,3 +596,58 @@ func BenchmarkScanRescan(b *testing.B) {
 		}
 	}
 }
+
+// TestScanRecognizesMovedFile: a rename is the same entity at a new path.
+// The scan must re-key the row — keeping the analyzed stamp and letting the
+// suggestions FK cascade re-path pending suggestions — not report a delete
+// plus a brand-new document.
+func TestScanRecognizesMovedFile(t *testing.T) {
+	ctx := context.Background()
+	repo := t.TempDir()
+	src := filepath.Join(repo, "note.md")
+	if err := os.WriteFile(src, []byte("# Note\n\nbody"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := database.Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	c := config.Config{RepositoryPath: repo, Extensions: []string{".md"}, TrashDirectory: ".kbm-trash"}
+
+	if _, err := Scan(ctx, c, db); err != nil {
+		t.Fatal(err)
+	}
+	docs, err := db.Documents(ctx)
+	if err != nil || len(docs) != 1 {
+		t.Fatalf("docs=%v err=%v", docs, err)
+	}
+	if err := db.SaveAnalysis(ctx, docs[0], "model-x", "T", "S", nil, []database.Suggestion{
+		{Action: "expand", Reason: "polish", Confidence: .8},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Move the file into a subdirectory and rescan.
+	if err := os.MkdirAll(filepath.Join(repo, "archive"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(src, filepath.Join(repo, "archive", "note.md")); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Scan(ctx, c, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Seen != 1 || second.Changed != 0 {
+		t.Fatalf("moved-file scan=%+v, want seen=1 changed=0", second)
+	}
+	docs, _ = db.Documents(ctx)
+	if len(docs) != 1 || docs[0].Path != "archive/note.md" || docs[0].Status != "analyzed" {
+		t.Fatalf("docs=%+v", docs)
+	}
+	rows, err := db.PendingSuggestions(ctx)
+	if err != nil || len(rows) != 1 || rows[0].DocumentPath != "archive/note.md" {
+		t.Fatalf("suggestion did not follow the move: %v err=%v", rows, err)
+	}
+}

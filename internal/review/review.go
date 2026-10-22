@@ -164,6 +164,17 @@ func applySuggestion(ctx context.Context, c config.Config, db *database.DB, s da
 	r := ApplyResult{ID: s.ID, Action: s.Action, Status: "failed"}
 	sourceHash, err := hashSource(c.RepositoryPath, s.DocumentPath)
 	if err != nil {
+		// A vanished source is stale context, not a broken suggestion —
+		// supersede it like a changed-hash row rather than recording 'failed'.
+		// A vanished repository root is an environment error instead.
+		if _, statErr := os.Stat(c.RepositoryPath); os.IsNotExist(err) && statErr == nil {
+			r.Status = "superseded"
+			r.Error = "source document no longer exists; suggestion marked superseded"
+			if merr := db.MarkSuperseded(ctx, s.ID); merr != nil {
+				r.Error += "; also failed to mark superseded: " + merr.Error()
+			}
+			return r
+		}
 		r.Error = markApplyFailed(ctx, db, s.ID, err)
 		return r
 	}

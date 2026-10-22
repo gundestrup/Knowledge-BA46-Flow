@@ -618,7 +618,10 @@ func TestDecideAcceptsNumericID(t *testing.T) {
 	}
 }
 
-func TestApplyFailsWhenSourceFileDisappeared(t *testing.T) {
+// A vanished source is stale context: the suggestion is superseded, not
+// failed — the same treatment as a changed hash, and consistent with a scan
+// having marked the document missing.
+func TestApplySupersedesWhenSourceFileDisappeared(t *testing.T) {
 	ctx := context.Background()
 	repo := t.TempDir()
 	path := filepath.Join(repo, "gone.md")
@@ -656,14 +659,14 @@ func TestApplyFailsWhenSourceFileDisappeared(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].Applied || results[0].Status != "failed" || results[0].Error == "" {
+	if len(results) != 1 || results[0].Applied || results[0].Status != "superseded" || results[0].Error == "" {
 		t.Fatalf("results=%+v", results)
 	}
 	got, err := db.Suggestion(ctx, pending[0].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != "failed" {
+	if got.Status != "superseded" {
 		t.Fatalf("status=%q", got.Status)
 	}
 }

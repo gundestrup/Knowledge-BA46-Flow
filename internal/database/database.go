@@ -148,7 +148,7 @@ func Open(ctx context.Context, path string) (*DB, error) {
 // schemaVersion stamps the shape migrate() produces — bump it on every schema
 // change. A database stamped newer than this build is refused at Open so an
 // old binary cannot silently half-migrate a future layout.
-const schemaVersion = 9
+const schemaVersion = 10
 
 func (d *DB) migrate(ctx context.Context) error {
 	var stamped int
@@ -214,6 +214,11 @@ CREATE TABLE IF NOT EXISTS suggestions (
 );
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_suggestions_status ON suggestions(status);
+CREATE TABLE IF NOT EXISTS renames (
+ old_path TEXT PRIMARY KEY,
+ new_path TEXT NOT NULL,
+ moved_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS jobs (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  op TEXT NOT NULL CHECK(op IN ('scan','analyze','run','report','link-check','enrich','embed','expand','freshness','all')),
@@ -524,6 +529,8 @@ func (d *DB) rebuildTable(ctx context.Context, table, marker, create, cols, post
 // When the sha256 changed (or the row is new): tags are replaced, status resets
 // to 'pending', last_error clears, and pending or accepted suggestions for that
 // document are marked 'superseded' — they were generated from stale content.
+// A new path whose hash matches exactly one not-seen-this-scan row is a
+// rename: that row is re-keyed instead (renameByHash) and reports unchanged.
 // Returns whether the file was new or changed (i.e. needs re-analysis).
 func (d *DB) UpsertScanned(ctx context.Context, doc Document, seen string) (bool, error) {
 	tx, err := d.BeginTx(ctx, nil)
@@ -534,9 +541,22 @@ func (d *DB) UpsertScanned(ctx context.Context, doc Document, seen string) (bool
 
 	var old string
 	err = tx.QueryRowContext(ctx, `SELECT sha256 FROM documents WHERE path=?`, doc.Path).Scan(&old)
-	changed := err == sql.ErrNoRows || old != doc.SHA256
-	if err != nil && err != sql.ErrNoRows {
+	newPath := err == sql.ErrNoRows
+	changed := newPath || old != doc.SHA256
+	if err != nil && !newPath {
 		return false, err
+	}
+	if newPath {
+		// No row at this path — identical content elsewhere may be a rename:
+		// re-key that row so its analysis lineage, embedding and suggestions
+		// (document_path FK cascades) follow instead of re-analyzing.
+		renamed, rerr := renameByHash(ctx, tx, doc, seen)
+		if rerr != nil {
+			return false, rerr
+		}
+		if renamed {
+			changed = false // the entity moved; its content did not change
+		}
 	}
 	// The CASE expressions preserve tags/status/last_error/frontmatter when the
 	// hash is unchanged — only the timestamps refresh on an unmodified file.
@@ -549,7 +569,7 @@ frontmatter_issues=CASE WHEN documents.sha256<>excluded.sha256 THEN excluded.fro
 sig=CASE WHEN documents.sha256<>excluded.sha256 THEN excluded.sig ELSE documents.sig END,
 embedding=CASE WHEN documents.sha256<>excluded.sha256 THEN NULL ELSE documents.embedding END,
 last_seen_at=excluded.last_seen_at,
-status=CASE WHEN documents.sha256<>excluded.sha256 THEN 'pending' ELSE documents.status END,
+status=CASE WHEN documents.sha256<>excluded.sha256 THEN 'pending' WHEN documents.status='missing' THEN CASE WHEN documents.sha256=documents.analyzed_sha256 THEN 'analyzed' ELSE 'pending' END ELSE documents.status END,
 last_error=CASE WHEN documents.sha256<>excluded.sha256 THEN '' ELSE documents.last_error END`,
 		doc.Path, doc.SHA256, doc.Size, doc.ModifiedUnix, doc.TagsJSON, doc.FrontmatterJSON, doc.FrontmatterIssues, doc.Signature, seen, seen, doc.FmSHA256, doc.BodySHA256)
 	if err != nil {
@@ -564,6 +584,105 @@ last_error=CASE WHEN documents.sha256<>excluded.sha256 THEN '' ELSE documents.la
 		return false, err
 	}
 	return changed, nil
+}
+
+// renameByHash detects a moved file inside upsertScanned's transaction: the
+// same canonical hash shows up at a new path while exactly one row carrying
+// that hash was not visited this scan. That row is re-keyed — the FK cascade
+// re-paths its suggestions — so stamps, embeddings and review decisions
+// survive the move. Ambiguous matches (several vanished files with identical
+// content) and live duplicates (the old path still exists) return false and
+// the caller inserts a fresh row instead.
+func renameByHash(ctx context.Context, tx *sql.Tx, doc Document, seen string) (bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT path FROM documents WHERE sha256=? AND path<>? AND last_seen_at<>?`, doc.SHA256, doc.Path, seen)
+	if err != nil {
+		return false, err
+	}
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return false, err
+		}
+		paths = append(paths, p)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil || len(paths) != 1 {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE documents SET path=? WHERE path=?`, doc.Path, paths[0]); err != nil {
+		return false, err
+	}
+	// Remember the move so links elsewhere pointing at the old path can be
+	// retargeted deterministically — no model needed. Latest move wins.
+	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO renames(old_path,new_path,moved_at) VALUES(?,?,?)`, paths[0], doc.Path, seen); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Renames returns every recorded move as old_path → new_path — the prefilter
+// map for finding documents whose references need retargeting.
+func (d *DB) Renames(ctx context.Context) (map[string]string, error) {
+	rows, err := d.QueryContext(ctx, `SELECT old_path,new_path FROM renames`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var o, n string
+		if err := rows.Scan(&o, &n); err != nil {
+			return nil, err
+		}
+		out[o] = n
+	}
+	return out, rows.Err()
+}
+
+// RetargetPath resolves where a path went after renames: it follows the
+// renames map (a→b→c collapses to the live endpoint) and returns false when
+// the trail ends at a missing or unknown document — a deleted file offers no
+// retarget. Bounded hops keep a corrupted map from looping forever.
+func (d *DB) RetargetPath(ctx context.Context, path string) (string, bool) {
+	cur := path
+	// Follow the renames map to the end of the chain — intermediate hops no
+	// longer exist as document rows (the row was re-keyed onward), so only
+	// the final endpoint is checked for liveness. The hop bound protects
+	// against a corrupted cyclic map.
+	for i := 0; i < 8; i++ {
+		var next string
+		if err := d.QueryRowContext(ctx, `SELECT new_path FROM renames WHERE old_path=?`, cur).Scan(&next); err != nil {
+			break
+		}
+		cur = next
+	}
+	var status string
+	if err := d.QueryRowContext(ctx, `SELECT status FROM documents WHERE path=?`, cur).Scan(&status); err != nil || status == "missing" {
+		return "", false
+	}
+	return cur, true
+}
+
+// SaveLinkFix records deterministic rename-retarget repairs without stamping
+// any lineage — a link fix-up is maintenance, not an analysis or enrichment
+// pass, so no *_sha256/*_model column moves. Pending deterministic suggestions
+// for the document are superseded first: the freshly computed repair replaces
+// them (e.g. a retarget replacing a dead-link removal).
+func (d *DB) SaveLinkFix(ctx context.Context, doc Document, suggestions []Suggestion) error {
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded' WHERE document_path=? AND status='pending' AND origin='deterministic'`, doc.Path); err != nil {
+		return err
+	}
+	if err := insertSuggestions(ctx, tx, doc, suggestions); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // SetLinkIssues stores the scan-time internal-link findings for a document —
@@ -584,7 +703,8 @@ func (d *DB) RefreshFrontmatter(ctx context.Context, path, fmJSON, fmIssues stri
 
 // MarkMissing flags every document not touched by the current scan timestamp as
 // 'missing' instead of deleting it — a missing file may reappear, and this keeps
-// its analysis history.
+// its analysis history. Queue-facing queries filter missing documents out (see
+// suggestions()), and UpsertScanned restores the status on resurrection.
 func (d *DB) MarkMissing(ctx context.Context, seen string) error {
 	_, err := d.ExecContext(ctx, `UPDATE documents SET status='missing' WHERE last_seen_at<>?`, seen)
 	return err
@@ -731,7 +851,7 @@ func (d *DB) ModelStamps(ctx context.Context) (map[string]ModelStamp, error) {
 	out := map[string]ModelStamp{}
 	for _, col := range []string{"analyzed_model", "external_model", "enriched_model", "embedded_model", "expand_model", "freshness_model"} {
 		var stamp ModelStamp
-		err := d.QueryRowContext(ctx, `SELECT `+col+`,count(*) FROM documents WHERE `+col+`<>'' GROUP BY `+col+` ORDER BY 2 DESC LIMIT 1`).Scan(&stamp.Model, &stamp.Docs) // #nosec G202 -- columns are compile-time constants
+		err := d.QueryRowContext(ctx, `SELECT `+col+`,count(*) FROM documents WHERE `+col+`<>'' AND status<>'missing' GROUP BY `+col+` ORDER BY 2 DESC LIMIT 1`).Scan(&stamp.Model, &stamp.Docs) // #nosec G202 -- columns are compile-time constants
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
@@ -1159,9 +1279,13 @@ ORDER BY id DESC LIMIT 1
 	return overview, err
 }
 
-// suggestions is the shared query helper behind PendingSuggestions and Accepted.
+// suggestions is the shared query helper behind PendingSuggestions and
+// Accepted. Suggestions whose source document is missing are excluded —
+// MarkMissing retires the document row but keeps it (and its suggestions)
+// for resurrection, so a vanished file must not keep feeding the review and
+// apply queues. If the file reappears its suggestions resurface still valid.
 func (d *DB) suggestions(ctx context.Context, status string) ([]Suggestion, error) {
-	rows, err := d.QueryContext(ctx, `SELECT id,document_path,source_sha256,action,target_path,reason,confidence,proposed_content,status,origin,created_at,decision_note FROM suggestions WHERE status=? ORDER BY id`, status)
+	rows, err := d.QueryContext(ctx, `SELECT id,document_path,source_sha256,action,target_path,reason,confidence,proposed_content,status,origin,created_at,decision_note FROM suggestions WHERE status=? AND EXISTS(SELECT 1 FROM documents d WHERE d.path=suggestions.document_path AND d.status<>'missing') ORDER BY id`, status)
 	if err != nil {
 		return nil, err
 	}

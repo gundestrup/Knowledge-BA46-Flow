@@ -21,6 +21,7 @@ import (
 	"knowledge-ba46-flow/internal/config"
 	"knowledge-ba46-flow/internal/database"
 	"knowledge-ba46-flow/internal/frontmatter"
+	"knowledge-ba46-flow/internal/links"
 	"knowledge-ba46-flow/internal/prompts"
 	"knowledge-ba46-flow/internal/scanner"
 	"knowledge-ba46-flow/internal/similarity"
@@ -91,6 +92,7 @@ type Result struct {
 	LocalEnriched    int // documents handled by the deterministic metadata stage
 	Skipped          int
 	Stubs            int // stub-tagged placeholders; skipped, still valid link targets
+	Relinked         int // deterministic retarget fixes queued after renames
 	Failed           int
 	Rejected         int // unsafe model proposals omitted from review
 	EnrichmentFailed int // optional generation failures; full analysis can still succeed
@@ -302,10 +304,19 @@ func RunProgress(ctx context.Context, c config.Config, db *database.DB, gens Gen
 		return Result{}, err
 	}
 	out := Result{}
-	if len(docs) == 0 && (gens.Embed == nil || models.embed == "" || opts.EnrichOnly) {
+	// Recorded renames mean link maintenance may be due even when nothing is
+	// pending — a moved file does not mark its referrers changed.
+	p.renames, err = db.Renames(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(docs) == 0 && len(p.renames) == 0 && (gens.Embed == nil || models.embed == "" || opts.EnrichOnly) {
 		return out, nil
 	}
 	if err := p.loadCorpus(); err != nil {
+		return out, err
+	}
+	if err := p.relinkMoved(&out); err != nil {
 		return out, err
 	}
 	if len(docs) == 0 {
@@ -518,6 +529,7 @@ type pipeline struct {
 	embeds            map[string][]float32
 	entities          *entityIndex
 	taxonomy          *taxonomy.Vocabulary
+	renames           map[string]string
 	forceAnalysis     map[string]bool
 	embeddingUsed     bool
 	embeddingDisabled bool
@@ -851,7 +863,7 @@ func (p *pipeline) process(doc database.Document, base *Progress, out *Result, e
 	if frontmatter.IsStub(fm, body, p.c.StubLineLimit()) {
 		return p.skipStub(doc, fm, content, base, out)
 	}
-	detSug, hasDet := deterministicFix(doc.Path, content, fm, p.knownDocs)
+	detSug, hasDet := deterministicFix(doc.Path, content, fm, p.knownDocs, p.retarget)
 	needEnrich := p.enrichOn && (p.opts.ReanalyzeAll || doc.SHA256 != doc.EnrichedSHA256 ||
 		(p.opts.Reanalyze && doc.EnrichedModel != p.fastModel))
 	needAnalyze := p.opts.ReanalyzeAll || p.forceAnalysis[doc.Path] || doc.SHA256 != p.laneSHA(doc) ||
@@ -901,7 +913,7 @@ func (p *pipeline) skipStub(doc database.Document, fm map[string]any, content st
 func (p *pipeline) skipLLM(doc database.Document, fm map[string]any, content string, readErr error, summary, detail string, base *Progress) error {
 	var sugs []database.Suggestion
 	if readErr == nil {
-		if s, ok := deterministicFix(doc.Path, content, fm, p.knownDocs); ok {
+		if s, ok := deterministicFix(doc.Path, content, fm, p.knownDocs, p.retarget); ok {
 			sugs = []database.Suggestion{s}
 		}
 	}
@@ -1026,13 +1038,90 @@ func (p *pipeline) analyzeDoc(doc database.Document, fm map[string]any, candidat
 	return nil
 }
 
-// deterministicFix produces a frontmatter-repair suggestion without any LLM:
-// `related`/`contradicted_by` entries that are not valid repository-relative
-// paths or that resolve to no known document are dropped. The fix is an
-// ordinary pending suggestion — only a human accept turns it into a write.
-// knownDocs lists every non-missing document (including policy-excluded ones —
-// linking to a private document is legitimate).
-func deterministicFix(docPath, content string, fm map[string]any, knownDocs []database.Document) (database.Suggestion, bool) {
+// retarget resolves a moved document path through the renames map — the
+// deterministic link repair's lookup into RetargetPath.
+func (p *pipeline) retarget(path string) (string, bool) {
+	return p.db.RetargetPath(p.ctx, path)
+}
+
+// relinkMoved is deterministic maintenance that runs before the generation
+// passes: documents whose frontmatter or body links resolve to a path the
+// scanner saw renamed away get the retarget repair suggestion — no model, no
+// lineage stamps (SaveLinkFix leaves *_sha256 untouched), just the fix. A
+// renamed file does not mark its referrers changed, so this pass finds them
+// itself; nothing here runs without recorded renames.
+func (p *pipeline) relinkMoved(out *Result) error {
+	if len(p.renames) == 0 {
+		return nil
+	}
+	for _, doc := range p.knownDocs {
+		if err := p.ctx.Err(); err != nil {
+			return err
+		}
+		if !referencesMoved(doc, p.renames) {
+			continue
+		}
+		content, err := scanner.ReadDocument(p.c, doc.Path)
+		if err != nil {
+			continue
+		}
+		fm, _, err := frontmatter.Parse(content)
+		if err != nil {
+			continue
+		}
+		sug, ok := deterministicFix(doc.Path, content, fm, p.knownDocs, p.retarget)
+		if !ok {
+			continue
+		}
+		if err := p.db.SaveLinkFix(p.ctx, doc, []database.Suggestion{sug}); err != nil {
+			return err
+		}
+		p.emit(Progress{Path: doc.Path, Outcome: "link fix", Detail: sug.Reason})
+		out.Relinked++
+	}
+	return nil
+}
+
+// referencesMoved is the cheap prefilter for relinkMoved: does this document
+// mention any recorded old path — in frontmatter related/contradicted_by or
+// in a stored link_issues entry? Resolution itself goes through RetargetPath
+// (chain-following, live-endpoint check) inside deterministicFix.
+func referencesMoved(doc database.Document, renames map[string]string) bool {
+	var fm map[string]any
+	if doc.FrontmatterJSON != "" {
+		_ = json.Unmarshal([]byte(doc.FrontmatterJSON), &fm)
+	}
+	for _, key := range []string{"related", "contradicted_by"} {
+		for _, item := range frontmatter.StringList(fm, key) {
+			if _, ok := renames[filepath.ToSlash(strings.TrimSpace(item))]; ok {
+				return true
+			}
+		}
+	}
+	var issues []string
+	if doc.LinkIssues != "" {
+		_ = json.Unmarshal([]byte(doc.LinkIssues), &issues)
+	}
+	for _, i := range issues {
+		target := strings.TrimPrefix(i, "unresolved link target: ")
+		for _, candidate := range links.InternalCandidates(doc.Path, target) {
+			if _, ok := renames[candidate]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// deterministicFix produces a frontmatter/body-repair suggestion without any
+// LLM: `related`/`contradicted_by` entries and markdown body links that point
+// at a document the scanner saw move are retargeted to its new path; entries
+// that are not valid repository-relative paths or resolve to nothing are
+// dropped. The fix is an ordinary pending suggestion — only a human accept
+// turns it into a write. knownDocs lists every non-missing document
+// (including policy-excluded ones — linking to a private document is
+// legitimate). retarget resolves a moved path to its new live location.
+func deterministicFix(docPath, content string, fm map[string]any, knownDocs []database.Document, retarget func(string) (string, bool)) (database.Suggestion, bool) {
 	if len(fm) == 0 {
 		return database.Suggestion{}, false
 	}
@@ -1041,7 +1130,7 @@ func deterministicFix(docPath, content string, fm map[string]any, knownDocs []da
 		known[c.Path] = true
 	}
 	fixed := maps.Clone(fm)
-	var removed []string
+	var removed, retargeted []string
 	for _, key := range []string{"related", "contradicted_by"} {
 		items := frontmatter.StringList(fm, key)
 		if len(items) == 0 {
@@ -1050,6 +1139,13 @@ func deterministicFix(docPath, content string, fm map[string]any, knownDocs []da
 		var keep []string
 		for _, item := range items {
 			p := filepath.ToSlash(strings.TrimSpace(item))
+			if p != "" && !filepath.IsAbs(p) && !strings.HasPrefix(p, "..") && !known[p] {
+				if next, ok := retarget(p); ok {
+					retargeted = append(retargeted, key+" -> "+item+" → "+next)
+					keep = append(keep, next)
+					continue
+				}
+			}
 			if p == "" || filepath.IsAbs(p) || strings.HasPrefix(p, "..") || !known[p] {
 				removed = append(removed, key+" -> "+item)
 				continue
@@ -1062,17 +1158,30 @@ func deterministicFix(docPath, content string, fm map[string]any, knownDocs []da
 			fixed[key] = keep
 		}
 	}
-	if len(removed) == 0 {
+	// Body links to a moved file are retargeted the same way — before the
+	// frontmatter rewrite, so one suggestion carries both repairs.
+	relinked := links.Retarget(docPath, content, retarget)
+	if relinked != content {
+		retargeted = append(retargeted, "body link(s)")
+	}
+	if len(removed) == 0 && len(retargeted) == 0 {
 		return database.Suggestion{}, false
 	}
-	proposed, err := frontmatter.Rewrite(content, fixed)
+	proposed, err := frontmatter.Rewrite(relinked, fixed)
 	if err != nil {
 		return database.Suggestion{}, false
+	}
+	var parts []string
+	if len(retargeted) > 0 {
+		parts = append(parts, "Retargeted moved link target(s): "+strings.Join(retargeted, ", "))
+	}
+	if len(removed) > 0 {
+		parts = append(parts, "Removed unresolved link target(s): "+strings.Join(removed, ", "))
 	}
 	return database.Suggestion{
 		DocumentPath:    docPath,
 		Action:          "expand",
-		Reason:          "Removed unresolved link target(s): " + strings.Join(removed, ", "),
+		Reason:          strings.Join(parts, "; "),
 		Confidence:      1.0,
 		ProposedContent: proposed,
 		Origin:          "deterministic",

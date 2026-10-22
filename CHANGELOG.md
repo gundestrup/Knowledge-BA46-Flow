@@ -9,6 +9,28 @@ tag is prepared.
 
 ## [Unreleased]
 
+### Changed
+
+- Pending and accepted suggestions for `missing` documents — files the
+  scanner no longer sees, like a deleted or moved-away directory — no longer
+  appear in the review list or the apply queue; they resurface if the file
+  returns. A source file that vanished before apply now ends `superseded`
+  rather than `failed`, and a missing document that reappears unchanged has
+  its `analyzed` status restored instead of staying `missing`.
+- Scan recognizes renames by canonical hash: a moved file keeps its analysis
+  lineage, embeddings and pending suggestions instead of being treated as a
+  deletion plus a brand-new document (only for an unambiguous single match —
+  moved-and-edited files, duplicated content and vanished same-hash pairs
+  stay separate documents).
+- `ModelStamps` (the dashboard's "last used" lineage) ignores missing
+  documents so a deleted directory can no longer dominate the dominant-model
+  answer.
+- Detected renames are recorded (`renames` table, schema v10) and the next
+  pipeline run deterministically proposes retargeting `related`/
+  `contradicted_by` entries and body links that still point at the old path —
+  following move chains to the live file, spending no model calls — rather
+  than dropping the links as unresolved.
+
 ### Added
 
 - Reviewer feedback loop: rejecting a suggestion may carry a short reason —
