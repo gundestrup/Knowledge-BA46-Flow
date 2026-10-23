@@ -173,6 +173,10 @@ Additional conventions:
 
 <https://github.com/gundestrup/engineering-memory>
 
+If the `knowledge-base` MCP server is configured (user scope), query the
+indexed corpus with `retrieve_knowledge`/`ask_knowledge` for
+"what do we know about X" questions before browsing the repo.
+
 Relevant notes:
 
 - `tools/agents-md.md`
