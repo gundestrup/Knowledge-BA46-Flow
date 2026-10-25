@@ -17,9 +17,60 @@ window.repoReportDashboard = () => ({
   sortKey: "name",
   sortDirection: "asc",
   pollTimer: null,
+  messages: {},
+  locale:
+    typeof localStorage !== "undefined"
+      ? localStorage.getItem("kbm.locale") || ""
+      : "",
+  locales: ["en"],
 
   async init() {
-    await this.refresh();
+    await Promise.all([this.loadI18n(), this.refresh()]);
+  },
+
+  async loadI18n() {
+    try {
+      const query = this.locale
+        ? `?lang=${encodeURIComponent(this.locale)}`
+        : "";
+      const data = await this.requestJSON(`/api/i18n${query}`);
+      this.messages = data.messages || {};
+      if (data.locales?.length) this.locales = data.locales;
+    } catch {
+      this.messages = {};
+    }
+  },
+
+  // setLocale persists the UI locale choice across pages; "" negotiates the
+  // browser's Accept-Language again.
+  async setLocale(value) {
+    this.locale = value;
+    try {
+      if (value) localStorage.setItem("kbm.locale", value);
+      else localStorage.removeItem("kbm.locale");
+    } catch {
+      /* storage may be unavailable; choice just won't persist */
+    }
+    await this.loadI18n();
+  },
+
+  localeLabel(tag) {
+    return { en: "English", da: "Dansk" }[tag] || tag;
+  },
+
+  // t resolves a catalog id from /api/i18n — the English fallback keeps the
+  // page readable before the fetch lands and if the endpoint ever fails.
+  t(id, fallback, params) {
+    let msg = this.messages[id];
+    if (msg != null && typeof msg === "object") {
+      msg = msg[params?.Count === 1 ? "one" : "other"] ?? msg.other;
+    }
+    const out = typeof msg === "string" ? msg : fallback;
+    if (out == null) return id;
+    return out.replace(
+      /\{\{\.(\w+)\}\}/g,
+      (_, name) => params?.[name] ?? `{{.${name}}}`,
+    );
   },
 
   async requestJSON(url, options = {}) {
@@ -31,7 +82,14 @@ window.repoReportDashboard = () => ({
       body = {};
     }
     if (!response.ok) {
-      throw new Error(body.error || `Request failed (HTTP ${response.status})`);
+      throw new Error(
+        body.error ||
+          this.t(
+            "ui.common.request_failed",
+            "Request failed (HTTP {{.Status}})",
+            { Status: response.status },
+          ),
+      );
     }
     return body;
   },
@@ -67,9 +125,17 @@ window.repoReportDashboard = () => ({
       const path = `/api/report/run${suffix}`;
       await this.requestJSON(path, { method: "POST" });
       this.busy = true;
-      const scope = options.localOnly ? "Local" : "Full";
-      const target = options.repo ? ` for ${options.repo}` : "";
-      this.notice = `${scope} report started${target}.`;
+      const scope = options.localOnly
+        ? this.t("ui.report.scope_local", "Local")
+        : this.t("ui.report.scope_full", "Full");
+      const target = options.repo
+        ? this.t("ui.report.for_repo", " for {{.Repo}}", { Repo: options.repo })
+        : "";
+      this.notice = this.t(
+        "ui.report.report_started",
+        "{{.Scope}} report started{{.Target}}.",
+        { Scope: scope, Target: target },
+      );
       await this.refresh();
     } catch (error) {
       this.error = error.message;
@@ -82,11 +148,16 @@ window.repoReportDashboard = () => ({
   },
 
   statusText() {
-    if (!this.snapshot.configured) return "Report sources are not configured";
-    if (!this.snapshot.generated_at) return "No report snapshot yet";
+    if (!this.snapshot.configured)
+      return this.t(
+        "ui.report.not_configured",
+        "Report sources are not configured",
+      );
+    if (!this.snapshot.generated_at)
+      return this.t("ui.report.no_snapshot", "No report snapshot yet");
     const kind = this.snapshot.remote_enabled
-      ? "Last full report"
-      : "Last local-only report";
+      ? this.t("ui.report.last_full", "Last full report")
+      : this.t("ui.report.last_local", "Last local-only report");
     return `${kind}: ${this.formatTime(this.snapshot.generated_at)}`;
   },
 
@@ -345,8 +416,11 @@ window.repoReportDashboard = () => ({
   },
 
   codecovLabel(repo) {
-    if (repo.codecov == null) return "not reported";
-    const stale = repo.codecov_stale ? " (stale)" : "";
+    if (repo.codecov == null)
+      return this.t("ui.report.not_reported", "not reported");
+    const stale = repo.codecov_stale
+      ? this.t("ui.report.stale_suffix", " (stale)")
+      : "";
     return `${Number(repo.codecov).toFixed(1)}%${stale}`;
   },
 
@@ -874,17 +948,24 @@ window.repoReportDashboard = () => ({
   },
 
   repoCountText() {
-    return `${this.filteredRepos.length} / ${(this.snapshot.repos || []).length} repos`;
+    return this.t("ui.report.repo_count", "{{.Shown}} / {{.Total}} repos", {
+      Shown: this.filteredRepos.length,
+      Total: (this.snapshot.repos || []).length,
+    });
   },
 
   driftText(repo) {
     return repo.sync.drift === null
-      ? "no baseline"
-      : `+${repo.sync.drift} commits`;
+      ? this.t("ui.report.no_baseline", "no baseline")
+      : this.t("ui.report.drift_commits", "+{{.Count}} commits", {
+          Count: repo.sync.drift,
+        });
   },
 
   npmProjectText(repo) {
-    return `${(repo.npm_projects || []).length} Node/npm project(s)`;
+    return this.t("ui.report.npm_projects", "{{.Count}} Node/npm project(s)", {
+      Count: (repo.npm_projects || []).length,
+    });
   },
 
   jobTagClass(status) {

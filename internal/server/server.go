@@ -22,6 +22,7 @@ import (
 
 	"knowledge-ba46-flow/internal/config"
 	"knowledge-ba46-flow/internal/database"
+	"knowledge-ba46-flow/internal/i18n"
 	"knowledge-ba46-flow/internal/logging"
 	repositoryreport "knowledge-ba46-flow/internal/report"
 )
@@ -94,6 +95,7 @@ func NewMux(c config.Config, db *database.DB, stop chan<- struct{}) http.Handler
 	mux.HandleFunc("GET /api/report", reportData(c, db))
 	mux.HandleFunc("GET /api/report/history", reportHistory(db))
 	mux.HandleFunc("GET /api/progress", knowledgeProgress(db))
+	mux.HandleFunc("GET /api/i18n", i18nData)
 	mux.HandleFunc("GET /api/dashboard", landingData(c, db))
 	mux.HandleFunc("POST /api/report/run", o.createReport)
 	mux.HandleFunc("GET /api/report/jobs", o.listReportJobs)
@@ -348,6 +350,28 @@ func knowledgeProgress(db *database.DB) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"days": days})
 	}
+}
+
+// i18nData serves the UI's message catalog. ?lang=<tag> is the explicit
+// override the dashboard's locale picker sends; otherwise the browser's
+// Accept-Language negotiates. The response is the flattened key → message
+// map Alpine's t() resolves, plus the shipped locale list for the picker.
+func i18nData(w http.ResponseWriter, r *http.Request) {
+	pref := r.URL.Query().Get("lang")
+	if pref == "" {
+		pref = r.Header.Get("Accept-Language")
+	}
+	tag, messages, err := i18n.Messages(pref)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Vary", "Accept-Language")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"locale":   tag,
+		"locales":  i18n.Supported(),
+		"messages": messages,
+	})
 }
 
 // pathID parses the {id} path wildcard; non-numeric values yield -1, which can

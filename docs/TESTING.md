@@ -315,6 +315,10 @@ The tests cover:
   aggregation, `GET /api/report/history` + `GET /api/progress` payloads, and
   chart series shapes via `scripts/test-knowledge-progress.mjs` and the
   report-history block in `scripts/test-report-filters.mjs`
+- i18n catalog drift via `scripts/check-i18n.mjs` (`npm run check:js`): every
+  `t('ui.*')` binding in the embedded pages and every `i18n.T("cli.*")` id in
+  the CLI must resolve in `internal/i18n/locales/active.en.yaml`, and the
+  catalog may not carry dead keys
 - drift tests (`cmd/KBM-flow/drift_test.go`, `internal/server/ops_drift_test.go`)
   keeping the option surfaces honest in both directions: `/api/ops` ops map to
   CLI commands and back, every CLI flag and op request field is documented,

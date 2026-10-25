@@ -16,15 +16,21 @@
     <section class="hero kbm-hero landing-hero">
       <div class="hero-body">
         <div class="container dashboard">
-          <p class="eyebrow mb-3">Knowledge operations · home</p>
+          <p
+            class="eyebrow mb-3"
+            x-text="t('ui.landing.eyebrow', 'Knowledge operations · home')"
+          ></p>
           <div class="level landing-heading">
             <div class="level-left">
               <div>
-                <h1 class="title is-1 mb-3">Your repositories, at a glance.</h1>
-                <p class="subtitle is-5">
-                  Choose a workspace to inspect its current state and continue
-                  where you left off.
-                </p>
+                <h1
+                  class="title is-1 mb-3"
+                  x-text="t('ui.landing.hero_title', 'Your repositories, at a glance.')"
+                ></h1>
+                <p
+                  class="subtitle is-5"
+                  x-text="t('ui.landing.hero_subtitle', 'Choose a workspace to inspect its current state and continue where you left off.')"
+                ></p>
               </div>
             </div>
             <div class="level-right">
@@ -32,9 +38,23 @@
                 class="button is-light"
                 :disabled="loading"
                 @click="refresh()"
-              >
-                Refresh overview
-              </button>
+                x-text="t('ui.landing.refresh_overview', 'Refresh overview')"
+              ></button>
+              <div class="select is-small ml-2">
+                <select
+                  x-model="locale"
+                  @change="setLocale(locale)"
+                  :aria-label="t('ui.common.language', 'Language')"
+                >
+                  <option
+                    value=""
+                    x-text="t('ui.common.locale_auto', 'Automatic (browser)')"
+                  ></option>
+                  <template x-for="l in locales" :key="l">
+                    <option :value="l" x-text="localeLabel(l)"></option>
+                  </template>
+                </select>
+              </div>
             </div>
           </div>
           <p class="is-size-7 has-text-white-ter" role="status">
@@ -43,7 +63,7 @@
               :class="loading ? 'is-warning' : ''"
             ></span>
             <span
-              x-text="loading ? 'Refreshing summaries…' : 'Local overview'"
+              x-text="loading ? t('ui.landing.refreshing', 'Refreshing summaries…') : t('ui.landing.local_overview', 'Local overview')"
             ></span>
           </p>
         </div>
@@ -64,34 +84,46 @@
               <div class="card-content">
                 <div class="portal-card-heading">
                   <div>
-                    <p class="eyebrow">Markdown knowledge base</p>
-                    <h2 class="title is-2 section-heading mt-2 mb-3">
-                      Review and tend.
-                    </h2>
+                    <p
+                      class="eyebrow"
+                      x-text="t('ui.landing.kb_eyebrow', 'Markdown knowledge base')"
+                    ></p>
+                    <h2
+                      class="title is-2 section-heading mt-2 mb-3"
+                      x-text="t('ui.landing.kb_heading', 'Review and tend.')"
+                    ></h2>
                   </div>
                   <span class="portal-arrow" aria-hidden="true">↗</span>
                 </div>
-                <p class="portal-description">
-                  Inspect changed notes, review suggestions, and apply only the
-                  changes you accept.
-                </p>
+                <p
+                  class="portal-description"
+                  x-text="t('ui.landing.kb_description', 'Inspect changed notes, review suggestions, and apply only the changes you accept.')"
+                ></p>
                 <div class="portal-metrics">
                   <div class="portal-metric">
                     <strong x-text="knowledgeValue('changed_files')"></strong>
-                    <span>files changed since analysis</span>
+                    <span
+                      x-text="t('ui.landing.metric_changed', 'files changed since analysis')"
+                    ></span>
                   </div>
                   <div class="portal-metric">
                     <strong x-text="knowledgeValue('model_drift')"></strong>
-                    <span>analyzed with another model</span>
+                    <span
+                      x-text="t('ui.landing.metric_drift', 'analyzed with another model')"
+                    ></span>
                   </div>
                   <div class="portal-metric">
                     <strong x-text="cycleAge()"></strong>
-                    <span>since last full cycle</span>
+                    <span
+                      x-text="t('ui.landing.metric_cycle', 'since last full cycle')"
+                    ></span>
                   </div>
                 </div>
                 <p class="portal-freshness" x-text="lastCycleText()"></p>
                 <div class="portal-card-footer">
-                  <span>Open knowledge dashboard</span>
+                  <span
+                    x-text="t('ui.landing.open_knowledge', 'Open knowledge dashboard')"
+                  ></span>
                   <span aria-hidden="true">→</span>
                 </div>
               </div>
@@ -103,38 +135,50 @@
               <div class="card-content">
                 <div class="portal-card-heading">
                   <div>
-                    <p class="eyebrow">Repository fleet</p>
-                    <h2 class="title is-2 section-heading mt-2 mb-3">
-                      See the wider picture.
-                    </h2>
+                    <p
+                      class="eyebrow"
+                      x-text="t('ui.landing.fleet_eyebrow', 'Repository fleet')"
+                    ></p>
+                    <h2
+                      class="title is-2 section-heading mt-2 mb-3"
+                      x-text="t('ui.landing.fleet_heading', 'See the wider picture.')"
+                    ></h2>
                   </div>
                   <span class="portal-arrow" aria-hidden="true">↗</span>
                 </div>
-                <p class="portal-description">
-                  Check registered repositories, live service results, and Ruby
-                  gem health across the fleet.
-                </p>
+                <p
+                  class="portal-description"
+                  x-text="t('ui.landing.fleet_description', 'Check registered repositories, live service results, and Ruby gem health across the fleet.')"
+                ></p>
                 <div class="portal-metrics portal-metrics-four">
                   <div class="portal-metric">
                     <strong x-text="reportValue('repositories')"></strong>
-                    <span>repositories</span>
+                    <span
+                      x-text="t('ui.common.repositories', 'repositories')"
+                    ></span>
                   </div>
                   <div class="portal-metric">
                     <strong x-text="reportMetric('sonar_blocked')"></strong>
-                    <span>Sonar gates blocked</span>
+                    <span
+                      x-text="t('ui.common.sonar_gates_blocked', 'Sonar gates blocked')"
+                    ></span>
                   </div>
                   <div class="portal-metric">
                     <strong x-text="reportMetric('semgrep_blocked')"></strong>
-                    <span>repositories with Semgrep blocks</span>
+                    <span
+                      x-text="t('ui.common.semgrep_blocked', 'repositories with Semgrep blocks')"
+                    ></span>
                   </div>
                   <div class="portal-metric">
                     <strong x-text="reportMetric('open_prs')"></strong>
-                    <span>open PRs</span>
+                    <span x-text="t('ui.common.open_prs', 'open PRs')"></span>
                   </div>
                 </div>
                 <p class="portal-freshness" x-text="reportFreshness()"></p>
                 <div class="portal-card-footer">
-                  <span>Open full repository report</span>
+                  <span
+                    x-text="t('ui.landing.open_report', 'Open full repository report')"
+                  ></span>
                   <span aria-hidden="true">→</span>
                 </div>
               </div>

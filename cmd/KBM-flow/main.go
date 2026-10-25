@@ -21,6 +21,7 @@ import (
 	"knowledge-ba46-flow/internal/analyzer"
 	"knowledge-ba46-flow/internal/config"
 	"knowledge-ba46-flow/internal/database"
+	"knowledge-ba46-flow/internal/i18n"
 	"knowledge-ba46-flow/internal/linkcheck"
 	"knowledge-ba46-flow/internal/logging"
 	"knowledge-ba46-flow/internal/modelselection"
@@ -49,6 +50,7 @@ func main() {
 }
 
 func execute() error {
+	i18n.SetDefault(i18n.EnvLocale(os.Getenv))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return rootCmd().ExecuteContext(ctx)
@@ -58,20 +60,14 @@ func execute() error {
 // shell completion via `KBM-flow completion <shell>`.
 func rootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:     "KBM-flow",
-		Short:   "Maintain a markdown knowledge repository with a local LLM",
-		Version: appversion.Version,
-		Long: `Knowledge-BA46-Flow scans a markdown repository, asks a local Ollama
-model for maintenance suggestions (move/merge/expand/delete), and only
-changes files after explicit human acceptance.
-
-Flow: run -> list/review -> apply.
-report refreshes the separate local repository health report.
-serve starts an HTTP API with a home page and separate knowledge/report workspaces.`,
+		Use:           "KBM-flow",
+		Short:         i18n.T("cli.root.short"),
+		Version:       appversion.Version,
+		Long:          i18n.T("cli.root.long"),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.PersistentFlags().StringVar(&configPath, "config", "config.json", "path to config file")
+	root.PersistentFlags().StringVar(&configPath, "config", "config.json", i18n.T("cli.flag.config"))
 	root.AddCommand(
 		scanCmd(),
 		linkCheckCmd(),
@@ -102,7 +98,7 @@ func reportCmd() *cobra.Command {
 	var repoName string
 	cmd := &cobra.Command{
 		Use:   "report",
-		Short: "Refresh the local repository health report",
+		Short: i18n.T("cli.report.short"),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if noRemote && remote {
@@ -134,11 +130,11 @@ func reportCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&repoName, "repo", "", "refresh one registered repository by name")
-	cmd.Flags().BoolVar(&force, "force", false, "force remote checks and refresh package registry caches")
-	cmd.Flags().BoolVar(&noRemote, "no-remote", false, "run local checks only and retain cached remote results")
-	cmd.Flags().BoolVar(&remote, "remote", false, "enable remote checks for this run")
-	cmd.Flags().BoolVar(&jsonOutput, "json", false, "print the complete report snapshot as JSON")
+	cmd.Flags().StringVar(&repoName, "repo", "", i18n.T("cli.flag.repo"))
+	cmd.Flags().BoolVar(&force, "force", false, i18n.T("cli.flag.force"))
+	cmd.Flags().BoolVar(&noRemote, "no-remote", false, i18n.T("cli.flag.no_remote"))
+	cmd.Flags().BoolVar(&remote, "remote", false, i18n.T("cli.flag.remote"))
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, i18n.T("cli.flag.json"))
 	return cmd
 }
 
@@ -146,7 +142,7 @@ func reportCmd() *cobra.Command {
 func versionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-		Short: "Print the application version",
+		Short: i18n.T("cli.version.short"),
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Fprintf(cmd.OutOrStdout(), "KBM-flow %s\n", appversion.Version)
@@ -159,7 +155,7 @@ func versionCmd() *cobra.Command {
 func validateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "validate",
-		Short: "Check repository structure against taxonomy.yaml and linking conventions",
+		Short: i18n.T("cli.validate.short"),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := config.Load(configPath)
@@ -207,7 +203,7 @@ func openAll(ctx context.Context) (config.Config, *database.DB, error) {
 func scanCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "scan",
-		Short: "Scan the repository and sync SQLite (no Ollama calls)",
+		Short: i18n.T("cli.scan.short"),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) (runErr error) {
 			c, db, err := openAll(cmd.Context())
@@ -240,7 +236,7 @@ func scanCmd() *cobra.Command {
 func linkCheckCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "check-links",
-		Short: "Check external links in documents and record verdicts (network calls; no LLM)",
+		Short: i18n.T("cli.link_check.short"),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) (runErr error) {
 			c, db, err := openAll(cmd.Context())
@@ -319,7 +315,7 @@ func analyzeCmd() *cobra.Command {
 	var model, embedModel string
 	cmd := &cobra.Command{
 		Use:   "analyze",
-		Short: "Analyze changed documents with Ollama (LLM calls)",
+		Short: i18n.T("cli.analyze.short"),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) (runErr error) {
 			c, db, err := openAll(cmd.Context())
@@ -353,12 +349,12 @@ func analyzeCmd() *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().BoolVar(&reanalyze, "reanalyze", false, "also re-analyze documents whose last analysis used a different model")
-	cmd.Flags().BoolVar(&reanalyzeAll, "reanalyze-all", false, "force every non-missing document through enrichment and analysis (expensive)")
-	cmd.Flags().BoolVar(&external, "external", false, "analyze with ollama_model_external (enhanced lane; results stamp external_* and keep the local lineage)")
-	cmd.Flags().StringVar(&model, "model", "", "run generation stages with this configured or installed Ollama model")
-	cmd.Flags().StringVar(&embedModel, "embed-model", "", "use this embedding model independently of --model")
-	cmd.Flags().BoolVar(&allowCloud, "allow-cloud", false, "allow cloud/remote embeddings and enrichment (sends document content off-machine)")
+	cmd.Flags().BoolVar(&reanalyze, "reanalyze", false, i18n.T("cli.flag.reanalyze"))
+	cmd.Flags().BoolVar(&reanalyzeAll, "reanalyze-all", false, i18n.T("cli.flag.reanalyze_all"))
+	cmd.Flags().BoolVar(&external, "external", false, i18n.T("cli.flag.external_analyze"))
+	cmd.Flags().StringVar(&model, "model", "", i18n.T("cli.flag.model"))
+	cmd.Flags().StringVar(&embedModel, "embed-model", "", i18n.T("cli.flag.embed_model"))
+	cmd.Flags().BoolVar(&allowCloud, "allow-cloud", false, i18n.T("cli.flag.allow_cloud"))
 	return cmd
 }
 
@@ -368,7 +364,7 @@ func runCmd() *cobra.Command {
 	var model, embedModel string
 	cmd := &cobra.Command{
 		Use:   "run",
-		Short: "Scan, then analyze changed documents",
+		Short: i18n.T("cli.run.short"),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) (runErr error) {
 			c, db, err := openAll(cmd.Context())
@@ -414,12 +410,12 @@ func runCmd() *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().BoolVar(&reanalyze, "reanalyze", false, "also re-analyze documents whose last analysis used a different model")
-	cmd.Flags().BoolVar(&reanalyzeAll, "reanalyze-all", false, "force every non-missing document through enrichment and analysis (expensive)")
-	cmd.Flags().BoolVar(&external, "external", false, "analyze with ollama_model_external (enhanced lane; results stamp external_* and keep the local lineage)")
-	cmd.Flags().StringVar(&model, "model", "", "run generation stages with this configured or installed Ollama model")
-	cmd.Flags().StringVar(&embedModel, "embed-model", "", "use this embedding model independently of --model")
-	cmd.Flags().BoolVar(&allowCloud, "allow-cloud", false, "allow cloud/remote embeddings and enrichment (sends document content off-machine)")
+	cmd.Flags().BoolVar(&reanalyze, "reanalyze", false, i18n.T("cli.flag.reanalyze"))
+	cmd.Flags().BoolVar(&reanalyzeAll, "reanalyze-all", false, i18n.T("cli.flag.reanalyze_all"))
+	cmd.Flags().BoolVar(&external, "external", false, i18n.T("cli.flag.external_analyze"))
+	cmd.Flags().StringVar(&model, "model", "", i18n.T("cli.flag.model"))
+	cmd.Flags().StringVar(&embedModel, "embed-model", "", i18n.T("cli.flag.embed_model"))
+	cmd.Flags().BoolVar(&allowCloud, "allow-cloud", false, i18n.T("cli.flag.allow_cloud"))
 	return cmd
 }
 
@@ -483,20 +479,20 @@ func taskCmd(use, short, op string, allowExternal bool, run func(ctx context.Con
 			return err
 		},
 	}
-	cmd.Flags().BoolVar(&reanalyze, "reanalyze", false, "also reprocess documents whose last pass used a different model")
-	cmd.Flags().BoolVar(&reanalyzeAll, "reanalyze-all", false, "force every non-missing document through the pass (expensive)")
-	cmd.Flags().StringVar(&model, "model", "", "run this pass with a configured or installed Ollama model")
+	cmd.Flags().BoolVar(&reanalyze, "reanalyze", false, i18n.T("cli.flag.task_reanalyze"))
+	cmd.Flags().BoolVar(&reanalyzeAll, "reanalyze-all", false, i18n.T("cli.flag.task_reanalyze_all"))
+	cmd.Flags().StringVar(&model, "model", "", i18n.T("cli.flag.task_model"))
 	if op == config.TaskEmbed {
-		cmd.Flags().StringVar(&embedModel, "embed-model", "", "embedding model override (alternative to --model)")
+		cmd.Flags().StringVar(&embedModel, "embed-model", "", i18n.T("cli.flag.task_embed_model"))
 	}
 	if allowExternal {
-		cmd.Flags().BoolVar(&external, "external", false, "use ollama_model_external for this pass")
+		cmd.Flags().BoolVar(&external, "external", false, i18n.T("cli.flag.task_external"))
 	}
 	if op == "enrich" || op == "embed" {
-		cmd.Flags().BoolVar(&allowCloud, "allow-cloud", false, "allow cloud/remote models for this pass (sends content off-machine)")
+		cmd.Flags().BoolVar(&allowCloud, "allow-cloud", false, i18n.T("cli.flag.task_allow_cloud"))
 	}
 	if op == config.TaskFreshness {
-		cmd.Flags().BoolVar(&webVerify, "web-verify", false, "verify flagged claims via Ollama web search (claim text is sent to ollama.com; requires OLLAMA_API_KEY)")
+		cmd.Flags().BoolVar(&webVerify, "web-verify", false, i18n.T("cli.flag.web_verify"))
 	}
 	return cmd
 }
@@ -563,19 +559,19 @@ func runFreshness(ctx context.Context, c config.Config, db *database.DB, model s
 }
 
 func enrichCmd() *cobra.Command {
-	return taskCmd("enrich", "Run only the fast enrichment pass (title/tags metadata)", "enrich", false, runEnrich)
+	return taskCmd("enrich", i18n.T("cli.enrich.short"), "enrich", false, runEnrich)
 }
 
 func embedCmd() *cobra.Command {
-	return taskCmd("embed", "Recompute embedding vectors for new/changed documents", "embed", false, runEmbed)
+	return taskCmd("embed", i18n.T("cli.embed.short"), "embed", false, runEmbed)
 }
 
 func expandCmd() *cobra.Command {
-	return taskCmd("expand", "Expand stub documents using their category STUB.md templates", "expand", true, runExpand)
+	return taskCmd("expand", i18n.T("cli.expand.short"), "expand", true, runExpand)
 }
 
 func freshnessCmd() *cobra.Command {
-	return taskCmd("freshness", "Flag documents that may no longer be current (heuristic review)", "freshness", true, runFreshness)
+	return taskCmd("freshness", i18n.T("cli.freshness.short"), "freshness", true, runFreshness)
 }
 
 // tasks runs every LLM-backed pass in one job — enrichment, embedding
@@ -588,7 +584,7 @@ func tasksCmd() *cobra.Command {
 	var model, embedModel string
 	cmd := &cobra.Command{
 		Use:   "tasks",
-		Short: "Run every configured LLM task (enrich, embed, expand, freshness, analyze)",
+		Short: i18n.T("cli.tasks.short"),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) (runErr error) {
 			c, db, err := openAll(cmd.Context())
@@ -661,13 +657,13 @@ func tasksCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&reanalyze, "reanalyze", false, "also reprocess documents whose last pass used a different model")
-	cmd.Flags().BoolVar(&reanalyzeAll, "reanalyze-all", false, "force every non-missing document through every pass (expensive)")
-	cmd.Flags().BoolVar(&external, "external", false, "allow cloud/remote generation models and use ollama_model_external when selected")
-	cmd.Flags().BoolVar(&allowCloud, "allow-cloud", false, "allow cloud/remote embeddings and enrichment (sends document content off-machine)")
-	cmd.Flags().BoolVar(&webVerify, "web-verify", false, "verify freshness flags via Ollama web search (claim text is sent to ollama.com; requires OLLAMA_API_KEY)")
-	cmd.Flags().StringVar(&model, "model", "", "run every generation task with this configured or installed Ollama model")
-	cmd.Flags().StringVar(&embedModel, "embed-model", "", "use this embedding model independently of --model")
+	cmd.Flags().BoolVar(&reanalyze, "reanalyze", false, i18n.T("cli.flag.task_reanalyze"))
+	cmd.Flags().BoolVar(&reanalyzeAll, "reanalyze-all", false, i18n.T("cli.flag.tasks_reanalyze_all"))
+	cmd.Flags().BoolVar(&external, "external", false, i18n.T("cli.flag.tasks_external"))
+	cmd.Flags().BoolVar(&allowCloud, "allow-cloud", false, i18n.T("cli.flag.allow_cloud"))
+	cmd.Flags().BoolVar(&webVerify, "web-verify", false, i18n.T("cli.flag.web_verify"))
+	cmd.Flags().StringVar(&model, "model", "", i18n.T("cli.flag.tasks_model"))
+	cmd.Flags().StringVar(&embedModel, "embed-model", "", i18n.T("cli.flag.embed_model"))
 	return cmd
 }
 
@@ -678,7 +674,7 @@ func pruneCmd() *cobra.Command {
 	var keep, trashDays int
 	cmd := &cobra.Command{
 		Use:   "prune",
-		Short: "Delete finished job history beyond the newest --keep rows, optionally purge old trash",
+		Short: i18n.T("cli.prune.short"),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, db, err := openAll(cmd.Context())
@@ -707,8 +703,8 @@ func pruneCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().IntVar(&keep, "keep", 200, "number of newest finished jobs to retain")
-	cmd.Flags().IntVar(&trashDays, "trash-days", 0, "also permanently delete trash entries older than this many days (0 = keep all)")
+	cmd.Flags().IntVar(&keep, "keep", 200, i18n.T("cli.flag.keep"))
+	cmd.Flags().IntVar(&trashDays, "trash-days", 0, i18n.T("cli.flag.trash_days"))
 	return cmd
 }
 
@@ -716,7 +712,7 @@ func pruneCmd() *cobra.Command {
 func listCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "Show pending suggestions",
+		Short: i18n.T("cli.list.short"),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, db, err := openAll(cmd.Context())
@@ -733,7 +729,7 @@ func listCmd() *cobra.Command {
 func reviewCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "review",
-		Short: "Interactive accept/reject of pending suggestions",
+		Short: i18n.T("cli.review.short"),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, db, err := openAll(cmd.Context())
@@ -754,7 +750,7 @@ func decideCmd(name string) *cobra.Command {
 	}
 	cmd := &cobra.Command{
 		Use:   name + " ID",
-		Short: name + " a single pending suggestion",
+		Short: i18n.T("cli.decide.short", map[string]any{"Action": name}),
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, db, err := openAll(cmd.Context())
@@ -767,7 +763,7 @@ func decideCmd(name string) *cobra.Command {
 		},
 	}
 	if status == "rejected" {
-		cmd.Flags().String("note", "", "why the suggestion is wrong — stored on the row and shown back to the model on later runs")
+		cmd.Flags().String("note", "", i18n.T("cli.flag.note"))
 	}
 	return cmd
 }
@@ -776,7 +772,7 @@ func decideCmd(name string) *cobra.Command {
 func applyCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "apply",
-		Short: "Execute all accepted suggestions",
+		Short: i18n.T("cli.apply.short"),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, db, err := openAll(cmd.Context())
@@ -813,7 +809,7 @@ func applyCmd() *cobra.Command {
 func serveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "serve",
-		Short: "HTTP API + web UI for the review workflow",
+		Short: i18n.T("cli.serve.short"),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// A context cancelled before startup means "don't run" — exit

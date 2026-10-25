@@ -17,28 +17,37 @@
     <section class="hero kbm-hero report-hero">
       <div class="hero-body">
         <div class="container dashboard">
-          <p class="eyebrow mb-3">Repository health · read-only checks</p>
+          <p
+            class="eyebrow mb-3"
+            x-text="t('ui.report.eyebrow', 'Repository health · read-only checks')"
+          ></p>
           <div class="report-hero-grid">
             <div>
-              <h1 class="title is-1 mb-3">One view across the fleet.</h1>
-              <p class="subtitle is-5 mb-5">
-                Read-only checks from your repository registry. This report does
-                not sync, commit, or edit registered repositories.
-              </p>
+              <h1
+                class="title is-1 mb-3"
+                x-text="t('ui.report.hero_title', 'One view across the fleet.')"
+              ></h1>
+              <p
+                class="subtitle is-5 mb-5"
+                x-text="t('ui.report.hero_subtitle', 'Read-only checks from your repository registry. This report does not sync, commit, or edit registered repositories.')"
+              ></p>
             </div>
             <div class="report-scope">
               <span class="report-scope-mark" aria-hidden="true">R</span>
-              <p class="has-text-weight-bold">Read-only report</p>
+              <p
+                class="has-text-weight-bold"
+                x-text="t('ui.report.read_only', 'Read-only report')"
+              ></p>
               <p
                 class="is-size-7"
-                x-text="snapshot.remote_enabled ? 'Local and remote checks' : 'Local checks only'"
+                x-text="snapshot.remote_enabled ? t('ui.report.scope_remote', 'Local and remote checks') : t('ui.common.local_checks_only', 'Local checks only')"
               ></p>
             </div>
           </div>
           <div class="buttons">
             <a class="button is-light" href="/">
               <img class="report-icon" src="/static/icons/house.svg" alt="" />
-              Home
+              <span x-text="t('ui.common.home', 'Home')"></span>
             </a>
             <a class="button is-light" href="/knowledge">
               <img
@@ -46,7 +55,7 @@
                 src="/static/icons/book-open.svg"
                 alt=""
               />
-              Knowledge
+              <span x-text="t('ui.report.knowledge_link', 'Knowledge')"></span>
             </a>
             <button
               class="button kbm-accent"
@@ -59,7 +68,7 @@
                 alt=""
               />
               <span
-                x-text="busy ? 'Checking repositories…' : 'Refresh report'"
+                x-text="busy ? t('ui.report.checking', 'Checking repositories…') : t('ui.report.refresh_report', 'Refresh report')"
               ></span>
             </button>
             <button
@@ -72,7 +81,9 @@
                 src="/static/icons/hard-drive.svg"
                 alt=""
               />
-              Local checks only
+              <span
+                x-text="t('ui.common.local_checks_only', 'Local checks only')"
+              ></span>
             </button>
             <button
               class="button is-warning is-light"
@@ -80,13 +91,30 @@
               @click="startReport({ force: true })"
             >
               <img class="report-icon" src="/static/icons/zap.svg" alt="" />
-              Force remote refresh
+              <span
+                x-text="t('ui.report.force_remote', 'Force remote refresh')"
+              ></span>
             </button>
+            <div class="select is-small">
+              <select
+                x-model="locale"
+                @change="setLocale(locale)"
+                :aria-label="t('ui.common.language', 'Language')"
+              >
+                <option
+                  value=""
+                  x-text="t('ui.common.locale_auto', 'Automatic (browser)')"
+                ></option>
+                <template x-for="l in locales" :key="l">
+                  <option :value="l" x-text="localeLabel(l)"></option>
+                </template>
+              </select>
+            </div>
           </div>
           <p class="is-size-7 has-text-white-ter" role="status">
             <span class="status-dot" :class="busy ? 'is-warning' : ''"></span>
             <span
-              x-text="busy ? 'A report run is in progress' : statusText()"
+              x-text="busy ? t('ui.report.run_in_progress', 'A report run is in progress') : statusText()"
             ></span>
           </p>
         </div>
@@ -110,17 +138,19 @@
         <template x-if="!snapshot.configured">
           <article class="message is-warning">
             <div class="message-body">
-              Configure <code>report.registry_path</code> in the JSON config to
-              enable this dashboard. The report reads the YAML registry and
-              optional policy file in place.
+              <span x-text="t('ui.report.config_hint_1', 'Configure')"></span>
+              <code>report.registry_path</code>
+              <span
+                x-text="t('ui.report.config_hint_2', 'in the config file to enable this dashboard. The report reads the YAML registry and optional policy file in place.')"
+              ></span>
             </div>
           </article>
         </template>
         <template x-if="snapshot.configured && !snapshot.generated_at && !busy">
-          <div class="notification is-light">
-            No snapshot yet. Start a report to inspect the configured
-            repositories.
-          </div>
+          <div
+            class="notification is-light"
+            x-text="t('ui.report.no_snapshot_yet', 'No snapshot yet. Start a report to inspect the configured repositories.')"
+          ></div>
         </template>
 
         <template x-if="snapshot.generated_at">
@@ -132,19 +162,28 @@
                     class="stat-number"
                     x-text="snapshot.summary.repositories"
                   ></p>
-                  <p class="stat-label mt-2">Registered repositories</p>
+                  <p
+                    class="stat-label mt-2"
+                    x-text="t('ui.report.stat_repos', 'Registered repositories')"
+                  ></p>
                 </div>
               </div>
               <div class="column">
                 <div class="box kbm-box stat-box">
                   <p class="stat-number" x-text="snapshot.summary.dirty"></p>
-                  <p class="stat-label mt-2">Dirty working trees</p>
+                  <p
+                    class="stat-label mt-2"
+                    x-text="t('ui.common.dirty_trees', 'Dirty working trees')"
+                  ></p>
                 </div>
               </div>
               <div class="column">
                 <div class="box kbm-box stat-box">
                   <p class="stat-number" x-text="snapshot.summary.problems"></p>
-                  <p class="stat-label mt-2">Findings</p>
+                  <p
+                    class="stat-label mt-2"
+                    x-text="t('ui.common.findings', 'Findings')"
+                  ></p>
                 </div>
               </div>
               <div class="column">
@@ -153,7 +192,10 @@
                     class="stat-number"
                     x-text="snapshot.summary.sonar_projects"
                   ></p>
-                  <p class="stat-label mt-2">Sonar configurations</p>
+                  <p
+                    class="stat-label mt-2"
+                    x-text="t('ui.report.stat_sonar', 'Sonar configurations')"
+                  ></p>
                 </div>
               </div>
               <div class="column">
@@ -162,7 +204,10 @@
                     class="stat-number"
                     x-text="snapshot.summary.semgrep_projects"
                   ></p>
-                  <p class="stat-label mt-2">Semgrep configurations</p>
+                  <p
+                    class="stat-label mt-2"
+                    x-text="t('ui.report.stat_semgrep', 'Semgrep configurations')"
+                  ></p>
                 </div>
               </div>
               <div class="column">
@@ -171,7 +216,10 @@
                     class="stat-number"
                     x-text="snapshot.summary.node_projects"
                   ></p>
-                  <p class="stat-label mt-2">Node projects</p>
+                  <p
+                    class="stat-label mt-2"
+                    x-text="t('ui.report.stat_node', 'Node projects')"
+                  ></p>
                 </div>
               </div>
               <div class="column">
@@ -180,7 +228,10 @@
                     class="stat-number"
                     x-text="snapshot.summary.npm_outdated == null ? '—' : snapshot.summary.npm_outdated"
                   ></p>
-                  <p class="stat-label mt-2">Outdated npm packages</p>
+                  <p
+                    class="stat-label mt-2"
+                    x-text="t('ui.report.stat_npm_outdated', 'Outdated npm packages')"
+                  ></p>
                 </div>
               </div>
               <div class="column">
@@ -189,7 +240,10 @@
                     class="stat-number"
                     x-text="snapshot.summary.node_outdated == null ? '—' : snapshot.summary.node_outdated"
                   ></p>
-                  <p class="stat-label mt-2">Outdated Node pins</p>
+                  <p
+                    class="stat-label mt-2"
+                    x-text="t('ui.report.stat_node_outdated', 'Outdated Node pins')"
+                  ></p>
                 </div>
               </div>
             </div>
@@ -199,16 +253,20 @@
                 <div class="level is-mobile mb-3">
                   <div class="level-left">
                     <div>
-                      <p class="eyebrow">Current Go collectors</p>
-                      <h2 class="title is-4 section-heading mb-0">
-                        Remote checks
-                      </h2>
+                      <p
+                        class="eyebrow"
+                        x-text="t('ui.report.collectors_eyebrow', 'Current Go collectors')"
+                      ></p>
+                      <h2
+                        class="title is-4 section-heading mb-0"
+                        x-text="t('ui.report.remote_checks', 'Remote checks')"
+                      ></h2>
                     </div>
                   </div>
                   <div class="level-right">
                     <p
                       class="report-generated"
-                      x-text="'Remote check run · ' + formatTime(snapshot.remote_generated_at) + (snapshot.summary.remote_stale_repositories ? ' · ' + snapshot.summary.remote_stale_repositories + ' stale repos' : '')"
+                      x-text="t('ui.report.remote_run', 'Remote check run · {{.Time}}', { Time: formatTime(snapshot.remote_generated_at) }) + (snapshot.summary.remote_stale_repositories ? t('ui.report.stale_repos', ' · {{.Count}} stale repos', { Count: snapshot.summary.remote_stale_repositories }) : '')"
                     ></p>
                   </div>
                 </div>
@@ -218,10 +276,13 @@
                       class="report-comparison-number"
                       x-text="snapshot.summary.sonar_blocked == null ? '—' : snapshot.summary.sonar_blocked"
                     ></p>
-                    <p class="stat-label">Sonar gates blocked</p>
+                    <p
+                      class="stat-label"
+                      x-text="t('ui.common.sonar_gates_blocked', 'Sonar gates blocked')"
+                    ></p>
                     <p
                       class="report-generated"
-                      x-text="snapshot.summary.sonar_reported_projects + ' projects reported'"
+                      x-text="t('ui.report.projects_reported', '{{.Count}} projects reported', { Count: snapshot.summary.sonar_reported_projects })"
                     ></p>
                   </div>
                   <div class="column">
@@ -229,10 +290,13 @@
                       class="report-comparison-number"
                       x-text="snapshot.summary.semgrep_blocked == null ? '—' : snapshot.summary.semgrep_blocked"
                     ></p>
-                    <p class="stat-label">Repositories with Semgrep blocks</p>
+                    <p
+                      class="stat-label"
+                      x-text="t('ui.common.semgrep_blocked', 'Repositories with Semgrep blocks')"
+                    ></p>
                     <p
                       class="report-generated"
-                      x-text="snapshot.summary.semgrep_open_findings == null ? 'Not collected' : snapshot.summary.semgrep_open_findings + ' open findings'"
+                      x-text="snapshot.summary.semgrep_open_findings == null ? t('ui.report.not_collected', 'Not collected') : t('ui.report.open_findings', '{{.Count}} open findings', { Count: snapshot.summary.semgrep_open_findings })"
                     ></p>
                   </div>
                   <div class="column">
@@ -240,10 +304,13 @@
                       class="report-comparison-number"
                       x-text="snapshot.summary.open_prs == null ? '—' : snapshot.summary.open_prs"
                     ></p>
-                    <p class="stat-label">Open PRs</p>
+                    <p
+                      class="stat-label"
+                      x-text="t('ui.common.open_prs', 'Open PRs')"
+                    ></p>
                     <p
                       class="report-generated"
-                      x-text="snapshot.summary.open_pr_repositories + ' repositories reported'"
+                      x-text="t('ui.report.repos_reported', '{{.Count}} repositories reported', { Count: snapshot.summary.open_pr_repositories })"
                     ></p>
                   </div>
                 </div>
@@ -251,11 +318,12 @@
             </template>
             <template x-if="!snapshot.remote_enabled">
               <div class="notification is-light mb-5">
-                Remote checks were not refreshed on this run. Any remote values
-                shown below are the last known results.
+                <span
+                  x-text="t('ui.report.remote_not_refreshed', 'Remote checks were not refreshed on this run. Any remote values shown below are the last known results.')"
+                ></span>
                 <span
                   x-show="snapshot.remote_generated_at"
-                  x-text="' Last remote run · ' + formatTime(snapshot.remote_generated_at)"
+                  x-text="t('ui.report.last_remote_run', ' Last remote run · {{.Time}}', { Time: formatTime(snapshot.remote_generated_at) })"
                 ></span>
               </div>
             </template>
@@ -267,16 +335,20 @@
                 <div class="level is-mobile mb-3">
                   <div class="level-left">
                     <div>
-                      <p class="eyebrow">Ruby report reference</p>
-                      <h2 class="title is-4 section-heading mb-0">
-                        Comparison totals
-                      </h2>
+                      <p
+                        class="eyebrow"
+                        x-text="t('ui.report.ruby_ref_eyebrow', 'Ruby report reference')"
+                      ></p>
+                      <h2
+                        class="title is-4 section-heading mb-0"
+                        x-text="t('ui.report.comparison_totals', 'Comparison totals')"
+                      ></h2>
                     </div>
                   </div>
                   <div class="level-right">
                     <p
                       class="is-size-7 has-text-grey"
-                      x-text="'Source snapshot · ' + formatTime(snapshot.comparison.generated_at)"
+                      x-text="t('ui.report.source_snapshot', 'Source snapshot · {{.Time}}', { Time: formatTime(snapshot.comparison.generated_at) })"
                     ></p>
                   </div>
                 </div>
@@ -286,10 +358,13 @@
                       class="report-comparison-number"
                       x-text="snapshot.comparison.sonar_blocked == null ? '—' : snapshot.comparison.sonar_blocked"
                     ></p>
-                    <p class="stat-label">Sonar gates blocked</p>
+                    <p
+                      class="stat-label"
+                      x-text="t('ui.common.sonar_gates_blocked', 'Sonar gates blocked')"
+                    ></p>
                     <p
                       class="report-generated"
-                      x-text="snapshot.comparison.sonar_reported_projects + ' projects reported'"
+                      x-text="t('ui.report.projects_reported', '{{.Count}} projects reported', { Count: snapshot.comparison.sonar_reported_projects })"
                     ></p>
                   </div>
                   <div class="column">
@@ -297,10 +372,13 @@
                       class="report-comparison-number"
                       x-text="snapshot.comparison.semgrep_blocked == null ? '—' : snapshot.comparison.semgrep_blocked"
                     ></p>
-                    <p class="stat-label">Repositories with Semgrep blocks</p>
+                    <p
+                      class="stat-label"
+                      x-text="t('ui.common.semgrep_blocked', 'Repositories with Semgrep blocks')"
+                    ></p>
                     <p
                       class="report-generated"
-                      x-text="snapshot.comparison.semgrep_open_findings == null ? 'Not collected in source snapshot' : snapshot.comparison.semgrep_open_findings + ' open findings'"
+                      x-text="snapshot.comparison.semgrep_open_findings == null ? t('ui.report.not_collected_source', 'Not collected in source snapshot') : t('ui.report.open_findings', '{{.Count}} open findings', { Count: snapshot.comparison.semgrep_open_findings })"
                     ></p>
                   </div>
                   <div class="column">
@@ -308,10 +386,13 @@
                       class="report-comparison-number"
                       x-text="snapshot.comparison.open_prs == null ? '—' : snapshot.comparison.open_prs"
                     ></p>
-                    <p class="stat-label">Open PRs</p>
+                    <p
+                      class="stat-label"
+                      x-text="t('ui.common.open_prs', 'Open PRs')"
+                    ></p>
                     <p
                       class="report-generated"
-                      x-text="snapshot.comparison.open_prs == null ? 'Not collected in source snapshot' : snapshot.comparison.open_pr_repositories + ' repositories reported'"
+                      x-text="snapshot.comparison.open_prs == null ? t('ui.report.not_collected_source', 'Not collected in source snapshot') : t('ui.report.repos_reported', '{{.Count}} repositories reported', { Count: snapshot.comparison.open_pr_repositories })"
                     ></p>
                   </div>
                 </div>
@@ -331,67 +412,121 @@
               <div class="level is-mobile mb-4 report-toolbar">
                 <div class="level-left">
                   <div>
-                    <p class="eyebrow">Local inventory</p>
-                    <h2 class="title is-3 section-heading mb-0">
-                      Repositories
-                    </h2>
+                    <p
+                      class="eyebrow"
+                      x-text="t('ui.report.inventory_eyebrow', 'Local inventory')"
+                    ></p>
+                    <h2
+                      class="title is-3 section-heading mb-0"
+                      x-text="t('ui.common.repositories', 'Repositories')"
+                    ></h2>
                   </div>
                 </div>
                 <div class="level-right">
                   <div class="report-controls">
                     <label class="report-filter">
-                      <span class="is-sr-only">Search repositories</span>
+                      <span
+                        class="is-sr-only"
+                        x-text="t('ui.report.search_sr', 'Search repositories')"
+                      ></span>
                       <input
                         class="input"
                         type="search"
-                        placeholder="Search names, paths, packages"
+                        :placeholder="t('ui.report.search_placeholder', 'Search names, paths, packages')"
                         x-model="filter"
                       />
                     </label>
                     <label class="report-signal-filter">
-                      <span class="is-sr-only">Filter by working tree</span>
+                      <span
+                        class="is-sr-only"
+                        x-text="t('ui.report.filter_tree_sr', 'Filter by working tree')"
+                      ></span>
                       <span class="select is-fullwidth">
                         <select x-model="treeFilter">
-                          <option value="all">All working trees</option>
-                          <option value="dirty">Dirty working trees</option>
-                          <option value="clean">Clean working trees</option>
+                          <option
+                            value="all"
+                            x-text="t('ui.report.filter_tree_all', 'All working trees')"
+                          ></option>
+                          <option
+                            value="dirty"
+                            x-text="t('ui.common.dirty_trees', 'Dirty working trees')"
+                          ></option>
+                          <option
+                            value="clean"
+                            x-text="t('ui.report.filter_tree_clean', 'Clean working trees')"
+                          ></option>
                         </select>
                       </span>
                     </label>
                     <label class="report-signal-filter">
-                      <span class="is-sr-only">Filter by checks</span>
+                      <span
+                        class="is-sr-only"
+                        x-text="t('ui.report.filter_checks_sr', 'Filter by checks')"
+                      ></span>
                       <span class="select is-fullwidth">
                         <select x-model="checksFilter">
-                          <option value="all">All check states</option>
-                          <option value="has">Has checks</option>
-                          <option value="none">No checks</option>
+                          <option
+                            value="all"
+                            x-text="t('ui.report.filter_checks_all', 'All check states')"
+                          ></option>
+                          <option
+                            value="has"
+                            x-text="t('ui.report.filter_checks_has', 'Has checks')"
+                          ></option>
+                          <option
+                            value="none"
+                            x-text="t('ui.report.filter_checks_none', 'No checks')"
+                          ></option>
                         </select>
                       </span>
                     </label>
                     <label class="report-signal-filter">
-                      <span class="is-sr-only"
-                        >Filter by repository signals</span
-                      >
+                      <span
+                        class="is-sr-only"
+                        x-text="t('ui.report.filter_signal_sr', 'Filter by repository signals')"
+                      ></span>
                       <span class="select is-fullwidth">
                         <select x-model="signalFilter">
-                          <option value="all">All signals</option>
-                          <option value="pull-requests">
-                            Open pull requests
-                          </option>
-                          <option value="dependabot">Dependabot alerts</option>
-                          <option value="code-scanning">
-                            Code scanning alerts
-                          </option>
-                          <option value="semgrep">Semgrep issues</option>
-                          <option value="sonar">Sonar gate issues</option>
-                          <option value="codefactor">
-                            CodeFactor below B−
-                          </option>
-                          <option value="coverage">Codecov below target</option>
-                          <option value="any">Any signal</option>
-                          <option value="all-signals">
-                            PR + Semgrep + Sonar
-                          </option>
+                          <option
+                            value="all"
+                            x-text="t('ui.report.signal_all', 'All signals')"
+                          ></option>
+                          <option
+                            value="pull-requests"
+                            x-text="t('ui.report.signal_prs', 'Open pull requests')"
+                          ></option>
+                          <option
+                            value="dependabot"
+                            x-text="t('ui.report.signal_dependabot', 'Dependabot alerts')"
+                          ></option>
+                          <option
+                            value="code-scanning"
+                            x-text="t('ui.report.signal_scanning', 'Code scanning alerts')"
+                          ></option>
+                          <option
+                            value="semgrep"
+                            x-text="t('ui.report.signal_semgrep', 'Semgrep issues')"
+                          ></option>
+                          <option
+                            value="sonar"
+                            x-text="t('ui.report.signal_sonar', 'Sonar gate issues')"
+                          ></option>
+                          <option
+                            value="codefactor"
+                            x-text="t('ui.report.signal_codefactor', 'CodeFactor below B−')"
+                          ></option>
+                          <option
+                            value="coverage"
+                            x-text="t('ui.report.signal_coverage', 'Codecov below target')"
+                          ></option>
+                          <option
+                            value="any"
+                            x-text="t('ui.report.signal_any', 'Any signal')"
+                          ></option>
+                          <option
+                            value="all-signals"
+                            x-text="t('ui.report.signal_all_three', 'PR + Semgrep + Sonar')"
+                          ></option>
                         </select>
                       </span>
                     </label>
@@ -404,7 +539,7 @@
                 </div>
               </div>
               <p class="report-generated mb-4">
-                Snapshot
+                <span x-text="t('ui.report.snapshot_label', 'Snapshot')"></span>
                 <time x-text="formatTime(snapshot.generated_at)"></time>
                 <template x-for="pin in policyPins()" :key="pin.key">
                   <span>· <code x-text="pin.text"></code></span>
@@ -421,7 +556,9 @@
                           type="button"
                           @click="sortBy('name')"
                         >
-                          Repository
+                          <span
+                            x-text="t('ui.report.col_repo', 'Repository')"
+                          ></span>
                           <img
                             class="report-icon report-sort-icon"
                             aria-hidden="true"
@@ -436,7 +573,9 @@
                           type="button"
                           @click="sortBy('working-tree')"
                         >
-                          Working tree
+                          <span
+                            x-text="t('ui.report.col_tree', 'Working tree')"
+                          ></span>
                           <img
                             class="report-icon report-sort-icon"
                             aria-hidden="true"
@@ -451,7 +590,9 @@
                           type="button"
                           @click="sortBy('sync')"
                         >
-                          Sync baseline
+                          <span
+                            x-text="t('ui.report.col_sync', 'Sync baseline')"
+                          ></span>
                           <img
                             class="report-icon report-sort-icon"
                             aria-hidden="true"
@@ -466,7 +607,7 @@
                           type="button"
                           @click="sortBy('checks')"
                         >
-                          Checks
+                          <span x-text="t('ui.common.checks', 'Checks')"></span>
                           <img
                             class="report-icon report-sort-icon"
                             aria-hidden="true"
@@ -481,7 +622,9 @@
                           type="button"
                           @click="sortBy('findings')"
                         >
-                          Findings
+                          <span
+                            x-text="t('ui.common.findings', 'Findings')"
+                          ></span>
                           <img
                             class="report-icon report-sort-icon"
                             aria-hidden="true"
@@ -490,7 +633,10 @@
                           />
                         </button>
                       </th>
-                      <th scope="col">Full report</th>
+                      <th
+                        scope="col"
+                        x-text="t('ui.report.col_full', 'Full report')"
+                      ></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -520,11 +666,11 @@
                             class="report-repo-link is-size-7"
                             x-show="repo.web_url"
                             :href="repo.web_url"
-                            :aria-label="'Open ' + repo.name + ' repository in a new tab'"
+                            :aria-label="t('ui.report.open_repo_aria', 'Open {{.Name}} repository in a new tab', { Name: repo.name })"
                             target="_blank"
                             rel="noopener noreferrer"
+                            x-text="t('ui.report.open_repo', 'Open repository ↗')"
                           >
-                            Open repository ↗
                           </a>
                           <button
                             class="button is-small is-light mt-2"
@@ -536,18 +682,20 @@
                               src="/static/icons/refresh-cw.svg"
                               alt=""
                             />
-                            Refresh this repo
+                            <span
+                              x-text="t('ui.report.refresh_repo', 'Refresh this repo')"
+                            ></span>
                           </button>
                           <span
                             class="tag is-light mt-2"
                             :class="repo.path_exists ? 'is-success' : 'is-danger'"
-                            x-text="repo.path_exists ? 'present' : 'missing'"
+                            x-text="repo.path_exists ? t('ui.report.present', 'present') : t('ui.report.missing', 'missing')"
                           ></span>
                         </td>
                         <td>
                           <p
                             class="is-mono"
-                            x-text="repo.head_sha || 'no Git HEAD'"
+                            x-text="repo.head_sha || t('ui.report.no_head', 'no Git HEAD')"
                           ></p>
                           <span
                             class="tag is-light mt-2"
@@ -559,7 +707,7 @@
                               alt=""
                             />
                             <span
-                              x-text="repo.dirty ? 'dirty' : 'clean'"
+                              x-text="repo.dirty ? t('ui.report.dirty', 'dirty') : t('ui.report.clean', 'clean')"
                             ></span>
                           </span>
                           <p
@@ -577,13 +725,14 @@
                           <span
                             class="tag is-light mt-2"
                             :class="repo.sync.marker === 'present' ? 'is-success' : 'is-warning'"
-                            x-text="repo.sync.marker === 'present' ? 'marker present' : repo.sync.marker || 'no marker'"
+                            x-text="repo.sync.marker === 'present' ? t('ui.report.marker_present', 'marker present') : repo.sync.marker || t('ui.report.no_marker', 'no marker')"
                           ></span>
                         </td>
                         <td>
-                          <p x-show="repo.scanners.length === 0">
-                            No scanner config
-                          </p>
+                          <p
+                            x-show="repo.scanners.length === 0"
+                            x-text="t('ui.report.no_scanner', 'No scanner config')"
+                          ></p>
                           <div class="report-scanners">
                             <template
                               x-for="scanner in repo.scanners"
@@ -622,7 +771,7 @@
                               />
                               CodeFactor:
                               <span
-                                x-text="(repo.codefactor || 'n/a') + (repo.codefactor_stale ? ' (stale)' : '')"
+                                x-text="(repo.codefactor || 'n/a') + (repo.codefactor_stale ? t('ui.report.stale_suffix', ' (stale)') : '')"
                               ></span>
                             </a>
                           </p>
@@ -689,7 +838,10 @@
                                 src="/static/icons/square-check-big.svg"
                                 alt=""
                               />
-                              <span class="is-sr-only">no findings</span>
+                              <span
+                                class="is-sr-only"
+                                x-text="t('ui.report.no_findings_sr', 'no findings')"
+                              ></span>
                             </p>
                           </template>
                           <template x-if="repo.problems.length > 0">
@@ -700,7 +852,10 @@
                                 alt=""
                               />
                               <span x-text="repo.problems.length"></span>
-                              <span class="is-sr-only">findings</span>
+                              <span
+                                class="is-sr-only"
+                                x-text="t('ui.report.findings_sr', 'findings')"
+                              ></span>
                             </p>
                           </template>
                           <template
@@ -731,7 +886,9 @@
                                 src="/static/icons/chevron-down.svg"
                                 alt=""
                               />
-                              Expand
+                              <span
+                                x-text="t('ui.report.expand', 'Expand')"
+                              ></span>
                             </summary>
                             <pre
                               class="report-detail-content"
@@ -742,9 +899,11 @@
                       </tr>
                     </template>
                     <tr x-show="filteredRepos.length === 0">
-                      <td colspan="6" class="has-text-centered has-text-grey">
-                        No repositories match this filter.
-                      </td>
+                      <td
+                        colspan="6"
+                        class="has-text-centered has-text-grey"
+                        x-text="t('ui.report.no_match', 'No repositories match this filter.')"
+                      ></td>
                     </tr>
                   </tbody>
                 </table>
@@ -752,8 +911,14 @@
             </section>
 
             <section class="box kbm-box mb-5">
-              <p class="eyebrow">Fleet-wide package analysis</p>
-              <h2 class="title is-4 section-heading">Gem health</h2>
+              <p
+                class="eyebrow"
+                x-text="t('ui.report.fleet_eyebrow', 'Fleet-wide package analysis')"
+              ></p>
+              <h2
+                class="title is-4 section-heading"
+                x-text="t('ui.report.gem_health', 'Gem health')"
+              ></h2>
               <pre
                 class="report-detail-content"
                 x-text="gemFleetDetails()"
@@ -771,8 +936,14 @@
             </section>
 
             <section class="box kbm-box mb-5">
-              <p class="eyebrow">Fleet-wide package analysis</p>
-              <h2 class="title is-4 section-heading">Node and npm health</h2>
+              <p
+                class="eyebrow"
+                x-text="t('ui.report.fleet_eyebrow', 'Fleet-wide package analysis')"
+              ></p>
+              <h2
+                class="title is-4 section-heading"
+                x-text="t('ui.report.node_health', 'Node and npm health')"
+              ></h2>
               <pre
                 class="report-detail-content"
                 x-text="nodeFleetDetails()"
@@ -795,25 +966,34 @@
           <div class="level is-mobile mb-4">
             <div class="level-left">
               <div>
-                <p class="eyebrow">Durable history</p>
-                <h2 class="title is-4 section-heading mb-0">
-                  Recent report runs
-                </h2>
+                <p
+                  class="eyebrow"
+                  x-text="t('ui.report.history_eyebrow', 'Durable run log')"
+                ></p>
+                <h2
+                  class="title is-4 section-heading mb-0"
+                  x-text="t('ui.report.recent_runs', 'Recent report runs')"
+                ></h2>
               </div>
             </div>
           </div>
-          <p class="has-text-grey mb-4" x-show="reportHistory.length === 0">
-            Trend points appear here once the report has run.
-          </p>
+          <p
+            class="has-text-grey mb-4"
+            x-show="reportHistory.length === 0"
+            x-text="t('ui.report.trend_empty', 'Trend points appear here once the report has run.')"
+          ></p>
           <div class="report-chart mb-4" x-show="reportHistory.length > 0">
             <canvas
               id="reportHistoryChart"
               role="img"
-              aria-label="Report metrics over time"
+              :aria-label="t('ui.report.chart_aria', 'Report metrics over time')"
             ></canvas>
           </div>
           <template x-if="jobs.length === 0">
-            <p class="has-text-grey">No report runs recorded yet.</p>
+            <p
+              class="has-text-grey"
+              x-text="t('ui.report.no_runs', 'No report runs recorded yet.')"
+            ></p>
           </template>
           <template x-for="job in jobs" :key="job.id">
             <article class="job-row py-3">

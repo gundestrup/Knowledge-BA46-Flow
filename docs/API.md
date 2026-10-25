@@ -255,6 +255,19 @@ Discovery never sends notes, loads weights, downloads models, saves defaults,
 or enumerates the online catalog. Cloud-account authorization is still checked
 by Ollama when the selected model actually runs.
 
+### `GET /api/i18n`
+
+Returns the UI's message catalog for the request's `Accept-Language`
+(`{"locale": "en", "locales": ["en", "da"], "messages": {"<id>": "<text>"}}`;
+plural entries are `{"one": ..., "other": ...}` objects). A `?lang=<tag>`
+query parameter overrides `Accept-Language` — the dashboards use it for the
+header locale picker, whose selection persists in `localStorage` ("automatic"
+negotiates per request). The response carries `Vary: Accept-Language`.
+Shipped catalogs live in `internal/i18n/locales/active.<tag>.yaml` (currently
+`en` and `da`); adding a file localizes every `t()` binding in the dashboards
+without code changes. Missing ids fall back to English — the frontends also
+carry English fallbacks so the page stays readable if the fetch fails.
+
 ### `POST /api/client-log`
 
 Receives the UI's uncaught exceptions and unhandled promise rejections

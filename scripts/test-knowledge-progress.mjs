@@ -39,6 +39,14 @@ assert.deepEqual([...series.handled], [0, 2]);
 assert.deepEqual([...series.applied], [0, 1]);
 assert.deepEqual([...series.backlog], [3, 2]);
 
+// The all-time suggestion/handled counters render as compact text beside the
+// "Suggestions to review" stat — monotone totals, no longer charted lines.
+assert.equal(dashboard.reviewTotalsText(), "4 suggestions · 2 handled");
+dashboard.progressDays = [
+  { date: "2026-10-03", suggestions: 7640, handled: 7560 },
+];
+assert.equal(dashboard.reviewTotalsText(), "7.6K suggestions · 7.6K handled");
+
 // renderProgressChart is a no-op without Chart.js/canvas in the vm context —
 // chart instances live in module scope, not on the reactive component.
 dashboard.renderProgressChart();

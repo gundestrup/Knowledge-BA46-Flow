@@ -2,9 +2,60 @@ window.landingDashboard = () => ({
   overview: null,
   loading: true,
   error: "",
+  messages: {},
+  locale:
+    typeof localStorage !== "undefined"
+      ? localStorage.getItem("kbm.locale") || ""
+      : "",
+  locales: ["en"],
 
   async init() {
-    await this.refresh();
+    await Promise.all([this.loadI18n(), this.refresh()]);
+  },
+
+  async loadI18n() {
+    try {
+      const query = this.locale
+        ? `?lang=${encodeURIComponent(this.locale)}`
+        : "";
+      const data = await this.requestJSON(`/api/i18n${query}`);
+      this.messages = data.messages || {};
+      if (data.locales?.length) this.locales = data.locales;
+    } catch {
+      this.messages = {};
+    }
+  },
+
+  // setLocale persists the UI locale choice across pages; "" negotiates the
+  // browser's Accept-Language again.
+  async setLocale(value) {
+    this.locale = value;
+    try {
+      if (value) localStorage.setItem("kbm.locale", value);
+      else localStorage.removeItem("kbm.locale");
+    } catch {
+      /* storage may be unavailable; choice just won't persist */
+    }
+    await this.loadI18n();
+  },
+
+  localeLabel(tag) {
+    return { en: "English", da: "Dansk" }[tag] || tag;
+  },
+
+  // t resolves a catalog id from /api/i18n — the English fallback keeps the
+  // page readable before the fetch lands and if the endpoint ever fails.
+  t(id, fallback, params) {
+    let msg = this.messages[id];
+    if (msg != null && typeof msg === "object") {
+      msg = msg[params?.Count === 1 ? "one" : "other"] ?? msg.other;
+    }
+    const out = typeof msg === "string" ? msg : fallback;
+    if (out == null) return id;
+    return out.replace(
+      /\{\{\.(\w+)\}\}/g,
+      (_, name) => params?.[name] ?? `{{.${name}}}`,
+    );
   },
 
   async requestJSON(url) {
@@ -16,7 +67,16 @@ window.landingDashboard = () => ({
       body = {};
     }
     if (!response.ok) {
-      throw new Error(body.error || `Request failed (HTTP ${response.status})`);
+      throw new Error(
+        body.error ||
+          this.t(
+            "ui.common.request_failed",
+            "Request failed (HTTP {{.Status}})",
+            {
+              Status: response.status,
+            },
+          ),
+      );
     }
     return body;
   },
@@ -67,32 +127,50 @@ window.landingDashboard = () => ({
 
   cycleAge() {
     const days = this.knowledge.days_since_last_cycle;
-    if (days === null || days === undefined) return "Never";
-    if (days === 0) return "Today";
-    return `${days} ${days === 1 ? "day" : "days"}`;
+    if (days === null || days === undefined)
+      return this.t("ui.landing.cycle_never", "Never");
+    if (days === 0) return this.t("ui.landing.cycle_today", "Today");
+    return this.t("ui.landing.cycle_days", "{{.Count}} day(s)", {
+      Count: days,
+    });
   },
 
   lastCycleText() {
     const at = this.knowledge.last_cycle_at;
     return at
-      ? `Last successful run · ${this.formatTime(at)}`
-      : "No full run recorded yet";
+      ? this.t("ui.landing.last_run", "Last successful run · {{.Time}}", {
+          Time: this.formatTime(at),
+        })
+      : this.t("ui.landing.no_full_run", "No full run recorded yet");
   },
 
   reportFreshness() {
-    if (!this.report.generated_at) return "No repository snapshot yet";
+    if (!this.report.generated_at)
+      return this.t("ui.landing.no_snapshot", "No repository snapshot yet");
     const reference = this.report.comparison;
-    const local = `Local scan · ${this.formatTime(this.report.generated_at)}`;
+    const local = this.t("ui.landing.local_scan", "Local scan · {{.Time}}", {
+      Time: this.formatTime(this.report.generated_at),
+    });
     const stale = this.report.summary?.remote_stale_repositories || 0;
-    const staleText = stale > 0 ? ` · ${stale} stale remote repos` : "";
+    const staleText =
+      stale > 0
+        ? this.t(
+            "ui.landing.stale_remotes",
+            " · {{.Count}} stale remote repos",
+            {
+              Count: stale,
+            },
+          )
+        : "";
     if (this.report.remote_enabled) {
-      return `${local} · remote checks · ${this.formatTime(this.report.remote_generated_at)}${staleText}`;
+      return `${local}${this.t("ui.landing.remote_checks", " · remote checks · {{.Time}}", { Time: this.formatTime(this.report.remote_generated_at) })}${staleText}`;
     }
     if (this.report.remote_generated_at) {
-      return `${local} · remote last refreshed · ${this.formatTime(this.report.remote_generated_at)}${staleText}`;
+      return `${local}${this.t("ui.landing.remote_refreshed", " · remote last refreshed · {{.Time}}", { Time: this.formatTime(this.report.remote_generated_at) })}${staleText}`;
     }
-    if (!reference?.available) return `${local} · remote results unavailable`;
-    return `${local} · Ruby reference · ${this.formatTime(reference.generated_at)}`;
+    if (!reference?.available)
+      return `${local}${this.t("ui.landing.remote_unavailable", " · remote results unavailable")}`;
+    return `${local}${this.t("ui.landing.ruby_reference", " · Ruby reference · {{.Time}}", { Time: this.formatTime(reference.generated_at) })}`;
   },
 
   formatTime(value) {

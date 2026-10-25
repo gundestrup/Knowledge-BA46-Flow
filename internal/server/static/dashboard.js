@@ -3,6 +3,13 @@
 // is a known "Maximum call stack size exceeded" trigger.
 const charts = new Map();
 
+// Compact counts pin the "en" locale so the suffix stays K/M regardless of
+// browser language — the rest of the UI is English-only.
+const compactCount = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+
 window.knowledgeDashboard = () => ({
   documents: [],
   suggestions: [],
@@ -38,9 +45,16 @@ window.knowledgeDashboard = () => ({
   externalDefault: "",
   estimate: null,
   estimating: false,
+  messages: {},
+  locale:
+    typeof localStorage !== "undefined"
+      ? localStorage.getItem("kbm.locale") || ""
+      : "",
+  locales: ["en"],
 
   async init() {
     await Promise.all([
+      this.loadI18n(),
       this.loadDocuments(),
       this.loadSuggestions(),
       this.loadAcceptedCount(),
@@ -48,6 +62,53 @@ window.knowledgeDashboard = () => ({
       this.loadModels(),
       this.loadProgress(),
     ]);
+  },
+
+  async loadI18n() {
+    try {
+      const query = this.locale
+        ? `?lang=${encodeURIComponent(this.locale)}`
+        : "";
+      const data = await this.requestJSON(`/api/i18n${query}`);
+      this.messages = data.messages || {};
+      if (data.locales?.length) this.locales = data.locales;
+    } catch {
+      this.messages = {};
+    }
+  },
+
+  // setLocale persists the UI locale choice across pages; "" negotiates the
+  // browser's Accept-Language again.
+  async setLocale(value) {
+    this.locale = value;
+    try {
+      if (value) localStorage.setItem("kbm.locale", value);
+      else localStorage.removeItem("kbm.locale");
+    } catch {
+      /* storage may be unavailable; choice just won't persist */
+    }
+    await this.loadI18n();
+  },
+
+  localeLabel(tag) {
+    return { en: "English", da: "Dansk" }[tag] || tag;
+  },
+
+  // t resolves a catalog id from /api/i18n. The English fallback keeps the
+  // page readable before the fetch lands and if the endpoint ever fails;
+  // {{.Field}} placeholders interpolate from params, and a params.Count
+  // picks the one/other plural form like go-i18n.
+  t(id, fallback, params) {
+    let msg = this.messages[id];
+    if (msg != null && typeof msg === "object") {
+      msg = msg[params?.Count === 1 ? "one" : "other"] ?? msg.other;
+    }
+    const out = typeof msg === "string" ? msg : fallback;
+    if (out == null) return id;
+    return out.replace(
+      /\{\{\.(\w+)\}\}/g,
+      (_, name) => params?.[name] ?? `{{.${name}}}`,
+    );
   },
 
   async loadModels(discover = false) {
@@ -65,10 +126,18 @@ window.knowledgeDashboard = () => ({
       this.externalDefault = data.external_default || "";
       this.discovered = Boolean(data.discovered);
       this.modelNotice = discover
-        ? `Ollama models refreshed. ${this.unverifiedModels.length} unverified model(s) excluded. No models downloaded.`
+        ? this.t(
+            "ui.kb.models_refreshed",
+            "Ollama models refreshed. {{.Count}} unverified model(s) excluded. No models downloaded.",
+            { Count: this.unverifiedModels.length },
+          )
         : "";
     } catch (error) {
-      this.error = `Could not query models: ${error.message}`;
+      this.error = this.t(
+        "ui.kb.models_query_failed",
+        "Could not query models: {{.Error}}",
+        { Error: error.message },
+      );
     } finally {
       this.discovering = false;
     }
@@ -81,7 +150,10 @@ window.knowledgeDashboard = () => ({
       {
         name: selected,
         locality: "unknown",
-        error: "Selected model is no longer available; choose another model.",
+        error: this.t(
+          "ui.kb.model_unavailable_selected",
+          "Selected model is no longer available; choose another model.",
+        ),
       },
     ];
   },
@@ -95,8 +167,12 @@ window.knowledgeDashboard = () => ({
   },
 
   modelLabel(model) {
-    const source = model.configured ? "configured" : "discovered";
-    const verified = model.verified ? "" : "; unverified";
+    const source = model.configured
+      ? this.t("ui.kb.model_source_configured", "configured")
+      : this.t("ui.kb.model_source_discovered", "discovered");
+    const verified = model.verified
+      ? ""
+      : this.t("ui.kb.model_unverified_suffix", "; unverified");
     return `${model.name} (${model.locality}; ${source}${verified})`;
   },
 
@@ -105,13 +181,19 @@ window.knowledgeDashboard = () => ({
   generationLabel(model) {
     const stamp = this.generationStamp();
     const used = stamp && this.sameModel(model.name, stamp.model);
-    return this.modelLabel(model) + (used ? " — last used" : "");
+    return (
+      this.modelLabel(model) +
+      (used ? this.t("ui.kb.last_used_suffix", " — last used") : "")
+    );
   },
 
   embedLabel(model) {
     const stamp = this.stamps.embedded;
     const used = stamp && this.sameModel(model.name, stamp.model);
-    return this.modelLabel(model) + (used ? " — last used" : "");
+    return (
+      this.modelLabel(model) +
+      (used ? this.t("ui.kb.last_used_suffix", " — last used") : "")
+    );
   },
 
   // `discovered` is passed in from the template: reads through `this`
@@ -123,8 +205,10 @@ window.knowledgeDashboard = () => ({
   embeddingDefaultLabel() {
     const name = this.taskInfo.embed?.default;
     return name
-      ? `Configured default: ${name}`
-      : "No configured embedding model";
+      ? this.t("ui.kb.configured_default", "Configured default: {{.Model}}", {
+          Model: name,
+        })
+      : this.t("ui.kb.no_embedding_model", "No configured embedding model");
   },
 
   // sameModel compares names loosely: "model" and "model:latest" are the
@@ -154,7 +238,11 @@ window.knowledgeDashboard = () => ({
   generationStampLine() {
     const stamp = this.generationStamp();
     return stamp
-      ? `Last run for this task: ${stamp.model} (${stamp.docs} docs)`
+      ? this.t(
+          "ui.kb.last_run_task",
+          "Last run for this task: {{.Model}} ({{.Docs}} docs)",
+          { Model: stamp.model, Docs: stamp.docs },
+        )
       : "";
   },
 
@@ -192,7 +280,11 @@ window.knowledgeDashboard = () => ({
   embedStampLine() {
     const stamp = this.stamps.embedded;
     return stamp
-      ? `Last embedding run: ${stamp.model} (${stamp.docs} docs)`
+      ? this.t(
+          "ui.kb.last_embedding_run",
+          "Last embedding run: {{.Model}} ({{.Docs}} docs)",
+          { Model: stamp.model, Docs: stamp.docs },
+        )
       : "";
   },
 
@@ -243,13 +335,24 @@ window.knowledgeDashboard = () => ({
     const lines = [];
     for (const stage of ["enrich", "embed", "expand", "freshness", "analyze"]) {
       if (!e.pending || !(stage in e.pending)) continue;
-      let line = `${stage}: ${e.pending[stage]} document(s) queued`;
+      let line = this.t(
+        "ui.kb.estimate_docs_queued",
+        "{{.Stage}}: {{.Count}} document(s) queued",
+        { Stage: stage, Count: e.pending[stage] },
+      );
       if (stage === "analyze" && e.dependents > 0) {
-        line += ` +${e.dependents} unchanged via changed evidence → ${e.analyze_total} total`;
+        line += this.t(
+          "ui.kb.estimate_dependents",
+          " +{{.Dependents}} unchanged via changed evidence → {{.Total}} total",
+          { Dependents: e.dependents, Total: e.analyze_total },
+        );
       }
       lines.push(line);
     }
-    if (lines.length === 0) lines.push("Nothing queued for this selection.");
+    if (lines.length === 0)
+      lines.push(
+        this.t("ui.kb.estimate_empty", "Nothing queued for this selection."),
+      );
     return lines;
   },
 
@@ -263,7 +366,11 @@ window.knowledgeDashboard = () => ({
       const model = models.find((m) => m.name === name);
       if (!model || this.modelUnavailable(model, this.discovered)) {
         throw new Error(
-          `${name} is unavailable or unverified. Refresh models or choose another.`,
+          this.t(
+            "ui.kb.model_unavailable",
+            "{{.Model}} is unavailable or unverified. Refresh models or choose another.",
+            { Model: name },
+          ),
         );
       }
       const remote =
@@ -272,7 +379,11 @@ window.knowledgeDashboard = () => ({
         (model.verified && model.locality === "unknown");
       if (remote && !cloudConsent) {
         throw new Error(
-          `${name} may send document content off-machine. ${hint}`,
+          this.t(
+            "ui.kb.model_off_machine",
+            "{{.Model}} may send document content off-machine. {{.Hint}}",
+            { Model: name, Hint: hint },
+          ),
         );
       }
     };
@@ -282,8 +393,14 @@ window.knowledgeDashboard = () => ({
         this.model,
         op === "enrich" ? this.allowCloud : this.external,
         op === "enrich"
-          ? "Enable cloud/remote embeddings and enrichment."
-          : "Enable the external generation lane.",
+          ? this.t(
+              "ui.kb.hint_enable_cloud",
+              "Enable cloud/remote embeddings and enrichment.",
+            )
+          : this.t(
+              "ui.kb.hint_enable_external",
+              "Enable the external generation lane.",
+            ),
       );
     }
     if (["analyze", "run", "all", "embed"].includes(op)) {
@@ -291,7 +408,10 @@ window.knowledgeDashboard = () => ({
         this.embeddingModels,
         this.embedModel,
         this.allowCloud,
-        "Enable cloud/remote embeddings and enrichment.",
+        this.t(
+          "ui.kb.hint_enable_cloud",
+          "Enable cloud/remote embeddings and enrichment.",
+        ),
       );
     }
   },
@@ -408,8 +528,6 @@ window.knowledgeDashboard = () => ({
           datasets: [
             dataset("Notes", "notes", "#285444"),
             dataset("Analyzed", "analyzed", "#18352d"),
-            dataset("Suggestions", "suggestions", "#d87536"),
-            dataset("Handled", "handled", "#68756e"),
             dataset("Applied", "applied", "#5b7f95"),
             dataset("Review backlog", "backlog", "#a64035"),
           ],
@@ -422,6 +540,22 @@ window.knowledgeDashboard = () => ({
           plugins: { legend: { position: "bottom" } },
         },
       }),
+    );
+  },
+
+  // reviewTotalsText renders the all-time suggestion counters as text: they
+  // are monotone totals that never trend back to zero, so they sit beside
+  // the review stat instead of cluttering the progress chart.
+  reviewTotalsText() {
+    const series = this.progressSeries();
+    const total = (key) => series[key].at(-1) ?? 0;
+    return this.t(
+      "ui.kb.review_totals",
+      "{{.Suggestions}} suggestions · {{.Handled}} handled",
+      {
+        Suggestions: compactCount.format(total("suggestions")),
+        Handled: compactCount.format(total("handled")),
+      },
     );
   },
 
@@ -483,7 +617,12 @@ window.knowledgeDashboard = () => ({
     try {
       if (llmOps.includes(op)) {
         if (this.discovering)
-          throw new Error("Wait for model discovery to finish.");
+          throw new Error(
+            this.t(
+              "ui.kb.wait_discovery",
+              "Wait for model discovery to finish.",
+            ),
+          );
         this.checkModelSelection(op);
       }
       await this.requestJSON("/api/ops", {
@@ -502,7 +641,11 @@ window.knowledgeDashboard = () => ({
         }),
       });
       this.busy = true;
-      this.notice = `${op} started. The page will refresh when it finishes.`;
+      this.notice = this.t(
+        "ui.kb.op_started",
+        "{{.Op}} started. The page will refresh when it finishes.",
+        { Op: op },
+      );
       await this.refreshJobs();
     } catch (error) {
       this.error = error.message;
@@ -513,9 +656,17 @@ window.knowledgeDashboard = () => ({
     this.error = "";
     const forced = this.busy
       ? window.confirm(
-          "An operation is running — stop the server anyway? Its job will be marked failed.",
+          this.t(
+            "ui.kb.stop_busy_confirm",
+            "An operation is running — stop the server anyway? Its job will be marked failed.",
+          ),
         )
-      : window.confirm("Stop the KBM-flow server? This page will go offline.");
+      : window.confirm(
+          this.t(
+            "ui.kb.stop_confirm",
+            "Stop the KBM-flow server? This page will go offline.",
+          ),
+        );
     if (!forced) return;
     try {
       await this.requestJSON(`/api/shutdown${this.busy ? "?force=1" : ""}`, {
@@ -523,8 +674,10 @@ window.knowledgeDashboard = () => ({
       });
       this.stopping = true;
       clearTimeout(this.pollTimer);
-      this.notice =
-        "Server is stopping — this page will go offline. Restart with `KBM-flow serve`.";
+      this.notice = this.t(
+        "ui.kb.stopping_notice",
+        "Server is stopping — this page will go offline. Restart with `KBM-flow serve`.",
+      );
     } catch (error) {
       this.error = error.message;
     }
@@ -565,7 +718,11 @@ window.knowledgeDashboard = () => ({
       const suggestion = await this.requestJSON(`/api/suggestions/${id}`);
       this.proposals[id] = suggestion.proposed_content || "";
     } catch (error) {
-      this.proposals[id] = `Unable to load proposed content: ${error.message}`;
+      this.proposals[id] = this.t(
+        "ui.kb.proposal_load_failed",
+        "Unable to load proposed content: {{.Error}}",
+        { Error: error.message },
+      );
     }
   },
 
@@ -574,8 +731,11 @@ window.knowledgeDashboard = () => ({
   // reads inside a method are never tracked, so the binding went stale.
   // Pass the reactive value in from the expression instead.
   proposalText(content) {
-    if (content === undefined || content === null) return "Loading…";
-    return content || "(No proposed content)";
+    if (content === undefined || content === null)
+      return this.t("ui.kb.loading", "Loading…");
+    return (
+      content || this.t("ui.kb.no_proposed_content", "(No proposed content)")
+    );
   },
 
   async decide(id, status) {
@@ -585,7 +745,10 @@ window.knowledgeDashboard = () => ({
     let note = "";
     if (status === "rejected") {
       const answer = window.prompt(
-        "Optional: why is this wrong? (shown to the model on future runs)",
+        this.t(
+          "ui.kb.reject_prompt",
+          "Optional: why is this wrong? (shown to the model on future runs)",
+        ),
         "",
       );
       if (answer === null) return; // Cancel aborts the rejection, not just the note
@@ -597,7 +760,11 @@ window.knowledgeDashboard = () => ({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status, note }),
       });
-      this.notice = `Suggestion #${id} ${status}.`;
+      this.notice = this.t(
+        "ui.kb.suggestion_decided",
+        "Suggestion #{{.Id}} {{.Status}}.",
+        { Id: id, Status: status },
+      );
       await this.refreshData();
     } catch (error) {
       this.error = error.message;
@@ -608,7 +775,11 @@ window.knowledgeDashboard = () => ({
     if (this.acceptedCount === 0 || this.applying) return;
     if (
       !window.confirm(
-        `Apply ${this.acceptedCount} accepted suggestion(s) to the repository?`,
+        this.t(
+          "ui.kb.apply_confirm",
+          "Apply {{.Count}} accepted suggestion(s) to the repository?",
+          { Count: this.acceptedCount },
+        ),
       )
     ) {
       return;
@@ -624,7 +795,11 @@ window.knowledgeDashboard = () => ({
       const superseded = results.filter(
         (result) => result.status === "superseded",
       ).length;
-      this.notice = `Apply finished: ${applied} applied, ${failed} failed, ${superseded} superseded.`;
+      this.notice = this.t(
+        "ui.kb.apply_finished",
+        "Apply finished: {{.Applied}} applied, {{.Failed}} failed, {{.Superseded}} superseded.",
+        { Applied: applied, Failed: failed, Superseded: superseded },
+      );
       await this.refreshData();
     } catch (error) {
       this.error = error.message;
@@ -634,8 +809,10 @@ window.knowledgeDashboard = () => ({
   },
 
   applyLabel() {
-    if (this.applying) return "Applying…";
-    return `Apply accepted (${this.acceptedCount})`;
+    if (this.applying) return this.t("ui.kb.applying", "Applying…");
+    return this.t("ui.kb.apply_accepted", "Apply accepted ({{.Count}})", {
+      Count: this.acceptedCount,
+    });
   },
 
   documentTags(document) {
@@ -669,9 +846,15 @@ window.knowledgeDashboard = () => ({
     if (!check) return "";
     const dead = (check.dead || []).length;
     const unverified = (check.unverified || []).length;
-    if (dead > 0) return `${dead} dead link(s)`;
-    if (unverified > 0) return `${unverified} unverified link(s)`;
-    return "links ok";
+    if (dead > 0)
+      return this.t("ui.kb.dead_links", "{{.Count}} dead link(s)", {
+        Count: dead,
+      });
+    if (unverified > 0)
+      return this.t("ui.kb.unverified_links", "{{.Count}} unverified link(s)", {
+        Count: unverified,
+      });
+    return this.t("ui.kb.links_ok", "links ok");
   },
 
   freshnessBadge(document) {
@@ -679,13 +862,17 @@ window.knowledgeDashboard = () => ({
     if (!fresh) return "";
     const flags = (fresh.flags || []).length;
     if (fresh.verdict === "review" || flags > 0) {
-      return `freshness: ${flags} flag(s)`;
+      return this.t("ui.kb.freshness_flags", "freshness: {{.Count}} flag(s)", {
+        Count: flags,
+      });
     }
-    return "freshness: current";
+    return this.t("ui.kb.freshness_current", "freshness: current");
   },
 
   confidenceLabel(suggestion) {
-    return Math.round(suggestion.confidence * 100) + "% confidence";
+    return this.t("ui.kb.confidence", "{{.Pct}}% confidence", {
+      Pct: Math.round(suggestion.confidence * 100),
+    });
   },
 
   // actionIcon maps a suggestion action to its Lucide mark so the tag reads
@@ -720,13 +907,13 @@ window.knowledgeDashboard = () => ({
       document.seen_body_sha256 &&
       document.body_sha256 !== document.seen_body_sha256
     )
-      return "content changed";
+      return this.t("ui.kb.change_content", "content changed");
     if (
       document.seen_fm_sha256 &&
       document.fm_sha256 !== document.seen_fm_sha256
     )
-      return "metadata changed";
-    return "changed";
+      return this.t("ui.kb.change_metadata", "metadata changed");
+    return this.t("ui.kb.change_generic", "changed");
   },
 
   jobTagClass(status) {

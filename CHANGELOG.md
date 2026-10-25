@@ -29,9 +29,33 @@ tag is prepared.
   file that already shared `OLLAMA_BASE_URL`/`KBM_*` between KBM-flow and the
   MCP server, and the place `OLLAMA_API_KEY` belongs, since the key is
   deliberately not a `config.json` field.
+- i18n plumbing (`internal/i18n`, go-i18n + `golang.org/x/text` negotiation):
+  all web-UI chrome strings on `/`, `/knowledge` and `/report` now resolve
+  through a `t()` helper fed by `GET /api/i18n` (`Accept-Language`
+  negotiation, `Vary` set), and CLI `Short`/flag-usage text goes through the
+  same catalog via `i18n.T` after env-locale resolution
+  (`KBM_LANG` → `LC_ALL` → `LC_MESSAGES` → `LANG`). Catalogs live in
+  `internal/i18n/locales/active.<tag>.yaml` (`en` + a complete `da`
+  translation); a new file localizes both surfaces without code changes.
+  On the web pages the language is chosen by a locale picker in the header
+  (persisted in `localStorage`) or negotiated from the browser's
+  `Accept-Language` when left on automatic; the picker overrides via
+  `GET /api/i18n?lang=<tag>` so a Danish browser can still run the UI in
+  English. Scope boundary: server data values (statuses, job details,
+  reasons), diagnostic detail blocks (`repoDetails`, fleet health dumps),
+  runtime log/error output and `errors.New` text stay English.
+  `scripts/check-i18n.mjs` (wired into `npm run check:js`) fails on ids with
+  no catalog entry, dead catalog keys, secondary-catalog keys unknown to
+  English, and plural/string shape mismatches.
 
 ### Changed
 
+- The `/knowledge` progress chart no longer plots the cumulative
+  `suggestions`/`handled` counters — monotone totals that never return to
+  zero duplicated each other's climb and obscured the trend. They now render
+  as compact totals (e.g. "7.6K suggestions · 7.6K handled") beneath the
+  "Suggestions to review" stat; the chart keeps notes, analyses, applied
+  suggestions and the review-backlog line (`suggestions − handled`).
 - Pending and accepted suggestions for `missing` documents — files the
   scanner no longer sees, like a deleted or moved-away directory — no longer
   appear in the review list or the apply queue; they resurface if the file
