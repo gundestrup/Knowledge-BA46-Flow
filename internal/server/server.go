@@ -101,13 +101,14 @@ func NewMux(c config.Config, db *database.DB, stop chan<- struct{}) http.Handler
 	mux.HandleFunc("GET /api/report/jobs", o.listReportJobs)
 	mux.HandleFunc("GET /api/report/jobs/{id}", o.getReportJob)
 	mux.HandleFunc("POST /api/shutdown", o.shutdown(stop))
-	mux.HandleFunc("GET /knowledge", serveKnowledgeUI)
-	mux.HandleFunc("GET /knowledge/{$}", serveKnowledgeUI)
-	mux.HandleFunc("GET /report", serveReportUI)
-	mux.HandleFunc("GET /report/{$}", serveReportUI)
-	mux.Handle("GET /static/", staticHandler())
+	dev := devStaticFS()
+	mux.HandleFunc("GET /knowledge", servePage(dev, "knowledge.html", knowledgeUI))
+	mux.HandleFunc("GET /knowledge/{$}", servePage(dev, "knowledge.html", knowledgeUI))
+	mux.HandleFunc("GET /report", servePage(dev, "report.html", reportUI))
+	mux.HandleFunc("GET /report/{$}", servePage(dev, "report.html", reportUI))
+	mux.Handle("GET /static/", staticHandler(dev))
 	mux.HandleFunc("POST /api/client-log", clientLog)
-	mux.HandleFunc("GET /{$}", serveLandingUI) // {$} matches the root path only
+	mux.HandleFunc("GET /{$}", servePage(dev, "index.html", landingUI)) // {$} matches the root path only
 	return securityHeaders(requestLog(mux))
 }
 
@@ -177,13 +178,17 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// staticHandler serves locally embedded Bulma and Alpine assets. Keeping them
-// in the binary makes the dashboard usable offline and avoids third-party
-// requests from the user's browser.
-func staticHandler() http.Handler {
-	files, err := fs.Sub(staticFiles, "static")
-	if err != nil {
-		return http.NotFoundHandler()
+// staticHandler serves locally embedded Bulma and Alpine assets — or the dev
+// directory when KBM_DEV_STATIC is set. Keeping them in the binary makes the
+// dashboard usable offline and avoids third-party requests from the user's
+// browser.
+func staticHandler(devFS fs.FS) http.Handler {
+	files := devFS
+	if files == nil {
+		var err error
+		if files, err = fs.Sub(staticFiles, "static"); err != nil {
+			return http.NotFoundHandler()
+		}
 	}
 	return http.StripPrefix("/static/", http.FileServer(http.FS(files)))
 }
@@ -265,26 +270,37 @@ func decide(db *database.DB) http.HandlerFunc {
 	}
 }
 
-// serveLandingUI serves the home page that links to the two workspaces.
-func serveLandingUI(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	// Embedded static page — no user input to escape.
-	// nosemgrep: no-direct-write-to-responsewriter
-	_, _ = w.Write(landingUI)
+// devStaticFS returns a filesystem rooted at the directory named by
+// KBM_DEV_STATIC, or nil when the variable is unset or not a directory.
+// With it set, the UI pages and /static/ assets are read from disk on every
+// request — frontend work then only needs a save and a browser refresh, not
+// a rebuild. Development use only.
+func devStaticFS() fs.FS {
+	dir := os.Getenv("KBM_DEV_STATIC")
+	if dir == "" {
+		return nil
+	}
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		logging.Infof("KBM_DEV_STATIC=%q is not a directory — serving embedded UI assets", dir)
+		return nil
+	}
+	logging.Infof("serving UI assets from %s (KBM_DEV_STATIC dev mode)", dir)
+	return os.DirFS(dir)
 }
 
-func serveKnowledgeUI(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	// Embedded static page — no user input to escape.
-	// nosemgrep: no-direct-write-to-responsewriter
-	_, _ = w.Write(knowledgeUI)
-}
-
-func serveReportUI(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	// Embedded static page — no user input to escape.
-	// nosemgrep: no-direct-write-to-responsewriter
-	_, _ = w.Write(reportUI)
+// servePage serves one of the UI pages: from devFS when KBM_DEV_STATIC is
+// set, else the embedded copy.
+func servePage(devFS fs.FS, name string, embedded []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if devFS != nil {
+			http.ServeFileFS(w, r, devFS, name)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// Embedded static page — no user input to escape.
+		// nosemgrep: no-direct-write-to-responsewriter
+		_, _ = w.Write(embedded)
+	}
 }
 
 func reportData(c config.Config, db *database.DB) http.HandlerFunc {

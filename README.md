@@ -171,6 +171,10 @@ Coverage helps find untested behavior; it is not a percentage gate.
 `make frontend-check` requires Node.js 26.12+ and npm; `.node-version` pins the
 local Node release used for frontend maintenance.
 
+For UI work, `KBM_DEV_STATIC=internal/server/static ./KBM-flow serve` reads the
+three pages and `/static/` assets from disk on every request — save the file
+and refresh the browser, no rebuild (details in `docs/TESTING.md`).
+
 ## Choosing a model
 
 Four independent roles, each its own config field — mix freely:

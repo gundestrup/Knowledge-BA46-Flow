@@ -11,6 +11,10 @@ tag is prepared.
 
 ### Added
 
+- `KBM_DEV_STATIC=<dir>` dev mode for `serve`: the three UI pages and all
+  `/static/` assets are then read from that directory on every request, so
+  frontend edits show on a browser refresh without rebuilding the binary.
+  Unset or non-directory values fall back to the embedded assets.
 - `freshness --web-verify` (also `tasks --web-verify` and
   `"web_verify": true` in `/api/ops` for `freshness`/`all`): each flagged
   claim is queried against Ollama's hosted web search API and a second model

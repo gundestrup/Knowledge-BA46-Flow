@@ -131,6 +131,21 @@ The e2e suite is not part of `make check`: it needs a system browser and a
 longer runtime. Run it after frontend changes, and in particular after any
 edit to Alpine expressions or component methods.
 
+## Frontend dev loop (serve UI from disk)
+
+The UI pages and assets are embedded in the binary, so a rebuild is normally
+needed before an edit is visible. Point `KBM_DEV_STATIC` at the static
+directory and `serve` reads `index.html`, `knowledge.html`, `report.html`,
+and every `/static/` file from disk on each request — save the file and
+refresh the browser; no rebuild or process restart:
+
+```bash
+KBM_DEV_STATIC=internal/server/static ./KBM-flow serve --config config.json
+```
+
+`KBM_DEV_STATIC` is for development only; an unset value or a path that is
+not a directory falls back to the embedded assets.
+
 ## Test-log audit
 
 `go test` buffers a passing package's output and discards it, so a test can

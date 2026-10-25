@@ -576,6 +576,70 @@ func TestUIAndEmbeddedAssetsAreServed(t *testing.T) {
 	}
 }
 
+// KBM_DEV_STATIC switches the UI pages and /static/ assets to a disk
+// directory so frontend edits appear on a browser refresh without a rebuild.
+func TestDevStaticDirServesPagesAndAssets(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("DEV-LANDING-MARKER"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "marker.css"), []byte("/* dev-asset */"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KBM_DEV_STATIC", dir)
+
+	_, _, srv := setup(t)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(res.Body)
+	res.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusOK || string(body) != "DEV-LANDING-MARKER" {
+		t.Fatalf("dev landing status=%d body=%q", res.StatusCode, body)
+	}
+
+	res, err = http.Get(srv.URL + "/static/marker.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err = io.ReadAll(res.Body)
+	res.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusOK || string(body) != "/* dev-asset */" {
+		t.Fatalf("dev static asset status=%d body=%q", res.StatusCode, body)
+	}
+}
+
+// A KBM_DEV_STATIC value that is not a directory falls back to the embedded
+// assets rather than breaking the UI.
+func TestDevStaticDirInvalidFallsBackToEmbedded(t *testing.T) {
+	t.Setenv("KBM_DEV_STATIC", filepath.Join(t.TempDir(), "missing"))
+
+	_, _, srv := setup(t)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(res.Body)
+	res.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(body), `x-data="landingDashboard"`) {
+		t.Fatalf("fallback landing status=%d", res.StatusCode)
+	}
+}
+
 func runReportGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	commandArgs := append([]string{"-C", dir}, args...)
