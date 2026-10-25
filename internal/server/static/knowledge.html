@@ -271,6 +271,18 @@
             />
             Allow cloud/remote embeddings and enrichment for this run
           </label>
+          <label
+            class="checkbox is-size-7 has-text-white-ter mb-2"
+            title="Verify freshness flags against Ollama's hosted web search — flagged claim text (never the whole document) is sent to ollama.com; requires OLLAMA_API_KEY"
+          >
+            <input
+              type="checkbox"
+              x-model="webVerify"
+              @change="estimate = null"
+            />
+            Verify freshness flags via web search (claim text leaves this
+            machine)
+          </label>
           <p class="is-size-7 has-text-white-ter">
             <span class="status-dot" :class="busy ? 'is-warning' : ''"></span>
             <span

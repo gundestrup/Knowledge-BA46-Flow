@@ -344,7 +344,10 @@ The tests cover:
   (nearest-ancestor `STUB.md` lookup, refusal without a template, stub-only
   scope, private-doc skips, reviewable suggestion output), `freshness`
   (`kbm.freshness` write, flag extraction, stub/private skips, empty
-  `target_path` schema constraint and local rejection) and `embed` (lineage
+  `target_path` schema constraint and local rejection, plus the
+  `--web-verify` second pass: fake searcher + dedicated verify-model client,
+  verified verdicts/`verify_model` in `kbm.freshness`, search-failure
+  degradation) and `embed` (lineage
   stamping); plus `/api/models` shape and `/api/ops` task/model validation
 - the ops and CLI layers end-to-end against an `httptest` Ollama server:
   `/api/ops` dispatch for `enrich`/`embed`/`expand`/`freshness`/`all`

@@ -200,7 +200,7 @@ Four independent roles, each its own config field — mix freely:
   **Privacy:** document bodies go to that model's provider — the corpus
   leaves the machine. `no_llm_context` notes stay excluded.
 - `ollama_task_models` — per-task routing on top of the lanes: each task
-  (`enrich`, `analyze`, `expand`, `freshness`, `embed`) may name a default
+  (`enrich`, `analyze`, `expand`, `freshness`, `verify`, `embed`) may name a default
   model plus alternatives, selectable per run via `--model` or the
   dashboard's model picker, or overridden for one run with
   `tasks --model <name>` to run every generation stage through one model.
@@ -320,6 +320,7 @@ enrich    standalone fast-model metadata pass (title/tags)
 embed     recompute embedding vectors for changed documents
 expand    grow stub documents against their category STUB.md templates
 freshness heuristic currentness review; verdict lands in kbm.freshness
+          (--web-verify checks flags against web search via the verify lane)
 tasks     run every configured LLM task in one job
 report    refresh the read-only repository report
 list      show pending suggestions

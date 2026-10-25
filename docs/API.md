@@ -90,8 +90,8 @@ on the next boot.
 Body: `{"op": "<op>"}` where `<op>` is `scan`, `analyze`, `run`,
 `link-check`, `enrich`, `embed`, `expand`, `freshness` or `all`.
 Optional fields include `model`, `embed_model`, `external`, `allow_cloud`,
-`reanalyze` and `reanalyze_all`. Model capability and remote-data consent are
-validated before the background job is accepted.
+`web_verify`, `reanalyze` and `reanalyze_all`. Model capability and
+remote-data consent are validated before the background job is accepted.
 
 - `link-check` probes external body URLs and writes the verdicts into each
   note's `kbm.link_check` frontmatter block (tool-owned; never changes the
@@ -114,6 +114,16 @@ full refresh is worth the cost. `"external": true` runs the lane-capable ops
 enhanced tasks. Without an explicit `"model"` it requires
 `ollama_model_external`; a verified explicit override can select another
 cloud model while retaining external analysis lineage.
+
+For `freshness` and `all`, `"web_verify": true` checks each flagged claim
+against Ollama's hosted web search: claim text (never the whole document) is
+sent to `ollama.com`, and a second model pass judges every flag `stale`,
+`current` or `unverifiable` with evidence and source recorded in
+`kbm.freshness`. That pass runs on its own model lane —
+`ollama_task_models.verify`, falling back to the external lane and then
+`ollama_model`; a remote verify model needs `external: true` like any cloud
+generation. It requires `OLLAMA_API_KEY` in the environment or a `.env`
+file next to the config; other ops reject it with `400`.
 
 `"model": "<name>"` selects the configured model for an op's generation
 stage(s); for `all`, it pins every generation task to that model. The `embed`

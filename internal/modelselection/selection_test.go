@@ -182,3 +182,32 @@ func TestPrepareRejectsUnsupportedOptions(t *testing.T) {
 		t.Fatal("enrichment must use --allow-cloud rather than --external")
 	}
 }
+
+func TestPrepareValidatesVerifyLaneConsent(t *testing.T) {
+	server := modelServer(t)
+	defer server.Close()
+	c := baseConfig(server.URL)
+	c.OllamaModelExternal = "" // freshness resolves to local base-local
+	c.OllamaTaskModels = map[string][]string{config.TaskVerify: {"cloud-gen:cloud"}}
+
+	if _, err := Prepare(context.Background(), c, "freshness", Options{WebVerify: true}); err == nil ||
+		!strings.Contains(err.Error(), "requires explicit --external consent") {
+		t.Fatalf("a cloud verify default must demand consent, got %v", err)
+	}
+	// The same remote verify lane is not validated when verification is not
+	// requested — the unused option cannot demand consent by itself.
+	c.OllamaTaskModels[config.TaskVerify] = []string{"base-local"}
+	if _, err := Prepare(context.Background(), c, "freshness", Options{WebVerify: true}); err != nil {
+		t.Fatalf("a local verify lane should pass: %v", err)
+	}
+}
+
+func TestPrepareRejectsWebVerifyOnOtherOps(t *testing.T) {
+	server := modelServer(t)
+	defer server.Close()
+	c := baseConfig(server.URL)
+	if _, err := Prepare(context.Background(), c, "expand", Options{WebVerify: true}); err == nil ||
+		!strings.Contains(err.Error(), "does not support web verification") {
+		t.Fatalf("web_verify on a non-freshness op must be rejected, got %v", err)
+	}
+}

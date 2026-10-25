@@ -92,7 +92,8 @@ Beyond the `scan`/`analyze`/`run` cycle, five focused passes run individual
 LLM tasks. Each is incremental against its own lineage columns (per-document
 `<task>_sha256`/`<task>_model`), accepts `--reanalyze`, `--reanalyze-all`,
 `--model <name>` (per-run override — a configured or installed model).
-`--external` is available on `expand`, `freshness` and `tasks`. `enrich` and
+`--external` is available on `expand`, `freshness` and `tasks`, and
+`--web-verify` on `freshness` and `tasks`. `enrich` and
 `embed` accept `--allow-cloud` for explicitly selected remote models. Model
 capability and privacy are checked before generation. The dashboard's task +
 model pickers run the same ops via
@@ -118,14 +119,30 @@ model pickers run the same ops via
   configured, else `ollama_model`.
 - **`freshness`** — a heuristic currentness review: the model reads the note
   plus its modification date and `kbm.link_check` result, then flags claims
-  that may be dated (version pins, "latest release", ageing dates). It cannot
-  verify live facts — flags mean "check this", never "this is dead". The
+  that may be dated (version pins, "latest release", ageing dates). Without
+  further options it cannot verify live facts — flags mean "check this",
+  never "this is dead". The
   verdict, timestamp and flag list are recorded in the note's
   `kbm.freshness` block — tool-owned operational metadata, the same
   documented carve-out as `kbm.link_check`, so the write never invalidates
   the content hash — and concrete corrections arrive as normal `freshness`
   suggestions. Lineage stamps `body_sha256`: frontmatter churn does not
   re-date content. Lane default: `ollama_model_external` when configured.
+  With `--web-verify` each flag's claim is sent as a query to Ollama's hosted
+  web search API (bounded to 8 claims × 5 results per document) and a second
+  model pass re-judges every flag against the evidence: `stale`, `current`
+  or `unverifiable` verdicts land in `kbm.freshness` with the evidence and
+  source URL, `verified: true` and `verify_model` mark a completed check, and
+  corrections the evidence supports arrive as ordinary suggestions. The
+  second pass is its own model lane — `ollama_task_models.verify` when
+  configured, else the external lane, else `ollama_model` — so a different
+  model can verify than the one that flags. Only claim text — never
+  the document — leaves the machine, `no_llm_context` documents are skipped
+  before any call as usual, and a search or verdict failure degrades to the
+  unverified first-pass result (`verify_error` in the block) rather than
+  failing the document. Requires `OLLAMA_API_KEY` in the environment or a
+  `.env` file next to the config; `tasks --web-verify` applies the same
+  stage in the batch run.
 - **`tasks`** (op `all`) — run every configured LLM task in one job, cheapest
   first: enrich → embed → expand → freshness → analyze. Tasks without a
   configured model are skipped unless `--model` is given, in which case one
@@ -447,6 +464,11 @@ builds report `dev`.
 - `prompts/analyze.md`: the ordered analysis passes and expected JSON schema.
 - `prompts/enrich.md`: the fast enrichment pass contract — metadata plus a
   `frontmatter_patch` merge, used only when `ollama_model_fast` is configured.
+- `prompts/expand.md` and `prompts/freshness.md`: the task contracts for the
+  `expand` and `freshness` passes.
+- `prompts/freshness-verify.md`: the second freshness pass — re-judges each
+  flagged claim against web search evidence, used only with
+  `freshness --web-verify`.
 
 Prompts can be changed without recompiling — e.g. to tune them for a different `ollama_model`.
 

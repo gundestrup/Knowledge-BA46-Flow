@@ -9,7 +9,8 @@
   "ollama_embed_model": "embeddinggemma:300m",
   "ollama_task_models": {
     "expand": ["gemma3:12b"],
-    "freshness": ["gemma3:12b", "phi4-mini:latest"]
+    "freshness": ["gemma3:12b", "phi4-mini:latest"],
+    "verify": ["gemma3:12b"]
   },
   "ollama_num_ctx": 0,
   "ollama_think": false,
@@ -21,12 +22,7 @@
   "max_document_bytes": 200000,
   "extensions": [".md", ".markdown"],
   "exclude": ["basic", "intermediate", "e2e", "llm-eval"],
-  "exclude_directories": [
-    ".git",
-    ".kbm-trash",
-    "node_modules",
-    "vendor"
-  ],
+  "exclude_directories": [".git", ".kbm-trash", "node_modules", "vendor"],
   "trash_directory": ".kbm-trash",
   "http_addr": "127.0.0.1:8081",
   "mcp_server": "knowledge-base-mcp-server"

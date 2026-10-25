@@ -26,6 +26,7 @@ import (
 	"knowledge-ba46-flow/internal/scanner"
 	"knowledge-ba46-flow/internal/similarity"
 	"knowledge-ba46-flow/internal/taxonomy"
+	"knowledge-ba46-flow/internal/websearch"
 )
 
 // Generator produces a completion for a prompt; *ollama.Client implements it.
@@ -33,6 +34,14 @@ import (
 // fake — the analyzer never depends on HTTP.
 type Generator interface {
 	Generate(ctx context.Context, prompt string, format json.RawMessage) (string, error)
+}
+
+// Searcher answers one bounded web search for evidence about a claim —
+// implemented by *websearch.Client. It is a deliberate egress boundary (the
+// hosted API, not the local model server), so a client is only attached when
+// a run explicitly opts into verification.
+type Searcher interface {
+	Search(ctx context.Context, query string, maxResults int) ([]websearch.Result, error)
 }
 
 // Embedder produces a semantic embedding vector for one text — implemented
@@ -44,11 +53,17 @@ type Embedder interface {
 
 // Generators carries the model clients for the two passes. Enrich may be nil
 // (or the same client as Analysis) — the enrichment pass only runs when a
-// distinct ollama_model_fast is configured anyway. Embed may be nil.
+// distinct ollama_model_fast is configured anyway. Embed may be nil. Search
+// and Verify may be nil; the freshness verify stage requires both when
+// RunOptions.WebVerify is set — Verify is the model that re-judges flags
+// against the search evidence, independently routed from Analysis via
+// ollama_task_models.verify.
 type Generators struct {
 	Analysis Generator
 	Enrich   Generator
 	Embed    Embedder
+	Search   Searcher
+	Verify   Generator
 }
 
 // llmSuggestion and llmResult mirror the JSON contract defined in prompts/analyze.md.
@@ -245,6 +260,9 @@ func Run(ctx context.Context, c config.Config, db *database.DB, client Generator
 // left untouched. Model is a per-run override naming any configured model —
 // when set it drives every generation stage of that run ("one model for all
 // tasks"). EnrichOnly restricts the run to the fast enrichment pass.
+// WebVerify is an explicit opt-in for the freshness task: flagged claims are
+// sent as queries to the hosted web search API (claim text leaves the
+// machine) and a second model pass judges each flag against the evidence.
 type RunOptions struct {
 	Reanalyze    bool
 	ReanalyzeAll bool
@@ -253,6 +271,7 @@ type RunOptions struct {
 	Model        string
 	EmbedModel   string
 	AllowCloud   bool
+	WebVerify    bool
 	Progress     func(Progress)
 }
 

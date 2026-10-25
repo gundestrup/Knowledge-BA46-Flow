@@ -9,6 +9,27 @@ tag is prepared.
 
 ## [Unreleased]
 
+### Added
+
+- `freshness --web-verify` (also `tasks --web-verify` and
+  `"web_verify": true` in `/api/ops` for `freshness`/`all`): each flagged
+  claim is queried against Ollama's hosted web search API and a second model
+  pass (`prompts/freshness-verify.md`) re-judges it `stale`, `current` or
+  `unverifiable` with evidence and source recorded in `kbm.freshness`.
+  The verification pass is its own task lane: `ollama_task_models.verify`
+  sets the model that re-judges evidence independently of the model that
+  flagged (external lane → `ollama_model` fallback), and its choice is
+  recorded as `verify_model`. Evidence-backed corrections arrive as normal
+  reviewable suggestions; a
+  search or verdict failure degrades to the unverified first-pass result.
+  Requires `OLLAMA_API_KEY` — claim text, never the whole document, leaves
+  the machine and `no_llm_context` documents are skipped as usual.
+- A `.env` file next to the JSON config is now read for env-style values the
+  real environment does not carry (real env always wins) — the compose-style
+  file that already shared `OLLAMA_BASE_URL`/`KBM_*` between KBM-flow and the
+  MCP server, and the place `OLLAMA_API_KEY` belongs, since the key is
+  deliberately not a `config.json` field.
+
 ### Changed
 
 - Pending and accepted suggestions for `missing` documents — files the

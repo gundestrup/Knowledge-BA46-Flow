@@ -28,7 +28,7 @@ func modelsData(c config.Config, db *database.DB) http.HandlerFunc {
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		tasks := map[string]taskInfo{}
-		for _, task := range []string{config.TaskEnrich, config.TaskAnalyze, config.TaskExpand, config.TaskFreshness, config.TaskEmbed} {
+		for _, task := range []string{config.TaskEnrich, config.TaskAnalyze, config.TaskExpand, config.TaskFreshness, config.TaskVerify, config.TaskEmbed} {
 			options := c.TaskModelOptions(task, false)
 			info := taskInfo{Options: options}
 			if len(options) > 0 {

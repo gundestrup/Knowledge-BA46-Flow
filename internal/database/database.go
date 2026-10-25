@@ -611,12 +611,12 @@ func renameByHash(ctx context.Context, tx *sql.Tx, doc Document, seen string) (b
 	for rows.Next() {
 		var p string
 		if err := rows.Scan(&p); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return false, err
 		}
 		paths = append(paths, p)
 	}
-	rows.Close()
+	_ = rows.Close() // rows.Err() below is the meaningful signal
 	if err := rows.Err(); err != nil || len(paths) != 1 {
 		return false, err
 	}

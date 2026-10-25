@@ -24,6 +24,7 @@ import (
 	repositoryreport "knowledge-ba46-flow/internal/report"
 	"knowledge-ba46-flow/internal/review"
 	"knowledge-ba46-flow/internal/scanner"
+	"knowledge-ba46-flow/internal/websearch"
 )
 
 // opRequest is the POST body for starting an operation job.
@@ -50,6 +51,10 @@ type opRequest struct {
 	// AllowCloud opts into remote embeddings/enrichment; remote generation uses
 	// External instead.
 	AllowCloud bool `json:"allow_cloud"`
+	// WebVerify (freshness/all only) sends each flagged claim to Ollama's
+	// hosted web search so a second pass can judge it against live evidence.
+	// Claim text leaves the machine; requires OLLAMA_API_KEY.
+	WebVerify bool `json:"web_verify"`
 	// DryRun returns a queue estimate — documents pending per stage, the
 	// analyze lane's evidence-dependents expansion and model-mismatch
 	// warnings — instead of starting a job.
@@ -98,9 +103,20 @@ func (o *ops) create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("op must be one of %s", strings.Join(ValidOps(), ", ")))
 		return
 	}
+	if b.WebVerify {
+		if b.Op != "freshness" && b.Op != "all" {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("web_verify only applies to the freshness and all ops"))
+			return
+		}
+		if o.c.OllamaAPIKey == "" {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("web_verify requires OLLAMA_API_KEY in the environment or a .env file next to the config"))
+			return
+		}
+	}
 	if b.DryRun {
 		c, err := modelselection.Prepare(r.Context(), o.c, b.Op, modelselection.Options{
 			Model: b.Model, EmbedModel: b.EmbedModel, External: b.External, AllowCloud: b.AllowCloud,
+			WebVerify: b.WebVerify,
 		})
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err)
@@ -118,6 +134,7 @@ func (o *ops) create(w http.ResponseWriter, r *http.Request) {
 	}
 	c, err := modelselection.Prepare(r.Context(), o.c, b.Op, modelselection.Options{
 		Model: b.Model, EmbedModel: b.EmbedModel, External: b.External, AllowCloud: b.AllowCloud,
+		WebVerify: b.WebVerify,
 	})
 	if err != nil {
 		o.end()
@@ -395,7 +412,8 @@ func (o *ops) runOp(ctx context.Context, j database.Job, request opRequest) (str
 	}
 	taskOpts := analyzer.RunOptions{
 		Reanalyze: request.Reanalyze, ReanalyzeAll: request.ReanalyzeAll, External: external,
-		Model: model, EmbedModel: request.EmbedModel, AllowCloud: request.AllowCloud, Progress: progress,
+		Model: model, EmbedModel: request.EmbedModel, AllowCloud: request.AllowCloud,
+		WebVerify: request.WebVerify, Progress: progress,
 	}
 	analyze := func() (string, error) {
 		analysisModel, err := o.c.TaskModel(config.TaskAnalyze, external, model)
@@ -682,8 +700,14 @@ func (o *ops) task(ctx context.Context, j database.Job, name string, opts analyz
 	if err != nil {
 		return "", err
 	}
-	r, err := analyzer.RunTask(ctx, o.c, o.db, analyzer.Generators{
+	gens := analyzer.Generators{
 		Analysis: ollama.New(o.c.OllamaURL, m, o.c.RequestTimeoutSeconds, o.c.OllamaNumCtx, o.c.OllamaThink, o.c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External),
-	}, name, opts)
+	}
+	if name == config.TaskFreshness && opts.WebVerify {
+		gens.Search = websearch.New(o.c.OllamaAPIKey)
+		verifyModel := o.c.VerifyModel(opts.External, opts.Model, m)
+		gens.Verify = ollama.New(o.c.OllamaURL, verifyModel, o.c.RequestTimeoutSeconds, o.c.OllamaNumCtx, o.c.OllamaThink, o.c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External)
+	}
+	r, err := analyzer.RunTask(ctx, o.c, o.db, gens, name, opts)
 	return r.Summary(name, m), err
 }

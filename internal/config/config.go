@@ -32,7 +32,10 @@ type Config struct {
 	// OllamaTaskModels lists per-task model choices, first entry being the
 	// default and the rest UI-selectable alternatives (e.g.
 	// {"expand": ["gpt-oss:120b-cloud", "gemma4:31b"]}). Known tasks:
-	// enrich, analyze, expand, freshness, embed. A lane field is the
+	// enrich, analyze, expand, freshness, verify, embed. "verify" is the
+	// optional second pass of freshness --web-verify — the model that
+	// re-judges flagged claims against web search evidence, separate from
+	// the model that raised the flags. A lane field is the
 	// fallback when a task has no entry.
 	OllamaTaskModels         map[string][]string `json:"ollama_task_models"`
 	OllamaNumCtx             int                 `json:"ollama_num_ctx"`             // context window sent as options.num_ctx; 0/unset = auto-size per request from prompt + model context_length, >0 = fixed override
@@ -65,6 +68,11 @@ type Config struct {
 	MCPServer string `json:"mcp_server"`
 	// Validate configures the read-only `KBM-flow validate` structural gate.
 	Validate ValidateConfig `json:"validate"`
+	// OllamaAPIKey is the bearer key for Ollama's hosted web search
+	// (POST https://ollama.com/api/web_search), used by `freshness
+	// --web-verify`. It is env/.env only — json:"-" keeps the secret out of
+	// config.json and out of the committed file format entirely.
+	OllamaAPIKey string `json:"-"`
 }
 
 // ValidateConfig scopes the structural validation rules in internal/validate.
@@ -110,10 +118,14 @@ const (
 	TaskExpand    = "expand"
 	TaskFreshness = "freshness"
 	TaskEmbed     = "embed"
+	// TaskVerify is the optional evidence pass of `freshness --web-verify`:
+	// it re-judges flagged claims against web search results. It is never a
+	// standalone op, but its model routes like every other task.
+	TaskVerify = "verify"
 )
 
 // llmTasks is the closed set ollama_task_models may configure.
-var llmTasks = []string{TaskEnrich, TaskAnalyze, TaskExpand, TaskFreshness, TaskEmbed}
+var llmTasks = []string{TaskEnrich, TaskAnalyze, TaskExpand, TaskFreshness, TaskVerify, TaskEmbed}
 
 // ErrNoTaskModel marks "this task lane has no configured model" — batch runs
 // ("all" op) skip such tasks instead of failing.
@@ -138,7 +150,7 @@ func (c Config) TaskModel(task string, external bool, override string) (string, 
 		}
 		return override, nil
 	}
-	laneCapable := task == TaskAnalyze || task == TaskExpand || task == TaskFreshness
+	laneCapable := task == TaskAnalyze || task == TaskExpand || task == TaskFreshness || task == TaskVerify
 	if external && laneCapable {
 		if c.OllamaModelExternal == "" {
 			return "", fmt.Errorf("%s with --external requires ollama_model_external in the config", task)
@@ -155,7 +167,7 @@ func (c Config) TaskModel(task string, external bool, override string) (string, 
 		m = c.FastModel()
 	case TaskAnalyze:
 		m = c.OllamaModel
-	case TaskExpand, TaskFreshness:
+	case TaskExpand, TaskFreshness, TaskVerify:
 		// These enhanced tasks ride the external lane when one is
 		// configured — they are exactly what a stronger model is for.
 		m = c.OllamaModelExternal
@@ -171,6 +183,18 @@ func (c Config) TaskModel(task string, external bool, override string) (string, 
 		return "", fmt.Errorf("%w %q (see ollama_model*, ollama_embed_model, ollama_task_models)", ErrNoTaskModel, task)
 	}
 	return m, nil
+}
+
+// VerifyModel resolves which model the freshness verification pass runs:
+// the same routing as every task (per-run override → --external →
+// ollama_task_models.verify → external lane → ollama_model). fallback is the
+// freshness model, retained when resolution fails — verify is a sub-pass,
+// so a lane hiccup must not lose the primary check.
+func (c Config) VerifyModel(external bool, override, fallback string) string {
+	if m, err := c.TaskModel(TaskVerify, external, override); err == nil {
+		return m
+	}
+	return fallback
 }
 
 // TaskModelOptions lists the models a task may run with, default first: the
@@ -333,7 +357,7 @@ func Load(path string) (Config, error) {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return c, fmt.Errorf("parse config: %w", err)
 	}
-	applyEnvOverrides(&c)
+	applyEnvOverrides(&c, loadDotEnv(filepath.Dir(path)))
 	if c.RepositoryPath == "" || c.DatabasePath == "" || c.PromptDirectory == "" || c.OllamaURL == "" || c.OllamaModel == "" {
 		return c, fmt.Errorf("config requires repository_path, database_path, prompt_directory, ollama_url and ollama_model")
 	}
@@ -479,13 +503,21 @@ func validateExcludeExtensions(c *Config) error {
 // a shared compose .env can drive both this program and the MCP server.
 // OLLAMA_BASE_URL is deliberately the MCP server's own variable name: one
 // value reaches both containers. Overrides run before required-field
-// validation, so env alone can satisfy them.
-func applyEnvOverrides(c *Config) {
+// validation, so env alone can satisfy them. A real environment variable
+// always wins over a .env file entry.
+func applyEnvOverrides(c *Config, dotenv map[string]string) {
+	lookup := func(env string) string {
+		if v := os.Getenv(env); v != "" {
+			return v
+		}
+		return dotenv[env]
+	}
 	for _, o := range []struct {
 		env string
 		dst *string
 	}{
 		{"OLLAMA_BASE_URL", &c.OllamaURL},
+		{"OLLAMA_API_KEY", &c.OllamaAPIKey},
 		{"KBM_REPOSITORY_PATH", &c.RepositoryPath},
 		{"KBM_DATABASE_PATH", &c.DatabasePath},
 		{"KBM_HTTP_ADDR", &c.HTTPAddr},
@@ -496,10 +528,45 @@ func applyEnvOverrides(c *Config) {
 		{"KBM_LOG_FILE", &c.LogFile},
 		{"KBM_LOG_LEVEL", &c.LogLevel},
 	} {
-		if v := os.Getenv(o.env); v != "" {
+		if v := lookup(o.env); v != "" {
 			*o.dst = v
 		}
 	}
+}
+
+// loadDotEnv reads KEY=VALUE lines from a .env file beside the JSON config —
+// the same file docker-compose interpolates, honored for direct runs too so
+// secrets like OLLAMA_API_KEY never land in the committed config. A missing
+// or unreadable file is not an error; the real environment may carry the
+// values instead.
+func loadDotEnv(dir string) map[string]string {
+	b, err := os.ReadFile(filepath.Join(dir, ".env"))
+	if err != nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if len(value) >= 2 {
+			if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
+				value = value[1 : len(value)-1]
+			}
+		}
+		if key != "" {
+			out[key] = value
+		}
+	}
+	return out
 }
 
 // normalizeHTTPAddr accepts host:port or a bare port (localhost only).

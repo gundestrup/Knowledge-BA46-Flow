@@ -478,3 +478,108 @@ func TestTaskModelsValidation(t *testing.T) {
 		t.Fatalf("valid task model list rejected: %v", err)
 	}
 }
+
+func TestLoadDotEnvSuppliesSecretsAndFallbacks(t *testing.T) {
+	// A .env beside the config feeds values the environment does not carry —
+	// secrets like OLLAMA_API_KEY stay out of the committed JSON file.
+	t.Setenv("OLLAMA_API_KEY", "") // a preset env would win over the file
+	dir := t.TempDir()
+	data, err := json.Marshal(requiredConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	env := "# comment\n" +
+		"OLLAMA_API_KEY=\"test-key-123\"\n" +
+		"KBM_LOG_LEVEL=debug\n" +
+		"export OLLAMA_BASE_URL=http://dotenv-ollama:11434\n" +
+		"blank line follows\n\n" +
+		"NO_EQUALS_SIGN\n"
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(env), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.OllamaAPIKey != "test-key-123" {
+		t.Fatalf(".env OLLAMA_API_KEY not loaded: %q", c.OllamaAPIKey)
+	}
+	if c.LogLevel != "debug" || c.OllamaURL != "http://dotenv-ollama:11434" {
+		t.Fatalf(".env fallbacks not applied: %+v", c)
+	}
+}
+
+func TestLoadRealEnvBeatsDotEnv(t *testing.T) {
+	dir := t.TempDir()
+	data, err := json.Marshal(requiredConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("OLLAMA_API_KEY=dotenv-key\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OLLAMA_API_KEY", "real-env-key")
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.OllamaAPIKey != "real-env-key" {
+		t.Fatalf("real environment must win over .env: %q", c.OllamaAPIKey)
+	}
+}
+
+func TestLoadAPIKeyNeverComesFromJSON(t *testing.T) {
+	// The key is env/.env only — a config.json carrying one must ignore it,
+	// so a committed file can never smuggle a credential in.
+	t.Setenv("OLLAMA_API_KEY", "")
+	values := requiredConfig()
+	values["OllamaAPIKey"] = "json-key"
+	values["ollama_api_key"] = "json-key"
+	c, err := Load(writeConfig(t, values))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.OllamaAPIKey != "" {
+		t.Fatalf("config.json must not set the API key: %q", c.OllamaAPIKey)
+	}
+}
+
+func TestVerifyModelRouting(t *testing.T) {
+	// The verify stage routes like every task: explicit override → --external
+	// → ollama_task_models.verify → external lane → ollama_model.
+	c := Config{
+		OllamaModel:         "base",
+		OllamaModelExternal: "ext",
+		OllamaTaskModels:    map[string][]string{TaskVerify: {"v1", "v2"}},
+	}
+	if m := c.VerifyModel(false, "", "fallback"); m != "v1" {
+		t.Fatalf("configured verify default should win: %q", m)
+	}
+	if m := c.VerifyModel(true, "", "fallback"); m != "ext" {
+		t.Fatalf("--external should take the external lane: %q", m)
+	}
+	c.OllamaTaskModels = nil
+	if m := c.VerifyModel(false, "", "fallback"); m != "ext" {
+		t.Fatalf("unconfigured verify should ride the external lane: %q", m)
+	}
+	c.OllamaModelExternal = ""
+	if m := c.VerifyModel(false, "", "fallback"); m != "base" {
+		t.Fatalf("verify should fall back to ollama_model: %q", m)
+	}
+	// An explicit per-run override applies to the verify stage too.
+	if m := c.VerifyModel(false, "base", "fallback"); m != "base" {
+		t.Fatalf("per-run override should drive verify as well: %q", m)
+	}
+	// A truly unresolvable lane keeps the freshness model.
+	if m := (Config{}).VerifyModel(false, "", "fallback"); m != "fallback" {
+		t.Fatalf("resolution failure must keep the fallback: %q", m)
+	}
+}

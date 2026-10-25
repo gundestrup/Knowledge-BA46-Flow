@@ -19,6 +19,7 @@ window.knowledgeDashboard = () => ({
   reanalyze: false,
   external: false,
   allowCloud: false,
+  webVerify: false,
   stopping: false,
   error: "",
   notice: "",
@@ -224,6 +225,7 @@ window.knowledgeDashboard = () => ({
             ? this.embedModel
             : "",
           allow_cloud: this.allowCloud,
+          web_verify: ["freshness", "all"].includes(op) && this.webVerify,
           dry_run: true,
         }),
       });
@@ -496,6 +498,7 @@ window.knowledgeDashboard = () => ({
             ? this.embedModel
             : "",
           allow_cloud: llmOps.includes(op) && this.allowCloud,
+          web_verify: ["freshness", "all"].includes(op) && this.webVerify,
         }),
       });
       this.busy = true;

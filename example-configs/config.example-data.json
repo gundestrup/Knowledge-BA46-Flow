@@ -16,6 +16,7 @@
     "analyze": ["qwen3:14b"],
     "expand": ["qwen3:14b"],
     "freshness": ["qwen3:14b"],
+    "verify": ["qwen3:14b"],
     "embed": ["embeddinggemma:300m"]
   },
   "ollama_num_ctx": 0,

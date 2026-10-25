@@ -17,6 +17,10 @@ type Options struct {
 	EmbedModel string
 	External   bool
 	AllowCloud bool
+	// WebVerify adds the freshness verification pass (verify task lane) to the
+	// validated set — its resolved model needs the same remote consent as any
+	// generation stage.
+	WebVerify bool
 }
 
 func (o Options) EmbeddingOverride() string {
@@ -28,6 +32,9 @@ func (o Options) EmbeddingOverride() string {
 
 func Prepare(ctx context.Context, c config.Config, op string, opts Options) (config.Config, error) {
 	tasks := generationTasks(op)
+	if opts.WebVerify && (op == "freshness" || op == "all") {
+		tasks = append(tasks, config.TaskVerify)
+	}
 	skip, err := validateOptions(c, op, tasks, opts)
 	if err != nil || skip {
 		return c, err
@@ -65,6 +72,9 @@ func validateOptions(c config.Config, op string, tasks []string, opts Options) (
 	}
 	if opts.External && opts.Model == "" && c.OllamaModelExternal == "" {
 		return false, errors.New("--external requires ollama_model_external or an explicit generation --model")
+	}
+	if opts.WebVerify && op != "freshness" && op != "all" {
+		return false, fmt.Errorf("op %q does not support web verification (freshness and all only)", op)
 	}
 	return false, nil
 }
