@@ -37,10 +37,10 @@ tag is prepared.
   (`KBM_LANG` → `LC_ALL` → `LC_MESSAGES` → `LANG`). Catalogs live in
   `internal/i18n/locales/active.<tag>.yaml` (`en` + a complete `da`
   translation); a new file localizes both surfaces without code changes.
-  On the web pages the language is chosen by a locale picker in the header
-  (persisted in `localStorage`) or negotiated from the browser's
-  `Accept-Language` when left on automatic; the picker overrides via
-  `GET /api/i18n?lang=<tag>` so a Danish browser can still run the UI in
+  On the web pages the language is chosen by a flag dropdown in the header
+  (flag-icons `gb`/`dk`, persisted in `localStorage`) or negotiated from the
+  browser's `Accept-Language` when left on automatic; the picker overrides
+  via `GET /api/i18n?lang=<tag>` so a Danish browser can still run the UI in
   English. Scope boundary: server data values (statuses, job details,
   reasons), diagnostic detail blocks (`repoDetails`, fleet health dumps),
   runtime log/error output and `errors.New` text stay English.

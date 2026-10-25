@@ -148,7 +148,8 @@ the same local server and database, but report jobs and report data remain
 separate from knowledge-review operations.
 
 The dashboard embeds Bulma v1.0.4, the Alpine.js v3.17.4 CSP build
-(`@alpinejs/csp`), and Chart.js v4.4.9 for progress charts — all local, for
+(`@alpinejs/csp`), Chart.js v4.4.9 for progress charts, and
+flag-icons v7.6.0 (`gb`/`dk` flags) for the language picker — all local, for
 offline use — the CSP build evaluates directives without
 `new Function`, so the response `Content-Security-Policy` can deny
 `'unsafe-eval'` outright. Alpine components use ordinary JavaScript `async`

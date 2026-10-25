@@ -161,3 +161,24 @@
     transform: none;
   }
 }
+
+/* Icons + flag-icons in the header/language picker — flags get a hairline
+   so white field edges stay visible on light buttons. */
+.kbm-icon {
+  height: 1em;
+  width: auto;
+  vertical-align: -0.125em;
+}
+
+.kbm-flag {
+  height: 1em;
+  width: auto;
+  vertical-align: -0.125em;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
+}
+
+.button .kbm-flag,
+.dropdown-item .kbm-flag {
+  margin-right: 0.3em;
+}

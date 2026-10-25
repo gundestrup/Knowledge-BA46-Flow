@@ -8,6 +8,8 @@ required:
   https://github.com/alpinejs/alpine
 - Alpine.js bundles Vue `@vue/shared` and `@vue/reactivity` v3.5.41
 - Chart.js v4.4.9 (UMD build), from https://github.com/chartjs/Chart.js
+- flag-icons v7.6.0 (`gb.svg` and `dk.svg` language-picker flags), from
+  https://github.com/lipis/flag-icons
 
 These components are distributed under the MIT License. The Alpine bundle
 contains Vue's bundled license notices, and the Bulma stylesheet retains its
@@ -64,6 +66,8 @@ Copyright (c) 2019 Caleb Porzio
 Copyright (c) 2018-present Yuxi (Evan) You and Vue contributors
 
 Copyright (c) 2014-2022 Chart.js Contributors
+
+Copyright (c) 2013 Panayiotis Lipiridis
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

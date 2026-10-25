@@ -95,20 +95,63 @@
                 x-text="t('ui.report.force_remote', 'Force remote refresh')"
               ></span>
             </button>
-            <div class="select is-small">
-              <select
-                x-model="locale"
-                @change="setLocale(locale)"
-                :aria-label="t('ui.common.language', 'Language')"
-              >
-                <option
-                  value=""
-                  x-text="t('ui.common.locale_auto', 'Automatic (browser)')"
-                ></option>
-                <template x-for="l in locales" :key="l">
-                  <option :value="l" x-text="localeLabel(l)"></option>
-                </template>
-              </select>
+            <div
+              class="dropdown is-right"
+              :class="{ 'is-active': localeOpen }"
+              @click.outside="localeOpen = false"
+            >
+              <div class="dropdown-trigger">
+                <button
+                  type="button"
+                  class="button is-light is-small"
+                  aria-haspopup="true"
+                  :aria-expanded="localeOpen"
+                  :aria-label="t('ui.common.language', 'Language')"
+                  @click="localeOpen = !localeOpen"
+                >
+                  <img
+                    class="kbm-flag"
+                    :src="localeFlag(displayLocale())"
+                    alt=""
+                  />
+                  <span x-text="localeLabel(displayLocale())"></span>
+                  <img
+                    class="report-icon ml-1"
+                    src="/static/icons/chevron-down.svg"
+                    alt=""
+                  />
+                </button>
+              </div>
+              <div class="dropdown-menu" role="menu">
+                <div class="dropdown-content">
+                  <a
+                    class="dropdown-item"
+                    role="menuitem"
+                    :class="{ 'is-active': locale === '' }"
+                    @click="setLocale('')"
+                  >
+                    <img
+                      class="kbm-flag"
+                      :src="localeFlag(resolvedLocale)"
+                      alt=""
+                    />
+                    <span
+                      x-text="t('ui.common.locale_auto', 'Automatic (browser)')"
+                    ></span>
+                  </a>
+                  <template x-for="l in locales" :key="l">
+                    <a
+                      class="dropdown-item"
+                      role="menuitem"
+                      :class="{ 'is-active': locale === l }"
+                      @click="setLocale(l)"
+                    >
+                      <img class="kbm-flag" :src="localeFlag(l)" alt="" />
+                      <span x-text="localeLabel(l)"></span>
+                    </a>
+                  </template>
+                </div>
+              </div>
             </div>
           </div>
           <p class="is-size-7 has-text-white-ter" role="status">

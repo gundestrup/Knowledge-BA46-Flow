@@ -283,6 +283,21 @@ a.report-scanner:hover,
   margin-right: 0.3em;
 }
 
+/* flag-icons in the language picker — the hairline keeps white field edges
+   visible on light buttons. */
+.kbm-flag {
+  height: 1em;
+  width: auto;
+  vertical-align: -0.125em;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
+}
+
+.button .kbm-flag,
+.dropdown-item .kbm-flag {
+  margin-right: 0.3em;
+}
+
 /* Chart.js needs an explicit-height wrapper — the canvas fills it when
    maintainAspectRatio is off. */
 .report-chart {

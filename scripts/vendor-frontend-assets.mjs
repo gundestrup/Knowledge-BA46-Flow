@@ -31,6 +31,18 @@ const assets = [
     source: "dist/chart.umd.js",
     destination: "internal/server/static/vendor/chart.umd.js",
   },
+  {
+    packageName: "flag-icons",
+    noticeName: "flag-icons",
+    source: "flags/4x3/gb.svg",
+    destination: "internal/server/static/vendor/flags/gb.svg",
+  },
+  {
+    packageName: "flag-icons",
+    noticeName: "flag-icons",
+    source: "flags/4x3/dk.svg",
+    destination: "internal/server/static/vendor/flags/dk.svg",
+  },
 ];
 
 for (const asset of assets) {
