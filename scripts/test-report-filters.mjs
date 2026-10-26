@@ -1,13 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import vm from "node:vm";
+import { evalComponent } from "./eval-component.mjs";
 
-const dashboardPath = new URL(
-  "../internal/server/static/report.js",
-  import.meta.url,
-);
-const context = { window: {} };
-vm.runInNewContext(readFileSync(dashboardPath, "utf8"), context);
+const context = evalComponent("report.js");
 
 const dashboard = context.window.repoReportDashboard();
 dashboard.snapshot = {
@@ -121,7 +115,7 @@ assert.equal(
 assert.equal(dashboard.codecovLabel({}), "not reported");
 
 // Icon/link helpers for the Checks column.
-assert.equal(dashboard.scannerIcon("gh-actions"), "githubactions");
+assert.equal(dashboard.scannerIcon("gh-actions"), "icon-githubactions");
 assert.equal(dashboard.scannerIcon("overcommit"), undefined);
 assert.equal(
   dashboard.scannerLabel({ semgrep_license: "ce" }, "semgrep"),
@@ -138,6 +132,73 @@ assert.equal(
 );
 assert.equal(dashboard.scannerUrl({}, "semgrep"), "https://semgrep.dev");
 assert.equal(
+  dashboard.scannerUrl(
+    { semgrep_findings: { url: "https://semgrep.dev/orgs/x/findings?repo=y" } },
+    "semgrep",
+  ),
+  "https://semgrep.dev/orgs/x/findings?repo=y",
+);
+assert.equal(
+  dashboard.scannerUrl(
+    { github: {}, web_url: "https://github.com/o/r" },
+    "gh-actions",
+  ),
+  "https://github.com/o/r/actions",
+);
+assert.equal(
+  dashboard.scannerUrl(
+    { forgejo: {}, web_url: "https://git.example/o/r" },
+    "forgejo",
+  ),
+  "https://git.example/o/r/actions",
+);
+assert.equal(
+  dashboard.scannerUrl({}, "gh-actions"),
+  "https://github.com/features/actions",
+);
+assert.equal(
+  dashboard.scannerUrl(
+    { github: { dependabot: 3 }, web_url: "https://github.com/o/r" },
+    "dependabot",
+  ),
+  "https://github.com/o/r/pulls",
+);
+assert.equal(
+  dashboard.scannerUrl(
+    { github: { dependabot: 0 }, web_url: "https://github.com/o/r" },
+    "dependabot",
+  ),
+  "https://github.com/o/r/security",
+);
+assert.equal(
+  dashboard.scannerUrl({ web_url: "https://github.com/o/r" }, "dependabot"),
+  "https://github.com/o/r/security",
+);
+assert.equal(
+  dashboard.scannerUrl({}, "dependabot"),
+  "https://github.com/dependabot",
+);
+assert.equal(
+  dashboard
+    .repoScanners({ scanners: ["sonar"], github: { dependabot: 0 } })
+    .join(","),
+  "sonar,dependabot",
+);
+assert.equal(
+  dashboard
+    .repoScanners({ scanners: ["dependabot"], github: { dependabot: 0 } })
+    .join(","),
+  "dependabot",
+);
+assert.equal(dashboard.repoScanners({}).join(","), "");
+assert.equal(
+  dashboard.scannerTitle(
+    { semgrep_findings: { error: "remote HTTP 404" } },
+    "semgrep",
+  ),
+  "Semgrep findings unavailable — remote HTTP 404",
+);
+assert.equal(
   dashboard.githubSlug({ url: "https://github.com/owner/repo.git" }),
   "owner/repo",
 );
@@ -153,8 +214,8 @@ assert.equal(
   dashboard.codefactorUrl({ url: "https://github.com/owner/repo.git" }),
   "https://www.codefactor.io/repository/github/owner/repo",
 );
-assert.equal(dashboard.sortIcon("name"), "arrow-up");
-assert.equal(dashboard.sortIcon("checks"), "chevrons-up-down");
+assert.equal(dashboard.sortIcon("name"), "icon-arrow-up");
+assert.equal(dashboard.sortIcon("checks"), "icon-chevrons-up-down");
 
 // History series for the progress-over-time chart: nullable fields keep
 // nulls (gaps) instead of fabricating zeros.

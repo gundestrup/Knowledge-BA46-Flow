@@ -11,10 +11,73 @@ tag is prepared.
 
 ### Added
 
+- Dark mode for the web UI using Bulma 1.x built-in theming: a header toggle
+  on all three pages cycles auto → light → dark and persists the choice in
+  `localStorage`. "Auto" drops `data-theme` so Bulma's `prefers-color-scheme`
+  rules follow the OS; explicit values force the palette. The custom
+  `--kbm-*` tokens gain a dark palette, vendored lucide icons are inverted on
+  the dark scheme, and Chart.js tick/legend/grid colors re-read the CSS vars
+  on every draw so charts re-theme live.
+- Semgrep findings now record the collection failure (`semgrep_findings.error`)
+  on `cloud-ci` repos when the platform API is unreachable — e.g. a CLI login
+  token without Web API scope — and surface it in the Problems column and chip
+  tooltip instead of silently showing the generic tool link.
+- The report's "Full report" column is gone; each row now has an Expand button
+  next to Refresh that reveals the detail links and full report text in a row
+  below (one repo expanded at a time, `aria-expanded` on the button).
+- Dependabot joins the Checks column as a scanner chip: detected from
+  `.github/dependabot.yml`/`.yaml` locally, or merged in when the GitHub remote
+  reports an alert count (settings-enabled without a config file). With open
+  alerts the chip links to the repo's `/pulls` page, otherwise `/security`.
+- Report check chips link to the project-specific page when one exists:
+  Semgrep findings URL, Sonar dashboard (existing), and CI runs at
+  `{web_url}/actions` for GitHub Actions / Forgejo Actions. Tools without a
+  per-project page (lefthook, overcommit) keep the tool homepage.
+- Repository report: the "Open repository" link is now a Bulma
+  `button is-small is-light` carrying a `data-tooltip` (vendored
+  `@creativebulma/bulma-tooltip` — CSS-only, CSP-safe) that shows the
+  repo path on hover; provider icons (GitHub/Forgejo) moved inline into
+  the repo-name row; cards inside Bulma columns now share row height
+  (`height: 100%`).
+- Icons now theme-true: `.kbm-icon` is a mask-image silhouette colored by
+  `currentColor` instead of a filtered `<img>`, so `color:` (and the
+  Bulma/kbm vars) applies like a font glyph — card-header icons take the
+  steel accent, tile badges use `--bulma-primary-invert`, status icons
+  carry real `--bulma-success`/`--bulma-danger`, buttons inherit their
+  label color, and dark mode needs no filter overrides. Every file under
+  `icons/` has an `.icon-*` class (mask URL registry); dynamic icon
+  pickers (`actionIcon`, `scannerIcon`, `sortIcon`, theme toggle) now
+  return/swap classes. Header artwork also moved to line-style Lucide
+  marks (`gem`, `package`, `file-clock`, `folder-git-2`, `git-branch`)
+  so decorative chrome matches the lucide scheme; brand marks remain
+  only where they name the product (scanner/provider cells and tiles).
+- Unified accent palette inspired by Bulmaswatch Spacelab: a single
+  steel-blue accent (`#446e9b`) replaces the former moss/orange pair for
+  links, hovers, focus outlines, eyebrows, stat-tile badges, and card
+  borders. `--kbm-steel` channels feed both the custom accents and Bulma's
+  `--bulma-primary`/`--bulma-link` overrides, so `is-primary` buttons and
+  default anchors take the same color — the primary CTAs now use Bulma's
+  `is-primary` instead of a custom accent class. Semantic status colors
+  (success/danger/warning tags, ok/danger icon tints) are unchanged, and
+  the paper/ink/line background tokens are untouched.
+- Admin One-inspired application shell for the web UI: all three pages now
+  share a dark left sidebar with workspace navigation, a slim top navbar
+  (burger menu on narrow screens), a breadcrumb title bar, and a flat hero
+  bar carrying the page title and primary actions. Content panels use a
+  consistent `card` + `card-header` frame, and stat readouts are flat tiles
+  with an icon badge. No new dependencies — plain CSS over Bulma 1.x.
 - `KBM_DEV_STATIC=<dir>` dev mode for `serve`: the three UI pages and all
   `/static/` assets are then read from that directory on every request, so
   frontend edits show on a browser refresh without rebuilding the binary.
   Unset or non-directory values fall back to the embedded assets.
+- Styled dialog modal for the knowledge page: the suggestion-rejection note,
+  apply confirmation, and server-stop confirmation now use a shared Bulma
+  `modal` driven by `common.js` instead of native `window.prompt`/
+  `window.confirm` — the native dialogs blocked headless browser automation
+  and did not match the UI. The dialog is fully keyboard-accessible:
+  `role="dialog"`/`aria-modal`, focus moves into the dialog on open, Tab is
+  trapped inside it, and focus returns to the triggering element on close.
+  All three pages share the markup so future workflows reuse it.
 - `freshness --web-verify` (also `tasks --web-verify` and
   `"web_verify": true` in `/api/ops` for `freshness`/`all`): each flagged
   claim is queried against Ollama's hosted web search API and a second model
@@ -54,6 +117,25 @@ tag is prepared.
 
 ### Changed
 
+- Frontend asset structure: the shared stylesheet is now `base.css` (design
+  tokens, icons, shell, cards, tiles) with page rules split into
+  `landing.css`, `knowledge.css`, and `report.css` — zero selectors appear in
+  two files; `.report-icon` folded into the shared `.kbm-icon` normalizer
+  with `.kbm-icon-colored` marking status icons that keep their tint in dark
+  mode. Shared JavaScript moved into `common.js` loaded before each page
+  script: i18n helpers, `requestJSON`, `formatTime`, the dialog modal, the
+  theme-aware Chart.js options block, `jobTagClass`, and the common UI state
+  fields — removing the copy-pasted boilerplate from `dashboard.js`,
+  `landing.js`, and `report.js`. Chart instances are tracked through
+  Chart.js's own `Chart.getChart` registry instead of a hand-rolled map.
+  The burger control uses Bulma's built-in `navbar-burger` instead of
+  custom markup/CSS.
+- Frontend tooling file lists are now globs (`static/*.js`, `scripts/**/*.mjs`)
+  instead of per-script enumerations — the filesystem is the single source of
+  truth, so new frontend files are linted/formatted/checked automatically.
+  `node --check` coverage moved into `scripts/check-static-js.mjs` (globs the
+  directory), and the component-test VM boilerplate is shared via
+  `scripts/eval-component.mjs`.
 - The `/knowledge` progress chart no longer plots the cumulative
   `suggestions`/`handled` counters — monotone totals that never return to
   zero duplicated each other's climb and obscured the trend. They now render

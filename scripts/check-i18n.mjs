@@ -9,6 +9,7 @@ const catalogPath = "internal/i18n/locales/active.en.yaml";
 const localeDir = "internal/i18n/locales";
 const uiFiles = [
   "internal/server/static/knowledge.html",
+  "internal/server/static/common.js",
   "internal/server/static/dashboard.js",
   "internal/server/static/index.html",
   "internal/server/static/landing.js",

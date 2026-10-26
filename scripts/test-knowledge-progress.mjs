@@ -1,13 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import vm from "node:vm";
+import { evalComponent } from "./eval-component.mjs";
 
-const dashboardPath = new URL(
-  "../internal/server/static/dashboard.js",
-  import.meta.url,
-);
-const context = { window: {} };
-vm.runInNewContext(readFileSync(dashboardPath, "utf8"), context);
+const context = evalComponent("dashboard.js");
 
 const dashboard = context.window.knowledgeDashboard();
 dashboard.progressDays = [
@@ -52,8 +46,8 @@ assert.equal(dashboard.reviewTotalsText(), "7.6K suggestions · 7.6K handled");
 dashboard.renderProgressChart();
 
 // Suggestion action icons fall back to the generic file mark.
-assert.equal(dashboard.actionIcon("merge"), "/static/icons/merge.svg");
-assert.equal(dashboard.actionIcon("delete"), "/static/icons/trash-2.svg");
-assert.equal(dashboard.actionIcon("rename"), "/static/icons/file-text.svg");
+assert.equal(dashboard.actionIcon("merge"), "icon-merge");
+assert.equal(dashboard.actionIcon("delete"), "icon-trash-2");
+assert.equal(dashboard.actionIcon("rename"), "icon-file-text");
 
 console.log("Knowledge progress series passed.");

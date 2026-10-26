@@ -166,7 +166,7 @@ export class Page {
     });
     client.on("Network.responseReceived", (params) => {
       const entry = this.requests.findLast((e) => e.id === params.requestId);
-      if (entry) entry.status = (params.response || {}).status ?? null;
+      if (entry) entry.status = params.response?.status ?? null;
     });
   }
 

@@ -305,8 +305,15 @@ async function main() {
       "knowledge button icons load from /static/icons",
       await page.eval(
         `(() => {
-          const icons = [...document.querySelectorAll("img.kbm-icon")];
-          return icons.length >= 8 && icons.every((i) => i.naturalWidth > 0);
+          const icons = [...document.querySelectorAll(".kbm-icon")];
+          return (
+            icons.length >= 8 &&
+            icons.every((i) => {
+              const style = getComputedStyle(i);
+              const mask = style.maskImage || style.webkitMaskImage;
+              return mask.includes("icons/") && i.getBoundingClientRect().width > 0;
+            })
+          );
         })()`,
       ),
     );
@@ -396,7 +403,7 @@ async function main() {
         .filter((r) => !r.url.includes("?")).length > 0,
     );
     const buttonLabel = await page.eval(
-      `[...document.querySelectorAll(".suggestion-card")][${cardIndex}].querySelector("button span").textContent`,
+      `[...document.querySelectorAll(".suggestion-card")][${cardIndex}].querySelector("button span[x-text]").textContent`,
     );
     check(
       "button flips to Hide proposed content",
@@ -409,7 +416,7 @@ async function main() {
     check(
       "proposal collapses on second click",
       (await page.eval(
-        `[...document.querySelectorAll(".suggestion-card")][${cardIndex}].querySelector("button span").textContent`,
+        `[...document.querySelectorAll(".suggestion-card")][${cardIndex}].querySelector("button span[x-text]").textContent`,
       )) === "Inspect proposed content",
     );
 
@@ -421,9 +428,19 @@ async function main() {
       })()`,
     );
     check("enrich move card present", rejectIndex >= 0);
+    // decide("rejected") opens the shared dialog modal for an optional note;
+    // confirming with the input empty matches the old window.prompt("") path.
     page.requests = [];
     await page.eval(
       `[...document.querySelectorAll(".suggestion-card")][${rejectIndex}].querySelector("button.is-danger").click()`,
+    );
+    await page.waitFor(
+      `document.querySelector(".modal.is-active [data-dialog-confirm]")`,
+      5000,
+      "reject dialog modal opens",
+    );
+    await page.eval(
+      `document.querySelector(".modal.is-active [data-dialog-confirm]").click()`,
     );
     await page.waitFor(
       `document.querySelectorAll(".suggestion-card").length === 2`,
@@ -474,12 +491,19 @@ async function main() {
     check("apply label shows count", applyLabel.includes("(1)"), applyLabel);
 
     // Apply the accepted suggestion — a real filesystem mutation on the
-    // fixture repo. window.confirm is stubbed: headless dialogs auto-dismiss.
-    await page.eval(`window.confirm = () => true`);
+    // fixture repo. The shared dialog modal stands in for window.confirm.
     page.requests = [];
     await page.eval(
       `[...document.querySelectorAll("button")].find(
         (x) => x.textContent.includes("Apply accepted")).click()`,
+    );
+    await page.waitFor(
+      `document.querySelector(".modal.is-active [data-dialog-confirm]")`,
+      5000,
+      "apply dialog modal opens",
+    );
+    await page.eval(
+      `document.querySelector(".modal.is-active [data-dialog-confirm]").click()`,
     );
     await page.waitFor(
       `(() => {
@@ -749,7 +773,7 @@ async function main() {
     page.requests = [];
     await page.clickUntilRequest("Refresh report", "POST", "/api/report/run");
     await page.waitFor(
-      `document.querySelectorAll("tbody tr details").length >= 2`,
+      `document.querySelectorAll("tbody tr.report-expanded-row").length >= 2`,
       30000,
       "report rows rendered after refresh",
     );
@@ -784,15 +808,15 @@ async function main() {
 
     // Expand a repo row — exercises repoDetails(repo, snapshot) inside x-for.
     await page.eval(
-      `document.querySelector("tbody tr details.report-row-details summary").click()`,
+      `document.querySelector("tbody tr td button[aria-expanded]").click()`,
     );
     await page.waitFor(
-      `document.querySelector("tbody tr details.report-row-details pre").textContent.length > 20`,
+      `document.querySelector("tbody tr.report-expanded-row pre.report-detail-content").textContent.length > 20`,
       5000,
       "repo details rendered",
     );
     const details = await page.eval(
-      `document.querySelector("tbody tr details.report-row-details pre").textContent`,
+      `document.querySelector("tbody tr.report-expanded-row pre.report-detail-content").textContent`,
     );
     check(
       "repo details show HEAD/URL lines",
@@ -809,14 +833,14 @@ async function main() {
       el.dispatchEvent(new Event("input", { bubbles: true }));
     })()`);
     await page.waitFor(
-      `document.querySelectorAll("tbody tr details").length === 1`,
+      `document.querySelectorAll("tbody tr.report-expanded-row").length === 1`,
       5000,
       "filter narrows rows",
     );
     check(
       "name filter narrows to 1 row",
       (await page.eval(
-        `document.querySelectorAll("tbody tr details").length`,
+        `document.querySelectorAll("tbody tr.report-expanded-row").length`,
       )) === 1,
     );
     await page.eval(`(() => {
@@ -825,24 +849,26 @@ async function main() {
       el.dispatchEvent(new Event("input", { bubbles: true }));
     })()`);
     await page.waitFor(
-      `document.querySelectorAll("tbody tr details").length >= 2`,
+      `document.querySelectorAll("tbody tr.report-expanded-row").length >= 2`,
       5000,
     );
 
     // Working-tree filter: repo-one has an untracked README (dirty),
     // repo-two committed it (clean). Signal select scopes by alert kind.
     const repoRows = () =>
-      page.eval(`document.querySelectorAll("tbody tr details").length`);
+      page.eval(
+        `document.querySelectorAll("tbody tr.report-expanded-row").length`,
+      );
     await page.selectValue(`select[x-model="treeFilter"]`, "dirty");
     await page.waitFor(
-      `document.querySelectorAll("tbody tr details").length === 1`,
+      `document.querySelectorAll("tbody tr.report-expanded-row").length === 1`,
       5000,
       "dirty filter narrows rows",
     );
     check("working-tree dirty shows 1 row", (await repoRows()) === 1);
     await page.selectValue(`select[x-model="treeFilter"]`, "clean");
     await page.waitFor(
-      `document.querySelectorAll("tbody tr details").length === 1`,
+      `document.querySelectorAll("tbody tr.report-expanded-row").length === 1`,
       5000,
       "clean filter narrows rows",
     );
@@ -853,14 +879,14 @@ async function main() {
     // checks" empties the table.
     await page.selectValue(`select[x-model="checksFilter"]`, "none");
     await page.waitFor(
-      `document.querySelectorAll("tbody tr details").length === 2`,
+      `document.querySelectorAll("tbody tr.report-expanded-row").length === 2`,
       5000,
       "no-checks filter keeps rows",
     );
     check("checks none shows both rows", (await repoRows()) === 2);
     await page.selectValue(`select[x-model="checksFilter"]`, "has");
     await page.waitFor(
-      `document.querySelectorAll("tbody tr details").length === 0`,
+      `document.querySelectorAll("tbody tr.report-expanded-row").length === 0`,
       5000,
       "has-checks filter empties rows",
     );
@@ -877,7 +903,7 @@ async function main() {
     ]) {
       await page.selectValue(`select[x-model="signalFilter"]`, signal);
       await page.waitFor(
-        `document.querySelectorAll("tbody tr details").length === 0`,
+        `document.querySelectorAll("tbody tr.report-expanded-row").length === 0`,
         5000,
         `${signal} filter empties rows`,
       );
@@ -885,7 +911,7 @@ async function main() {
     }
     await page.selectValue(`select[x-model="signalFilter"]`, "all");
     await page.waitFor(
-      `document.querySelectorAll("tbody tr details").length === 2`,
+      `document.querySelectorAll("tbody tr.report-expanded-row").length === 2`,
       5000,
       "signal reset restores rows",
     );
@@ -905,7 +931,7 @@ async function main() {
       "/api/report/run?repo=",
     );
     await page.waitFor(
-      `document.querySelectorAll("tbody tr details").length >= 2`,
+      `document.querySelectorAll("tbody tr.report-expanded-row").length >= 2`,
       30000,
       "per-repo refresh completes",
     );
@@ -965,7 +991,7 @@ async function main() {
     );
     // Let the force job settle so its poll loop is not mid-flight at teardown.
     await page.waitFor(
-      `document.querySelectorAll("tbody tr details").length >= 2`,
+      `document.querySelectorAll("tbody tr.report-expanded-row").length >= 2`,
       30000,
     );
 
@@ -1004,10 +1030,10 @@ async function main() {
     );
     await new Promise((resolve) => setTimeout(resolve, 750));
     page.requests = [];
-    // Click the report header's Knowledge button — a real <a href>, not a
-    // URL navigation — so the nav link itself is covered.
+    // Click the sidebar's Knowledge link — a real <a href>, not a URL
+    // navigation — so the nav link itself is covered.
     await page.eval(
-      `[...document.querySelectorAll("a.button")].find(
+      `[...document.querySelectorAll("a[href='/knowledge']")].find(
         (x) => x.textContent.trim() === "Knowledge").click()`,
     );
     await page.waitFor(`location.pathname === "/knowledge"`, 10000);
@@ -1021,10 +1047,17 @@ async function main() {
       10000,
       "knowledge page reloaded",
     );
-    await page.eval(`window.confirm = () => true`);
     await page.eval(
       `[...document.querySelectorAll("button")].find(
         (x) => x.textContent.includes("Stop server")).click()`,
+    );
+    await page.waitFor(
+      `document.querySelector(".modal.is-active [data-dialog-confirm]")`,
+      5000,
+      "stop dialog modal opens",
+    );
+    await page.eval(
+      `document.querySelector(".modal.is-active [data-dialog-confirm]").click()`,
     );
     check(
       "stop server fires POST /api/shutdown",

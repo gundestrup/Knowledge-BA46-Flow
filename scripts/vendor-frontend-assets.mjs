@@ -20,6 +20,12 @@ const assets = [
     destination: "internal/server/static/vendor/bulma.min.css",
   },
   {
+    packageName: "@creativebulma/bulma-tooltip",
+    noticeName: "bulma-tooltip",
+    source: "dist/bulma-tooltip.min.css",
+    destination: "internal/server/static/vendor/bulma-tooltip.min.css",
+  },
+  {
     packageName: "@alpinejs/csp",
     noticeName: "Alpine.js",
     source: "dist/cdn.min.js",

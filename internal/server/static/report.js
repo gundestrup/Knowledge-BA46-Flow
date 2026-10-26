@@ -1,7 +1,9 @@
 // Chart instances live in module scope, not on the reactive component — a
 // reactive proxy around a Chart (which holds circular refs and a DOM canvas)
 // is a known "Maximum call stack size exceeded" trigger.
-const charts = new Map();
+// Chart.getChart(canvas) is Chart.js's own instance registry — used below
+// instead of a hand-rolled map so update-vs-recreate follows the library's
+// documented lifecycle. Theme-aware chart options come from common.js.
 
 window.repoReportDashboard = () => ({
   snapshot: { configured: false, repos: [], summary: {} },
@@ -16,101 +18,14 @@ window.repoReportDashboard = () => ({
   checksFilter: "all",
   sortKey: "name",
   sortDirection: "asc",
+  expandedRepo: null,
   pollTimer: null,
-  messages: {},
-  locale:
-    typeof localStorage !== "undefined"
-      ? localStorage.getItem("kbm.locale") || ""
-      : "",
-  locales: ["en"],
-  localeOpen: false,
-  resolvedLocale: "en",
 
   async init() {
     await Promise.all([this.loadI18n(), this.refresh()]);
   },
 
-  async loadI18n() {
-    try {
-      const query = this.locale
-        ? `?lang=${encodeURIComponent(this.locale)}`
-        : "";
-      const data = await this.requestJSON(`/api/i18n${query}`);
-      this.messages = data.messages || {};
-      this.resolvedLocale = data.locale || "en";
-      if (data.locales?.length) this.locales = data.locales;
-    } catch {
-      this.messages = {};
-    }
-  },
-
-  // setLocale persists the UI locale choice across pages; "" negotiates the
-  // browser's Accept-Language again.
-  async setLocale(value) {
-    this.localeOpen = false;
-    this.locale = value;
-    try {
-      if (value) localStorage.setItem("kbm.locale", value);
-      else localStorage.removeItem("kbm.locale");
-    } catch {
-      /* storage may be unavailable; choice just won't persist */
-    }
-    await this.loadI18n();
-  },
-
-  localeLabel(tag) {
-    return { en: "English", da: "Dansk" }[tag] || tag;
-  },
-
-  // The flag shown on the picker: the explicit choice, else the negotiated
-  // one — "" (automatic) resolves to whatever /api/i18n last served.
-  displayLocale() {
-    return this.locale || this.resolvedLocale;
-  },
-
-  // localeFlag maps a locale tag to a vendored flag-icons country code:
-  // "en" shows the Union Jack; other tags use their region suffix or the
-  // tag itself ("da-DK" -> "dk", "da" -> "dk").
-  localeFlag(tag) {
-    const code = { en: "gb" }[tag] || (tag.split("-")[1] || tag).toLowerCase();
-    return `/static/vendor/flags/${code}.svg`;
-  },
-
-  // t resolves a catalog id from /api/i18n — the English fallback keeps the
-  // page readable before the fetch lands and if the endpoint ever fails.
-  t(id, fallback, params) {
-    let msg = this.messages[id];
-    if (msg != null && typeof msg === "object") {
-      msg = msg[params?.Count === 1 ? "one" : "other"] ?? msg.other;
-    }
-    const out = typeof msg === "string" ? msg : fallback;
-    if (out == null) return id;
-    return out.replace(
-      /\{\{\.(\w+)\}\}/g,
-      (_, name) => params?.[name] ?? `{{.${name}}}`,
-    );
-  },
-
-  async requestJSON(url, options = {}) {
-    const response = await fetch(url, options);
-    let body;
-    try {
-      body = await response.json();
-    } catch {
-      body = {};
-    }
-    if (!response.ok) {
-      throw new Error(
-        body.error ||
-          this.t(
-            "ui.common.request_failed",
-            "Request failed (HTTP {{.Status}})",
-            { Status: response.status },
-          ),
-      );
-    }
-    return body;
-  },
+  ...window.kbm,
 
   async refresh() {
     try {
@@ -152,7 +67,10 @@ window.repoReportDashboard = () => ({
       this.notice = this.t(
         "ui.report.report_started",
         "{{.Scope}} report started{{.Target}}.",
-        { Scope: scope, Target: target },
+        {
+          Scope: scope,
+          Target: target,
+        },
       );
       await this.refresh();
     } catch (error) {
@@ -177,12 +95,6 @@ window.repoReportDashboard = () => ({
       ? this.t("ui.report.last_full", "Last full report")
       : this.t("ui.report.last_local", "Last local-only report");
     return `${kind}: ${this.formatTime(this.snapshot.generated_at)}`;
-  },
-
-  formatTime(value) {
-    if (!value) return "—";
-    const date = new Date(value);
-    return Number.isNaN(date.valueOf()) ? value : date.toLocaleString();
   },
 
   chartLabel(iso) {
@@ -224,12 +136,9 @@ window.repoReportDashboard = () => ({
     const canvas = document.getElementById("reportHistoryChart");
     if (!canvas) return;
     const series = this.reportHistorySeries();
-    const existing = charts.get("reportHistoryChart");
+    const existing = window.Chart.getChart(canvas);
     if (series.labels.length === 0) {
-      if (existing) {
-        existing.destroy();
-        charts.delete("reportHistoryChart");
-      }
+      existing?.destroy();
       return;
     }
     if (existing) {
@@ -241,36 +150,21 @@ window.repoReportDashboard = () => ({
       existing.update();
       return;
     }
-    const dataset = (label, data, color) => ({
-      label,
-      data,
-      borderColor: color,
-      backgroundColor: color,
-      tension: 0.25,
-      spanGaps: true,
+    const dataset = (label, data, color) =>
+      this.lineDataset(label, data, color, { tension: 0.25, spanGaps: true });
+    new window.Chart(canvas.getContext("2d"), {
+      type: "line",
+      data: {
+        labels: series.labels,
+        datasets: [
+          dataset("Problems", series.problems, "#a64035"),
+          dataset("Dirty repos", series.dirty, "#d87536"),
+          dataset("Open PRs", series.openPRs, "#68756e"),
+          dataset("Open findings", series.findings, "#285444"),
+        ],
+      },
+      options: this.lineChartOptions(),
     });
-    charts.set(
-      "reportHistoryChart",
-      new window.Chart(canvas.getContext("2d"), {
-        type: "line",
-        data: {
-          labels: series.labels,
-          datasets: [
-            dataset("Problems", series.problems, "#a64035"),
-            dataset("Dirty repos", series.dirty, "#d87536"),
-            dataset("Open PRs", series.openPRs, "#68756e"),
-            dataset("Open findings", series.findings, "#285444"),
-          ],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          interaction: { mode: "index", intersect: false },
-          scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
-          plugins: { legend: { position: "bottom" } },
-        },
-      }),
-    );
   },
 
   get filteredRepos() {
@@ -347,11 +241,27 @@ window.repoReportDashboard = () => ({
     }
   },
 
+  // toggleExpand reveals the full-report row for one repo at a time; clicking
+  // the open row's button collapses it again.
+  toggleExpand(name) {
+    this.expandedRepo = this.expandedRepo === name ? null : name;
+  },
+
+  // repoScanners unions the locally detected scanner configs with Dependabot
+  // when the GitHub remote reports an alert count — Dependabot can be enabled
+  // in repository settings without a dependabot.yml file.
+  repoScanners(repo) {
+    const scanners = [...(repo.scanners || [])];
+    if (repo.github?.dependabot != null && !scanners.includes("dependabot"))
+      scanners.push("dependabot");
+    return scanners;
+  },
+
   // checkCount mirrors the Checks column: detected scanners plus Ruby, Node,
   // toolchain, and npm findings discovered during local checks.
   checkCount(repo) {
     return (
-      (repo.scanners || []).length +
+      this.repoScanners(repo).length +
       (repo.ruby_issues || []).length +
       (repo.node_issues || []).length +
       (repo.toolchain_issues || []).length +
@@ -366,7 +276,9 @@ window.repoReportDashboard = () => ({
   policyPins() {
     const versions = this.snapshot?.policy_versions || {};
     const pins = [];
-    for (const product of Object.keys(versions).sort()) {
+    for (const product of Object.keys(versions).sort((left, right) =>
+      left.localeCompare(right),
+    )) {
       const pin = versions[product];
       if (!pin?.policy) continue;
       let value = pin.policy;
@@ -442,21 +354,19 @@ window.repoReportDashboard = () => ({
     return `${Number(repo.codecov).toFixed(1)}%${stale}`;
   },
 
-  // scannerIcon maps the scanner names checks.go detects to icon files under
-  // /static/icons/. Names without a brand mark render as text only.
+  // scannerIcon maps the scanner names checks.go detects to the icon-*
+  // registry classes in base.css. Names without a brand mark render as
+  // text only.
   scannerIcon(name) {
     const icons = {
-      semgrep: "semgrep",
-      sonar: "sonarqubecloud",
-      forgejo: "forgejo",
-      "gh-actions": "githubactions",
-      lefthook: "lefthook",
+      semgrep: "icon-semgrep",
+      sonar: "icon-sonarqubecloud",
+      forgejo: "icon-forgejo",
+      "gh-actions": "icon-githubactions",
+      lefthook: "icon-lefthook",
+      dependabot: "icon-dependabot",
     };
     return icons[name];
-  },
-
-  iconUrl(slug) {
-    return `/static/icons/${slug}.svg`;
   },
 
   // scannerLabel folds the detected Semgrep license tier into the chip so the
@@ -468,10 +378,23 @@ window.repoReportDashboard = () => ({
     return tier ? `${name} ${tier}` : name;
   },
 
-  // scannerUrl links a chip to the tool's site; sonar prefers the repo's
-  // detected project dashboard when one was collected.
+  // scannerUrl links a chip to the project-specific check page when one was
+  // collected (Sonar dashboard, Semgrep findings, CI runs), falling back to
+  // the tool's site otherwise.
   scannerUrl(repo, name) {
     if (name === "sonar" && repo.sonarcloud_url) return repo.sonarcloud_url;
+    if (name === "semgrep" && repo.semgrep_findings?.url)
+      return repo.semgrep_findings.url;
+    if (
+      ((name === "gh-actions" && repo.github) ||
+        (name === "forgejo" && repo.forgejo)) &&
+      repo.web_url
+    )
+      return `${repo.web_url}/actions`;
+    if (name === "dependabot" && repo.web_url)
+      return (repo.github?.dependabot ?? 0) > 0
+        ? `${repo.web_url}/pulls`
+        : `${repo.web_url}/security`;
     const urls = {
       semgrep: "https://semgrep.dev",
       sonar: "https://www.sonarsource.com/products/sonarqube/",
@@ -479,11 +402,14 @@ window.repoReportDashboard = () => ({
       "gh-actions": "https://github.com/features/actions",
       lefthook: "https://lefthook.dev",
       overcommit: "https://github.com/sds/overcommit",
+      dependabot: "https://github.com/dependabot",
     };
     return urls[name];
   },
 
   scannerTitle(repo, name) {
+    if (name === "semgrep" && repo.semgrep_findings?.error)
+      return `Semgrep findings unavailable — ${repo.semgrep_findings.error}`;
     const names = {
       semgrep: "Semgrep static analysis",
       sonar: "SonarQube analysis",
@@ -491,6 +417,7 @@ window.repoReportDashboard = () => ({
       "gh-actions": "GitHub Actions CI",
       lefthook: "Lefthook Git hooks",
       overcommit: "Overcommit Git hooks",
+      dependabot: "Dependabot security alerts",
     };
     const url = this.scannerUrl(repo, name);
     const label = names[name] || name;
@@ -516,8 +443,8 @@ window.repoReportDashboard = () => ({
 
   // sortIcon names the Lucide arrow rendered next to the active sort column.
   sortIcon(key) {
-    if (this.sortKey !== key) return "chevrons-up-down";
-    return this.sortDirection === "asc" ? "arrow-up" : "arrow-down";
+    if (this.sortKey !== key) return "icon-chevrons-up-down";
+    return this.sortDirection === "asc" ? "icon-arrow-up" : "icon-arrow-down";
   },
 
   matchesSignalFilter(repo) {
@@ -612,7 +539,7 @@ window.repoReportDashboard = () => ({
       `Working tree: ${repo.dirty ? "dirty" : "clean"}`,
       `Sync marker: ${repo.sync?.marker || "unknown"}`,
       `Commits ahead of baseline: ${repo.sync?.drift ?? "unknown"}`,
-      `Scanners: ${(repo.scanners || []).join(", ") || "none detected"}`,
+      `Scanners: ${this.repoScanners(repo).join(", ") || "none detected"}`,
     ];
     for (const issue of repo.node_issues || [])
       lines.push(`Node issue: ${issue}`);
@@ -632,15 +559,15 @@ window.repoReportDashboard = () => ({
       );
       for (const [name, versions] of Object.entries(
         project.package_versions || {},
-      ).sort()) {
+      ).sort(([left], [right]) => left.localeCompare(right))) {
         lines.push(`  ${name}: ${versions.join(" / ")}`);
       }
       for (const versions of project.multiple_versions || []) {
         lines.push(`  multiple resolved versions: ${versions}`);
       }
-      for (const [name, reason] of Object.entries(
-        project.watched || {},
-      ).sort()) {
+      for (const [name, reason] of Object.entries(project.watched || {}).sort(
+        ([left], [right]) => left.localeCompare(right),
+      )) {
         lines.push(`  watched npm package: ${name} — ${reason}`);
       }
     }
@@ -707,19 +634,23 @@ window.repoReportDashboard = () => ({
     }
     if (repo.semgrep_findings) {
       const findings = repo.semgrep_findings;
-      lines.push(
-        `Semgrep: ${findings.project || "project unavailable"}; ${findings.open ?? "n/a"} open`,
-      );
-      if (findings.severities) {
+      if (findings.error) {
+        lines.push(`Semgrep findings unavailable: ${findings.error}`);
+      } else {
         lines.push(
-          `  Severity: ${Object.entries(findings.severities)
-            .map(([severity, count]) => `${severity}:${count}`)
-            .join(" ")}`,
+          `Semgrep: ${findings.project || "project unavailable"}; ${findings.open ?? "n/a"} open`,
         );
+        if (findings.severities) {
+          lines.push(
+            `  Severity: ${Object.entries(findings.severities)
+              .map(([severity, count]) => `${severity}:${count}`)
+              .join(" ")}`,
+          );
+        }
+        if (findings.url) lines.push(`  Findings: ${findings.url}`);
+        if (findings.stale)
+          lines.push("  Values carried forward from the previous report");
       }
-      if (findings.url) lines.push(`  Findings: ${findings.url}`);
-      if (findings.stale)
-        lines.push("  Values carried forward from the previous report");
     } else {
       lines.push("Semgrep findings: not collected");
     }
@@ -803,7 +734,10 @@ window.repoReportDashboard = () => ({
         "Node.js release cache is stale; latest version lookup failed or was skipped.",
       );
     }
-    const nodeVersions = Object.entries(npm.node_version_drift || {}).sort();
+    const nodeVersions = Object.entries(npm.node_version_drift || {}).sort(
+      ([left], [right]) =>
+        left.localeCompare(right, undefined, { numeric: true }),
+    );
     const staleNpmLatest = Object.entries(
       this.snapshot.npm_latest || {},
     ).filter(([, entry]) => entry.stale);
@@ -823,24 +757,24 @@ window.repoReportDashboard = () => ({
         ),
       );
     }
-    for (const [project, item] of Object.entries(
-      npm.node_outdated || {},
-    ).sort()) {
+    for (const [project, item] of Object.entries(npm.node_outdated || {}).sort(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
       const lts = item.lts ? `; ${item.lts} LTS` : "";
       lines.push(
         `Node ${project}: ${item.pinned} → ${item.latest} [${item.severity}]${lts}`,
       );
     }
-    for (const [name, drift] of Object.entries(
-      npm.package_drift || {},
-    ).sort()) {
+    for (const [name, drift] of Object.entries(npm.package_drift || {}).sort(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
       lines.push(
         `Drift ${name}: ${versionList(drift.versions)} [${drift.severity}]`,
       );
     }
-    for (const [name, drift] of Object.entries(
-      npm.package_drift_ok || {},
-    ).sort()) {
+    for (const [name, drift] of Object.entries(npm.package_drift_ok || {}).sort(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
       lines.push(
         `Allowed drift ${name}: ${versionList(drift.versions)} — ${drift.reason}`,
       );
@@ -854,7 +788,9 @@ window.repoReportDashboard = () => ({
         `Behind ${name}: ${versionList(item.versions)} → ${item.latest} [${item.severity}]${blockers}`,
       );
     }
-    for (const [name, item] of Object.entries(npm.package_held || {}).sort()) {
+    for (const [name, item] of Object.entries(npm.package_held || {}).sort(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
       const blockers = item.blocked_by?.length
         ? `; constrained by ${item.blocked_by.join("; ")}`
         : "";
@@ -896,14 +832,16 @@ window.repoReportDashboard = () => ({
     lines.push(
       `gem latest versions checked: ${checked}/${Object.keys(gemLatest).length}`,
     );
-    for (const [name, drift] of Object.entries(fleet.gem_drift || {}).sort()) {
+    for (const [name, drift] of Object.entries(fleet.gem_drift || {}).sort(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
       lines.push(
         `Drift ${name}: ${versionList(drift.versions)} [${drift.severity}]`,
       );
     }
-    for (const [name, drift] of Object.entries(
-      fleet.gem_drift_ok || {},
-    ).sort()) {
+    for (const [name, drift] of Object.entries(fleet.gem_drift_ok || {}).sort(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
       lines.push(
         `Allowed drift ${name}: ${versionList(drift.versions)} — ${drift.reason}`,
       );
@@ -917,7 +855,9 @@ window.repoReportDashboard = () => ({
         `Behind ${name}: ${versionList(item.versions)} → ${item.latest} [${item.severity}]${blockers}`,
       );
     }
-    for (const [name, item] of Object.entries(fleet.gem_held || {}).sort()) {
+    for (const [name, item] of Object.entries(fleet.gem_held || {}).sort(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
       const blockers = item.blocked_by?.length
         ? `; constrained by ${item.blocked_by.join("; ")}`
         : "";
@@ -925,7 +865,9 @@ window.repoReportDashboard = () => ({
         `Held ${name}: ${versionList(item.versions)} → ${item.latest} — ${item.reason}${blockers}`,
       );
     }
-    for (const [name, item] of Object.entries(fleet.gem_stale || {}).sort()) {
+    for (const [name, item] of Object.entries(fleet.gem_stale || {}).sort(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
       const note = item.note ? ` — ${item.note}` : "";
       lines.push(
         `Upstream ${name}: ${item.age_months} months since ${item.latest} [${item.severity}]${note}`,
@@ -957,7 +899,9 @@ window.repoReportDashboard = () => ({
   outdatedSplit(map) {
     const actionable = [];
     const constrained = [];
-    for (const entry of Object.entries(map || {}).sort()) {
+    for (const entry of Object.entries(map || {}).sort(([left], [right]) =>
+      left.localeCompare(right),
+    )) {
       (entry[1].severity === "constrained" ? constrained : actionable).push(
         entry,
       );
@@ -984,12 +928,6 @@ window.repoReportDashboard = () => ({
     return this.t("ui.report.npm_projects", "{{.Count}} Node/npm project(s)", {
       Count: (repo.npm_projects || []).length,
     });
-  },
-
-  jobTagClass(status) {
-    if (status === "done") return "is-success is-light";
-    if (status === "failed") return "is-danger is-light";
-    return "is-warning is-light";
   },
 });
 
