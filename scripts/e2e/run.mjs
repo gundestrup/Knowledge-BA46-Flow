@@ -311,7 +311,10 @@ async function main() {
             icons.every((i) => {
               const style = getComputedStyle(i);
               const mask = style.maskImage || style.webkitMaskImage;
-              return mask.includes("icons/") && i.getBoundingClientRect().width > 0;
+              // Icons inside collapsed sections are display:none — width 0
+              // is expected there; the asset check still applies.
+              const hidden = i.offsetParent === null;
+              return mask.includes("icons/") && (hidden || i.getBoundingClientRect().width > 0);
             })
           );
         })()`,

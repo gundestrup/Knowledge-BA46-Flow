@@ -260,113 +260,136 @@
                   <span x-text="t('ui.kb.check_links', 'Link Check')"></span>
                 </button>
               </div>
-              <div class="model-controls mb-3">
-                <div class="model-control">
-                  <label
-                    class="label is-small"
-                    for="generation-model"
-                    x-text="t('ui.kb.generation_model', 'Generation model')"
-                    >Generation model</label
-                  >
-                  <div class="select is-small is-fullwidth">
-                    <select
-                      id="generation-model"
-                      x-model="model"
-                      @change="estimate = null"
-                      :disabled="busy || applying || discovering"
-                      :title="t('ui.kb.generation_model_title', 'Per-run generation override; never used for embeddings')"
-                    >
-                      <option
-                        value=""
-                        x-text="t('ui.kb.generation_default', 'Configured generation/task defaults')"
-                      ></option>
-                      <template x-for="m in generationChoices()" :key="m.name">
-                        <option
-                          :value="m.name"
-                          :disabled="modelUnavailable(m, discovered)"
-                          x-text="generationLabel(m)"
-                        ></option>
-                      </template>
-                    </select>
-                  </div>
-                  <p
-                    class="is-size-7 mt-1"
-                    :class="generationMismatch() ? 'has-text-warning' : 'has-text-grey'"
-                    x-show="generationStampLine()"
-                    x-text="generationStampLine()"
-                  ></p>
-                  <p
-                    class="is-size-7 has-text-warning"
-                    x-show="generationMismatch()"
-                    x-text="t('ui.kb.generation_mismatch', 'Differs from the model behind most existing analyses.')"
-                  ></p>
-                </div>
-              </div>
-              <div class="model-controls mb-3">
-                <div class="model-control">
-                  <label
-                    class="label is-small"
-                    for="embedding-model"
-                    x-text="t('ui.kb.embedding_model', 'Embedding model')"
-                    >Embedding model</label
-                  >
-                  <div class="select is-small is-fullwidth">
-                    <select
-                      id="embedding-model"
-                      x-model="embedModel"
-                      @change="estimate = null"
-                      :disabled="busy || applying || discovering"
-                      :title="t('ui.kb.embedding_model_title', 'Independent per-run embedding override; changing models refreshes incompatible vectors')"
-                    >
-                      <option
-                        value=""
-                        x-text="embeddingDefaultLabel()"
-                      ></option>
-                      <template x-for="m in embeddingChoices()" :key="m.name">
-                        <option
-                          :value="m.name"
-                          :disabled="modelUnavailable(m, discovered)"
-                          x-text="embedLabel(m)"
-                        ></option>
-                      </template>
-                    </select>
-                  </div>
-                  <p
-                    class="is-size-7 mt-1"
-                    :class="embedMismatch() ? 'has-text-warning' : 'has-text-grey'"
-                    x-show="embedStampLine()"
-                    x-text="embedStampLine()"
-                  ></p>
-                  <p
-                    class="is-size-7 has-text-warning"
-                    x-show="embedMismatch()"
-                    x-text="t('ui.kb.embed_mismatch', 'A different embedding model re-vectorizes every document and can expand dependent analysis.')"
-                  ></p>
-                </div>
-                <button
-                  type="button"
-                  class="button is-small is-light"
-                  :disabled="busy || applying || discovering"
-                  @click="loadModels(true)"
+              <button
+                type="button"
+                class="button is-light is-small mb-3"
+                :aria-expanded="llmConfigOpen"
+                @click="llmConfigOpen = !llmConfigOpen"
+              >
+                <span class="kbm-icon icon-cpu-ai" aria-hidden="true"></span>
+                <span x-text="t('ui.kb.llm_config', 'LLM configuration')"
+                  >LLM configuration</span
                 >
-                  <span
-                    class="kbm-icon icon-refresh-cw"
-                    aria-hidden="true"
-                  ></span>
-                  <span
-                    x-text="discovering ? t('ui.kb.querying_ollama', 'Querying Ollama...') : t('ui.kb.refresh_ollama', 'Refresh from Ollama')"
-                  ></span>
-                </button>
+                <span
+                  class="kbm-icon ml-1"
+                  :class="llmConfigOpen ? 'icon-chevrons-up' : 'icon-chevrons-down'"
+                  aria-hidden="true"
+                ></span>
+              </button>
+              <div x-show="llmConfigOpen" x-cloak class="kbm-config-panel">
+                <div class="model-controls mb-3">
+                  <button
+                    type="button"
+                    class="button is-primary"
+                    :disabled="busy || applying || discovering"
+                    @click="loadModels(true)"
+                  >
+                    <span
+                      class="kbm-icon icon-ollama"
+                      aria-hidden="true"
+                    ></span>
+                    <span
+                      x-text="discovering ? t('ui.kb.querying_ollama', 'Querying Ollama...') : t('ui.kb.refresh_ollama', 'Refresh from Ollama')"
+                    ></span>
+                  </button>
+                </div>
+                <div class="model-controls mb-3">
+                  <div class="model-control">
+                    <label
+                      class="label is-small"
+                      for="generation-model"
+                      x-text="t('ui.kb.generation_model', 'Generation model')"
+                      >Generation model</label
+                    >
+                    <div class="select is-small is-fullwidth">
+                      <select
+                        id="generation-model"
+                        x-model="model"
+                        @change="estimate = null"
+                        :disabled="busy || applying || discovering"
+                        :title="t('ui.kb.generation_model_title', 'Per-run generation override; never used for embeddings')"
+                      >
+                        <option
+                          value=""
+                          x-text="t('ui.kb.generation_default', 'Configured generation/task defaults')"
+                        ></option>
+                        <template
+                          x-for="m in generationChoices()"
+                          :key="m.name"
+                        >
+                          <option
+                            :value="m.name"
+                            :disabled="modelUnavailable(m, discovered)"
+                            x-text="generationLabel(m)"
+                          ></option>
+                        </template>
+                      </select>
+                    </div>
+                    <p
+                      class="is-size-7 mt-1"
+                      :class="generationMismatch() ? 'has-text-warning' : 'has-text-grey'"
+                      x-show="generationStampLine()"
+                      x-text="generationStampLine()"
+                    ></p>
+                    <p
+                      class="is-size-7 has-text-warning"
+                      x-show="generationMismatch()"
+                      x-text="t('ui.kb.generation_mismatch', 'Differs from the model behind most existing analyses.')"
+                    ></p>
+                  </div>
+                </div>
+                <div class="model-controls mb-3">
+                  <div class="model-control">
+                    <label
+                      class="label is-small"
+                      for="embedding-model"
+                      x-text="t('ui.kb.embedding_model', 'Embedding model')"
+                      >Embedding model</label
+                    >
+                    <div class="select is-small is-fullwidth">
+                      <select
+                        id="embedding-model"
+                        x-model="embedModel"
+                        @change="estimate = null"
+                        :disabled="busy || applying || discovering"
+                        :title="t('ui.kb.embedding_model_title', 'Independent per-run embedding override; changing models refreshes incompatible vectors')"
+                      >
+                        <option
+                          value=""
+                          x-text="embeddingDefaultLabel()"
+                        ></option>
+                        <template x-for="m in embeddingChoices()" :key="m.name">
+                          <option
+                            :value="m.name"
+                            :disabled="modelUnavailable(m, discovered)"
+                            x-text="embedLabel(m)"
+                          ></option>
+                        </template>
+                      </select>
+                    </div>
+                    <p
+                      class="is-size-7 mt-1"
+                      :class="embedMismatch() ? 'has-text-warning' : 'has-text-grey'"
+                      x-show="embedStampLine()"
+                      x-text="embedStampLine()"
+                    ></p>
+                    <p
+                      class="is-size-7 has-text-warning"
+                      x-show="embedMismatch()"
+                      x-text="t('ui.kb.embed_mismatch', 'A different embedding model re-vectorizes every document and can expand dependent analysis.')"
+                    ></p>
+                  </div>
+                </div>
+                <p
+                  class="is-size-7 has-text-grey mb-2"
+                  x-text="t('ui.kb.choices_note', 'Choices affect this run only. Refresh lists installed/registered models, not the online catalog; it never downloads models.')"
+                ></p>
+                <p
+                  class="is-size-7 has-text-grey mb-2"
+                  role="status"
+                  x-text="modelNotice"
+                ></p>
               </div>
-              <p
-                class="is-size-7 has-text-grey mb-2"
-                x-text="t('ui.kb.choices_note', 'Choices affect this run only. Refresh lists installed/registered models, not the online catalog; it never downloads models.')"
-              ></p>
-              <p
-                class="is-size-7 has-text-grey mb-2"
-                role="status"
-                x-text="modelNotice"
-              ></p>
               <div class="model-controls mb-3">
                 <div class="select is-small">
                   <select
@@ -439,7 +462,8 @@
                     type="checkbox"
                     x-model="reanalyze"
                     @change="estimate = null"
-                /> &nbsp;
+                  />
+                  &nbsp;
                   <span
                     x-text="t('ui.kb.reanalyse_label', 'Re-analyse documents processed by a different model')"
                     >Re-analyse documents processed by a different model</span
@@ -453,7 +477,8 @@
                     type="checkbox"
                     x-model="external"
                     @change="estimate = null"
-                  /> &nbsp;
+                  />
+                  &nbsp;
                   <span
                     x-text="t('ui.kb.external_label', 'External generation lane (document content leaves this machine)')"
                     >External generation lane (document content leaves this
@@ -468,7 +493,8 @@
                     type="checkbox"
                     x-model="allowCloud"
                     @change="estimate = null"
-                  /> &nbsp;
+                  />
+                  &nbsp;
                   <span
                     x-text="t('ui.kb.allow_cloud_label', 'Allow cloud/remote embeddings and enrichment for this run')"
                     >Allow cloud/remote embeddings and enrichment for this
@@ -483,7 +509,8 @@
                     type="checkbox"
                     x-model="webVerify"
                     @change="estimate = null"
-                  /> &nbsp;
+                  />
+                  &nbsp;
                   <span
                     x-text="t('ui.kb.web_verify_label', 'Verify freshness flags via web search (claim text leaves this machine)')"
                     >Verify freshness flags via web search (claim text leaves

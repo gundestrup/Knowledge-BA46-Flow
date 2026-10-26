@@ -30,6 +30,7 @@ window.knowledgeDashboard = () => ({
   allowCloud: false,
   webVerify: false,
   stopping: false,
+  llmConfigOpen: false,
   error: "",
   notice: "",
   pollTimer: null,

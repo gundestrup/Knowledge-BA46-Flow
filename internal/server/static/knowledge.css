@@ -25,6 +25,14 @@
 .kbm-check-list .checkbox {
   display: flex;
 }
+
+.kbm-config-panel {
+  background: #f8f6f0;
+  border: 1px solid var(--kbm-line);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
 .suggestion-card {
   border: 1px solid var(--kbm-line);
   border-left: 4px solid var(--kbm-steel);

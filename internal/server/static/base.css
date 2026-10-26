@@ -188,6 +188,14 @@ body {
   --kbm-icon-url: url("icons/chevron-up.svg");
 }
 
+.icon-chevrons-down {
+  --kbm-icon-url: url("icons/chevrons-down.svg");
+}
+
+.icon-chevrons-up {
+  --kbm-icon-url: url("icons/chevrons-up.svg");
+}
+
 .icon-chevrons-up-down {
   --kbm-icon-url: url("icons/chevrons-up-down.svg");
 }
@@ -198,6 +206,10 @@ body {
 
 .icon-codefactor {
   --kbm-icon-url: url("icons/codefactor.svg");
+}
+
+.icon-cpu-ai {
+  --kbm-icon-url: url("icons/cpu-ai.svg");
 }
 
 .icon-dependabot {
