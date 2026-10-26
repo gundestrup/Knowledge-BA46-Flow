@@ -311,7 +311,7 @@ func progressPrinter(w io.Writer) func(analyzer.Progress) {
 // opts into the enhanced lane (ollama_model_external, e.g. a cloud model):
 // results stamp the external_* markers and leave the local lineage untouched.
 func analyzeCmd() *cobra.Command {
-	var reanalyze, reanalyzeAll, external, allowCloud bool
+	var reanalyze, reanalyzeAll, external, allowCloud, allowRemote bool
 	var model, embedModel string
 	cmd := &cobra.Command{
 		Use:   "analyze",
@@ -324,7 +324,7 @@ func analyzeCmd() *cobra.Command {
 			}
 			defer db.Close()
 			c, err = modelselection.Prepare(cmd.Context(), c, "analyze", modelselection.Options{
-				Model: model, EmbedModel: embedModel, External: external, AllowCloud: allowCloud,
+				Model: model, EmbedModel: embedModel, External: external, AllowCloud: allowCloud, AllowRemote: allowRemote,
 			})
 			if err != nil {
 				return err
@@ -339,7 +339,7 @@ func analyzeCmd() *cobra.Command {
 			detail := ""
 			defer finishJob(db, job.ID, &detail, &runErr)
 			print := progressPrinter(cmd.OutOrStdout())
-			detail, err = runAnalyze(ctx, c, db, analysisModel, analyzer.RunOptions{Reanalyze: reanalyze, ReanalyzeAll: reanalyzeAll, External: external, Model: model, EmbedModel: embedModel, AllowCloud: allowCloud, Progress: func(p analyzer.Progress) {
+			detail, err = runAnalyze(ctx, c, db, analysisModel, analyzer.RunOptions{Reanalyze: reanalyze, ReanalyzeAll: reanalyzeAll, External: external, Model: model, EmbedModel: embedModel, AllowCloud: allowCloud, AllowRemote: allowRemote, Progress: func(p analyzer.Progress) {
 				print(p)
 				_ = db.UpdateJobDetail(ctx, job.ID, p.String())
 			}})
@@ -355,12 +355,13 @@ func analyzeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&model, "model", "", i18n.T("cli.flag.model"))
 	cmd.Flags().StringVar(&embedModel, "embed-model", "", i18n.T("cli.flag.embed_model"))
 	cmd.Flags().BoolVar(&allowCloud, "allow-cloud", false, i18n.T("cli.flag.allow_cloud"))
+	cmd.Flags().BoolVar(&allowRemote, "allow-remote", false, i18n.T("cli.flag.allow_remote"))
 	return cmd
 }
 
 // run: convenience combo = scan followed by analyze.
 func runCmd() *cobra.Command {
-	var reanalyze, reanalyzeAll, external, allowCloud bool
+	var reanalyze, reanalyzeAll, external, allowCloud, allowRemote bool
 	var model, embedModel string
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -373,7 +374,7 @@ func runCmd() *cobra.Command {
 			}
 			defer db.Close()
 			c, err = modelselection.Prepare(cmd.Context(), c, "run", modelselection.Options{
-				Model: model, EmbedModel: embedModel, External: external, AllowCloud: allowCloud,
+				Model: model, EmbedModel: embedModel, External: external, AllowCloud: allowCloud, AllowRemote: allowRemote,
 			})
 			if err != nil {
 				return err
@@ -401,7 +402,7 @@ func runCmd() *cobra.Command {
 			}
 			analysisDetail, err := runAnalyze(ctx, c, db, analysisModel, analyzer.RunOptions{
 				Reanalyze: reanalyze, ReanalyzeAll: reanalyzeAll, External: external, Model: model,
-				EmbedModel: embedModel, AllowCloud: allowCloud, Progress: progress,
+				EmbedModel: embedModel, AllowCloud: allowCloud, AllowRemote: allowRemote, Progress: progress,
 			})
 			detail += " " + analysisDetail
 			if err == nil {
@@ -416,6 +417,7 @@ func runCmd() *cobra.Command {
 	cmd.Flags().StringVar(&model, "model", "", i18n.T("cli.flag.model"))
 	cmd.Flags().StringVar(&embedModel, "embed-model", "", i18n.T("cli.flag.embed_model"))
 	cmd.Flags().BoolVar(&allowCloud, "allow-cloud", false, i18n.T("cli.flag.allow_cloud"))
+	cmd.Flags().BoolVar(&allowRemote, "allow-remote", false, i18n.T("cli.flag.allow_remote"))
 	return cmd
 }
 
@@ -425,7 +427,7 @@ func runCmd() *cobra.Command {
 // privacy, supports --reanalyze model drift and, for expand/freshness,
 // --external.
 func taskCmd(use, short, op string, allowExternal bool, run func(ctx context.Context, c config.Config, db *database.DB, model string, opts analyzer.RunOptions) (string, error)) *cobra.Command {
-	var reanalyze, reanalyzeAll, external, allowCloud, webVerify bool
+	var reanalyze, reanalyzeAll, external, allowCloud, allowRemote, webVerify bool
 	var model, embedModel string
 	cmd := &cobra.Command{
 		Use:   use,
@@ -439,7 +441,7 @@ func taskCmd(use, short, op string, allowExternal bool, run func(ctx context.Con
 			defer db.Close()
 			c, err = modelselection.Prepare(cmd.Context(), c, op, modelselection.Options{
 				Model: model, EmbedModel: embedModel, External: external, AllowCloud: allowCloud,
-				WebVerify: webVerify,
+				AllowRemote: allowRemote, WebVerify: webVerify,
 			})
 			if err != nil {
 				return err
@@ -467,7 +469,7 @@ func taskCmd(use, short, op string, allowExternal bool, run func(ctx context.Con
 			detail, err = run(ctx, c, db, resolved, analyzer.RunOptions{
 				Reanalyze: reanalyze, ReanalyzeAll: reanalyzeAll, External: external,
 				Model: model, EmbedModel: embedModel, AllowCloud: allowCloud,
-				WebVerify: webVerify,
+				AllowRemote: allowRemote, WebVerify: webVerify,
 				Progress: func(p analyzer.Progress) {
 					print(p)
 					_ = db.UpdateJobDetail(ctx, job.ID, p.String())
@@ -491,6 +493,7 @@ func taskCmd(use, short, op string, allowExternal bool, run func(ctx context.Con
 	if op == "enrich" || op == "embed" {
 		cmd.Flags().BoolVar(&allowCloud, "allow-cloud", false, i18n.T("cli.flag.task_allow_cloud"))
 	}
+	cmd.Flags().BoolVar(&allowRemote, "allow-remote", false, i18n.T("cli.flag.task_allow_remote"))
 	if op == config.TaskFreshness {
 		cmd.Flags().BoolVar(&webVerify, "web-verify", false, i18n.T("cli.flag.web_verify"))
 	}
@@ -502,8 +505,8 @@ type taskRunner func(ctx context.Context, c config.Config, db *database.DB, mode
 
 func runEnrich(ctx context.Context, c config.Config, db *database.DB, model string, opts analyzer.RunOptions) (string, error) {
 	gens := analyzer.Generators{
-		Analysis: ollama.New(c.OllamaURL, model, c.RequestTimeoutSeconds, c.OllamaNumCtx, c.OllamaThink, c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External || opts.AllowCloud),
-		Enrich:   ollama.New(c.OllamaURL, model, int(c.EnrichmentTimeout().Seconds()), c.OllamaNumCtx, false, c.OllamaKeepAlive).WithOutputLimit(c.EnrichmentOutputTokens()).WithModelCheck(ollama.CapabilityCompletion, opts.External || opts.AllowCloud),
+		Analysis: ollama.New(c.OllamaURL, model, c.RequestTimeoutSeconds, c.OllamaNumCtx, c.OllamaThink, c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External || opts.AllowCloud || opts.AllowRemote),
+		Enrich:   ollama.New(c.OllamaURL, model, int(c.EnrichmentTimeout().Seconds()), c.OllamaNumCtx, false, c.OllamaKeepAlive).WithOutputLimit(c.EnrichmentOutputTokens()).WithModelCheck(ollama.CapabilityCompletion, opts.External || opts.AllowCloud || opts.AllowRemote),
 	}
 	opts.EnrichOnly = true
 	opts.Model = model
@@ -513,7 +516,7 @@ func runEnrich(ctx context.Context, c config.Config, db *database.DB, model stri
 
 func runEmbed(ctx context.Context, c config.Config, db *database.DB, model string, opts analyzer.RunOptions) (string, error) {
 	r, err := analyzer.RunEmbed(ctx, c, db, analyzer.Generators{
-		Embed: ollama.New(c.OllamaURL, model, c.RequestTimeoutSeconds, 0, false, c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityEmbedding, opts.AllowCloud),
+		Embed: ollama.New(c.OllamaURL, model, c.RequestTimeoutSeconds, 0, false, c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityEmbedding, opts.AllowCloud || opts.AllowRemote),
 	}, opts)
 	return r.Summary("embed", model), err
 }
@@ -524,15 +527,15 @@ func runAnalyze(ctx context.Context, c config.Config, db *database.DB, model str
 		return "", err
 	}
 	gens := analyzer.Generators{
-		Analysis: ollama.New(c.OllamaURL, model, c.RequestTimeoutSeconds, c.OllamaNumCtx, c.OllamaThink, c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External),
-		Enrich:   ollama.New(c.OllamaURL, fast, int(c.EnrichmentTimeout().Seconds()), c.OllamaNumCtx, false, c.OllamaKeepAlive).WithOutputLimit(c.EnrichmentOutputTokens()).WithModelCheck(ollama.CapabilityCompletion, opts.External || opts.AllowCloud),
+		Analysis: ollama.New(c.OllamaURL, model, c.RequestTimeoutSeconds, c.OllamaNumCtx, c.OllamaThink, c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External || opts.AllowRemote),
+		Enrich:   ollama.New(c.OllamaURL, fast, int(c.EnrichmentTimeout().Seconds()), c.OllamaNumCtx, false, c.OllamaKeepAlive).WithOutputLimit(c.EnrichmentOutputTokens()).WithModelCheck(ollama.CapabilityCompletion, opts.External || opts.AllowCloud || opts.AllowRemote),
 	}
 	embed, err := c.TaskModel(config.TaskEmbed, false, opts.EmbedModel)
 	if err != nil && !errors.Is(err, config.ErrNoTaskModel) {
 		return "", err
 	}
 	if embed != "" {
-		gens.Embed = ollama.New(c.OllamaURL, embed, c.RequestTimeoutSeconds, 0, false, c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityEmbedding, opts.AllowCloud)
+		gens.Embed = ollama.New(c.OllamaURL, embed, c.RequestTimeoutSeconds, 0, false, c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityEmbedding, opts.AllowCloud || opts.AllowRemote)
 	}
 	r, err := analyzer.RunProgress(ctx, c, db, gens, opts)
 	return r.Summary(model, fast), err
@@ -540,19 +543,19 @@ func runAnalyze(ctx context.Context, c config.Config, db *database.DB, model str
 
 func runExpand(ctx context.Context, c config.Config, db *database.DB, model string, opts analyzer.RunOptions) (string, error) {
 	r, err := analyzer.RunTask(ctx, c, db, analyzer.Generators{
-		Analysis: ollama.New(c.OllamaURL, model, c.RequestTimeoutSeconds, c.OllamaNumCtx, c.OllamaThink, c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External),
+		Analysis: ollama.New(c.OllamaURL, model, c.RequestTimeoutSeconds, c.OllamaNumCtx, c.OllamaThink, c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External || opts.AllowRemote),
 	}, "expand", opts)
 	return r.Summary("expand", model), err
 }
 
 func runFreshness(ctx context.Context, c config.Config, db *database.DB, model string, opts analyzer.RunOptions) (string, error) {
 	gens := analyzer.Generators{
-		Analysis: ollama.New(c.OllamaURL, model, c.RequestTimeoutSeconds, c.OllamaNumCtx, c.OllamaThink, c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External),
+		Analysis: ollama.New(c.OllamaURL, model, c.RequestTimeoutSeconds, c.OllamaNumCtx, c.OllamaThink, c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External || opts.AllowRemote),
 	}
 	if opts.WebVerify {
 		gens.Search = websearch.New(c.OllamaAPIKey)
 		verifyModel := c.VerifyModel(opts.External, opts.Model, model)
-		gens.Verify = ollama.New(c.OllamaURL, verifyModel, c.RequestTimeoutSeconds, c.OllamaNumCtx, c.OllamaThink, c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External)
+		gens.Verify = ollama.New(c.OllamaURL, verifyModel, c.RequestTimeoutSeconds, c.OllamaNumCtx, c.OllamaThink, c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External || opts.AllowRemote)
 	}
 	r, err := analyzer.RunTask(ctx, c, db, gens, "freshness", opts)
 	return r.Summary("freshness", model), err
@@ -580,7 +583,7 @@ func freshnessCmd() *cobra.Command {
 // given. Embedding uses its independent override or configured default. Tasks without
 // a configured model are skipped, not failed.
 func tasksCmd() *cobra.Command {
-	var reanalyze, reanalyzeAll, external, allowCloud, webVerify bool
+	var reanalyze, reanalyzeAll, external, allowCloud, allowRemote, webVerify bool
 	var model, embedModel string
 	cmd := &cobra.Command{
 		Use:   "tasks",
@@ -594,7 +597,7 @@ func tasksCmd() *cobra.Command {
 			defer db.Close()
 			c, err = modelselection.Prepare(cmd.Context(), c, "all", modelselection.Options{
 				Model: model, EmbedModel: embedModel, External: external, AllowCloud: allowCloud,
-				WebVerify: webVerify,
+				AllowRemote: allowRemote, WebVerify: webVerify,
 			})
 			if err != nil {
 				return err
@@ -614,7 +617,7 @@ func tasksCmd() *cobra.Command {
 			opts := analyzer.RunOptions{
 				Reanalyze: reanalyze, ReanalyzeAll: reanalyzeAll, External: external,
 				Model: model, EmbedModel: embedModel, AllowCloud: allowCloud,
-				WebVerify: webVerify,
+				AllowRemote: allowRemote, WebVerify: webVerify,
 				Progress: func(p analyzer.Progress) {
 					print(p)
 					_ = db.UpdateJobDetail(ctx, job.ID, p.String())
@@ -661,6 +664,7 @@ func tasksCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&reanalyzeAll, "reanalyze-all", false, i18n.T("cli.flag.tasks_reanalyze_all"))
 	cmd.Flags().BoolVar(&external, "external", false, i18n.T("cli.flag.tasks_external"))
 	cmd.Flags().BoolVar(&allowCloud, "allow-cloud", false, i18n.T("cli.flag.allow_cloud"))
+	cmd.Flags().BoolVar(&allowRemote, "allow-remote", false, i18n.T("cli.flag.allow_remote"))
 	cmd.Flags().BoolVar(&webVerify, "web-verify", false, i18n.T("cli.flag.web_verify"))
 	cmd.Flags().StringVar(&model, "model", "", i18n.T("cli.flag.tasks_model"))
 	cmd.Flags().StringVar(&embedModel, "embed-model", "", i18n.T("cli.flag.embed_model"))

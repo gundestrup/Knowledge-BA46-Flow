@@ -9,9 +9,10 @@ routine passes. `GET /api/models` reports the resolved routing; `KBM-flow
 tasks --model <name>` runs every generation task through one model. Embeddings
 use an independent `--embed-model` override or configured default; a chat model
 cannot produce vectors.
-Cloud generation requires explicit `--external` consent; remote enrichment
-or embedding requires `--allow-cloud`. Selected models are checked for the
-required Ollama capability before a task starts.
+Cloud generation requires explicit `--external` or `--allow-remote` consent;
+remote enrichment or embedding requires `--allow-cloud` (or `--allow-remote`).
+Selected models are checked for the required Ollama capability before a task
+starts.
 
 ## Independent generation and embedding
 
@@ -76,9 +77,12 @@ are checked lazily before content is sent so empty passes still work offline.
 
 Cloud/remote generation requires `--external` (API `external: true`), which
 keeps analysis provenance on `external_*`, even for an explicitly selected
-model not in `ollama_model_external`. Embeddings and standalone enrichment use
-separate `--allow-cloud` / `allow_cloud: true` consent without changing the
-analysis lane. Unknown locality requires consent, not an assumption of local
+model not in `ollama_model_external`. The narrower `--allow-remote` /
+`allow_remote: true` consents to whatever remote models a run resolves —
+configured defaults or overrides — on any lane WITHOUT rerouting: task
+defaults keep their own model and lineage columns. Embeddings and standalone
+enrichment use separate `--allow-cloud` / `allow_cloud: true` consent without
+changing the analysis lane. Unknown locality requires consent, not an assumption of local
 execution. A non-loopback Ollama endpoint is off-machine even when its model
 weights are local to that server. `no_llm_context` remains enforced in every
 role.

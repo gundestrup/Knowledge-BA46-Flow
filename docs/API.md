@@ -48,7 +48,11 @@ detail endpoint.
 
 ### `GET /api/suggestions/{id}`
 
-Full suggestion row including `proposed_content`. `404` if the id does not exist.
+Full suggestion row including `proposed_content`, plus `current_content` —
+the file on disk right now, read os.Root-confined and capped at
+`max_document_bytes`, so the review UI can render a diff. A read failure is
+reported in `current_content_error` instead of failing the request. `404` if
+the id does not exist.
 
 ### `POST /api/suggestions/{id}/decide`
 
@@ -90,7 +94,7 @@ on the next boot.
 Body: `{"op": "<op>"}` where `<op>` is `scan`, `analyze`, `run`,
 `link-check`, `enrich`, `embed`, `expand`, `freshness` or `all`.
 Optional fields include `model`, `embed_model`, `external`, `allow_cloud`,
-`web_verify`, `reanalyze` and `reanalyze_all`. Model capability and
+`allow_remote`, `web_verify`, `reanalyze` and `reanalyze_all`. Model capability and
 remote-data consent are validated before the background job is accepted.
 
 - `link-check` probes external body URLs and writes the verdicts into each
@@ -132,8 +136,11 @@ embedding default. `embed_model` is supported on `analyze`, `run`, `all` and
 standalone `embed`; the latter also accepts its old `"model"` alias, but not
 both fields together. A configured model or an
 installed model with the required capability is accepted; cloud generation
-requires `external: true`, while remote embedding/enrichment requires
-`allow_cloud: true`. Unknown, incompatible or unconsented choices return `400`.
+requires `external: true` or `allow_remote: true`, while remote
+embedding/enrichment requires `allow_cloud: true` or `allow_remote: true`.
+`allow_remote` only consents — it never reroutes a task to the external lane
+model, so resolved defaults keep their own model and lineage stamps. Unknown,
+incompatible or unconsented choices return `400`.
 
 ```json
 {

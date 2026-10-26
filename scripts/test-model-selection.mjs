@@ -72,6 +72,38 @@ assert.equal(requests.at(-1).body.external, false);
 assert.equal(requests.at(-1).body.allow_cloud, true);
 assert.equal(requests.at(-1).body.model, "");
 
+// allow_remote is universal consent that keeps per-task routing: the
+// contextual checkbox appears when a resolved lane is remote — a configured
+// cloud default or an explicit dropdown pick — and posting it satisfies the
+// run's consent checks without touching external or allow_cloud.
+dashboard.external = false;
+dashboard.allowCloud = false;
+dashboard.allowRemote = false;
+dashboard.model = "";
+dashboard.embedModel = "";
+dashboard.externalDefault = "ext-default";
+dashboard.taskInfo = {
+  analyze: { default: "chat" },
+  enrich: { default: "fast-local" },
+  expand: { default: "gpt-oss:120b-cloud" },
+  embed: { default: "configured-embed" },
+};
+dashboard.task = "enrich";
+assert.equal(dashboard.needsRemoteConsent(), false); // every lane resolves local
+dashboard.task = "expand";
+assert.equal(dashboard.needsRemoteConsent(), true); // expand's cloud default
+dashboard.task = "enrich";
+dashboard.model = "cloud-chat"; // an explicit cloud override also prompts
+assert.equal(dashboard.needsRemoteConsent(), true);
+dashboard.allowRemote = true;
+await dashboard.startOperation("enrich");
+assert.equal(requests.at(-1).body.allow_remote, true);
+dashboard.model = "";
+dashboard.allowRemote = false;
+assert.equal(dashboard.needsRemoteConsent(), false);
+dashboard.model = "cloud-chat"; // restore the selected models for later checks
+dashboard.embedModel = "cloud-embed";
+
 const previousModels = dashboard.generationModels;
 dashboard.requestJSON = async () => ({ discovery_error: "Ollama unavailable" });
 await dashboard.loadModels(true);

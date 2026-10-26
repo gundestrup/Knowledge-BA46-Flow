@@ -238,6 +238,25 @@
                   ></span>
                   <span x-text="t('ui.kb.analyse_changes', 'Analyse')"></span>
                 </button>
+                <label
+                  class="checkbox is-size-7"
+                  :class="{ 'is-disabled': !needsRemoteConsent() }"
+                  :title="
+                    needsRemoteConsent()
+                      ? t('ui.kb.allow_remote_title', 'A resolved model for this run is remote/cloud — consent sends document content off-machine without changing which models run')
+                      : t('ui.kb.allow_remote_inactive_title', 'No remote/cloud model resolves for this run — nothing to consent to')
+                  "
+                >
+                  <input
+                    type="checkbox"
+                    :checked="allowRemote && needsRemoteConsent()"
+                    @change="allowRemote = $event.target.checked"
+                    :disabled="busy || applying || !needsRemoteConsent()"
+                  />
+                  <span x-text="t('ui.kb.allow_remote', 'Allow cloud/remote')"
+                    >Allow cloud/remote</span
+                  >
+                </label>
                 <button
                   type="button"
                   class="button is-primary"
@@ -671,6 +690,15 @@
                 </div>
               </div>
               <div class="kbm-card-header-actions">
+                <button
+                  type="button"
+                  class="button is-warning is-small mr-2"
+                  :disabled="busy || applying || acceptedCount === 0"
+                  @click="applyAccepted()"
+                >
+                  <span class="kbm-icon icon-check" aria-hidden="true"></span>
+                  <span x-text="applyLabel()"></span>
+                </button>
                 <div class="select mr-2">
                   <select
                     :aria-label="t('ui.kb.origin_filter_aria', 'Filter by origin')"
@@ -827,12 +855,56 @@
                             x-text="proposalOpen[suggestion.id] ? t('ui.kb.hide_proposal', 'Hide proposed content') : t('ui.kb.inspect_proposal', 'Inspect proposed content')"
                           ></span>
                         </button>
-                        <pre
-                          class="proposal-content mt-3"
-                          x-show="proposalOpen[suggestion.id]"
-                          x-text="proposalText(proposals[suggestion.id])"
-                          x-cloak
-                        ></pre>
+                        <div x-show="proposalOpen[suggestion.id]" x-cloak>
+                          <div
+                            class="buttons has-addons mb-2 mt-3"
+                            x-show="proposalHasDiff(proposals[suggestion.id])"
+                          >
+                            <button
+                              type="button"
+                              class="button is-small"
+                              :class="{ 'is-link is-selected': proposalView[suggestion.id] !== 'full' }"
+                              @click="proposalView[suggestion.id] = 'diff'"
+                              x-text="t('ui.kb.diff_view', 'Diff')"
+                            >
+                              Diff
+                            </button>
+                            <button
+                              type="button"
+                              class="button is-small"
+                              :class="{ 'is-link is-selected': proposalView[suggestion.id] === 'full' }"
+                              @click="proposalView[suggestion.id] = 'full'"
+                              x-text="t('ui.kb.full_view', 'Full text')"
+                            >
+                              Full text
+                            </button>
+                          </div>
+                          <div
+                            class="proposal-diff mt-3"
+                            x-show="proposalHasDiff(proposals[suggestion.id]) && proposalView[suggestion.id] !== 'full'"
+                          >
+                            <div
+                              class="dl dl-note"
+                              x-show="proposals[suggestion.id] && proposals[suggestion.id].unchanged"
+                              x-text="t('ui.kb.no_changes', 'No changes vs the current file')"
+                            ></div>
+                            <template
+                              x-for="(op, idx) in proposalDiffOps(proposals[suggestion.id])"
+                              :key="idx"
+                            >
+                              <div
+                                class="dl"
+                                :class="'dl-' + op.t"
+                                x-text="op.s || ' '"
+                              ></div>
+                            </template>
+                          </div>
+                          <pre
+                            class="proposal-content mt-3"
+                            x-show="!proposalHasDiff(proposals[suggestion.id]) || proposalView[suggestion.id] === 'full'"
+                            x-text="proposalText(proposals[suggestion.id])"
+                          ></pre>
+                        </div>
                       </div>
                     </template>
 

@@ -103,6 +103,11 @@ type Suggestion struct {
 	// DecisionNote carries the reviewer's "why" on reject/accept decisions —
 	// the ground-truth feedback the analysis prompt shows back to the model.
 	DecisionNote string `json:"decision_note,omitempty"`
+	// CurrentContent/CurrentContentError are populated only by
+	// GET /api/suggestions/{id} for the review diff view — the file on disk
+	// now, or why it could not be read. Never persisted.
+	CurrentContent      string `json:"current_content,omitempty"`
+	CurrentContentError string `json:"current_content_error,omitempty"`
 }
 
 // KnowledgeDashboard summarizes current analysis work and the most recent

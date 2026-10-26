@@ -94,7 +94,10 @@ LLM tasks. Each is incremental against its own lineage columns (per-document
 `--model <name>` (per-run override — a configured or installed model).
 `--external` is available on `expand`, `freshness` and `tasks`, and
 `--web-verify` on `freshness` and `tasks`. `enrich` and
-`embed` accept `--allow-cloud` for explicitly selected remote models. Model
+`embed` accept `--allow-cloud` for explicitly selected remote models, and
+every LLM command accepts `--allow-remote` — consent to whatever remote/cloud
+models the run resolves (configured defaults or overrides) on any lane,
+without switching to `ollama_model_external`. Model
 capability and privacy are checked before generation. The dashboard's task +
 model pickers run the same ops via
 `{"op":"enrich"|"embed"|"expand"|"freshness"|"all", ...}` in `/api/ops`.
@@ -162,7 +165,8 @@ For `analyze`, `run` and `tasks`, embedding resolution is independent:
 Both explicit choices are capability/privacy-checked through Ollama metadata
 before work starts. Configured defaults are checked lazily before sending
 content, preserving offline no-op passes. Cloud generation requires
-`--external`; embedding/enrichment consent is separately `--allow-cloud`.
+`--external` or `--allow-remote`; embedding/enrichment consent is separately
+`--allow-cloud` (or the all-lane `--allow-remote`).
 
 Embedding model changes refresh the visible corpus automatically, even with
 no pending analysis and without `--reanalyze`. Vector and lineage updates are

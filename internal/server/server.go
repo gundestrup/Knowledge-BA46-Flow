@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"knowledge-ba46-flow/internal/database"
 	"knowledge-ba46-flow/internal/i18n"
 	"knowledge-ba46-flow/internal/logging"
+	"knowledge-ba46-flow/internal/paths"
 	repositoryreport "knowledge-ba46-flow/internal/report"
 )
 
@@ -85,7 +87,7 @@ func NewMux(c config.Config, db *database.DB, stop chan<- struct{}) http.Handler
 	mux.HandleFunc("GET /api/documents", documents(db))
 	mux.HandleFunc("GET /api/models", modelsData(c, db))
 	mux.HandleFunc("GET /api/suggestions", suggestions(db))
-	mux.HandleFunc("GET /api/suggestions/{id}", suggestion(db))
+	mux.HandleFunc("GET /api/suggestions/{id}", suggestion(c, db))
 	o := &ops{c: c, db: db}
 	mux.HandleFunc("POST /api/suggestions/{id}/decide", o.decide)
 	mux.HandleFunc("POST /api/apply", o.applyAccepted)
@@ -225,8 +227,11 @@ func suggestions(db *database.DB) http.HandlerFunc {
 	}
 }
 
-// suggestion returns one suggestion in full, including proposed_content.
-func suggestion(db *database.DB) http.HandlerFunc {
+// suggestion returns one suggestion in full, including proposed_content, plus
+// the current file content so the review UI can render a diff. The read is
+// os.Root-confined and capped at MaxDocumentBytes — failures are reported in
+// current_content_error and never fail the request itself.
+func suggestion(c config.Config, db *database.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s, err := db.Suggestion(r.Context(), pathID(r))
 		if errors.Is(err, sql.ErrNoRows) {
@@ -237,8 +242,41 @@ func suggestion(db *database.DB) http.HandlerFunc {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
+		s.CurrentContent, s.CurrentContentError = currentContent(c, s.DocumentPath)
 		writeJSON(w, http.StatusOK, s)
 	}
+}
+
+// currentContent reads a document inside the repository for the diff view.
+// Returns (content, "") on success or ("", reason) — an unreadable or
+// oversized file downgrades the UI to proposed-text-only rather than failing.
+func currentContent(c config.Config, rel string) (string, string) {
+	root, err := os.OpenRoot(c.RepositoryPath)
+	if err != nil {
+		return "", "repository is not readable"
+	}
+	defer root.Close()
+	local, err := paths.CleanRelative(rel)
+	if err != nil {
+		return "", "invalid document path"
+	}
+	f, err := root.Open(local)
+	if err != nil {
+		return "", "file not found or unreadable"
+	}
+	defer f.Close()
+	cap := c.MaxDocumentBytes
+	if cap <= 0 {
+		cap = 200000 // same default config.Load applies
+	}
+	b, err := io.ReadAll(io.LimitReader(f, cap+1))
+	if err != nil {
+		return "", "file not found or unreadable"
+	}
+	if int64(len(b)) > cap {
+		return "", "file too large to diff"
+	}
+	return string(b), ""
 }
 
 // decideBody is the POST body for the decide endpoint.

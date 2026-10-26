@@ -132,11 +132,47 @@ func TestPrepareRequiresExternalForCloudTaskDefault(t *testing.T) {
 	c := baseConfig(server.URL)
 
 	_, err := Prepare(context.Background(), c, "expand", Options{})
-	if err == nil || !strings.Contains(err.Error(), "requires explicit --external consent") {
-		t.Fatalf("cloud task default should be blocked without external consent, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "requires explicit remote consent") {
+		t.Fatalf("cloud task default should be blocked without remote consent, got %v", err)
 	}
 	if _, err := Prepare(context.Background(), c, "expand", Options{External: true}); err != nil {
 		t.Fatalf("explicit external flag should permit cloud task default: %v", err)
+	}
+}
+
+func TestPrepareAllowRemoteConsentsWithoutRerouting(t *testing.T) {
+	server := modelServer(t)
+	defer server.Close()
+	c := baseConfig(server.URL)
+
+	// The configured expand default resolves to the cloud model via the lane
+	// fallback; --allow-remote consents without switching to the external lane.
+	got, err := Prepare(context.Background(), c, "all", Options{AllowRemote: true})
+	if err != nil {
+		t.Fatalf("--allow-remote should permit remote resolved models: %v", err)
+	}
+	if model, err := got.TaskModel(config.TaskAnalyze, false, ""); err != nil || model != "base-local" {
+		t.Fatalf("analyze routing must stay on its local default, got %q err %v", model, err)
+	}
+	if model, err := got.TaskModel(config.TaskExpand, false, ""); err != nil || model != "cloud-gen:cloud" {
+		t.Fatalf("expand must keep its configured cloud default, got %q err %v", model, err)
+	}
+}
+
+func TestPrepareAllowRemotePermitsCloudOverrides(t *testing.T) {
+	server := modelServer(t)
+	defer server.Close()
+	c := baseConfig(server.URL)
+
+	if _, err := Prepare(context.Background(), c, "analyze", Options{
+		Model: "cloud-gen:cloud", AllowRemote: true,
+	}); err != nil {
+		t.Fatalf("--allow-remote should consent to a cloud generation override: %v", err)
+	}
+	if _, err := Prepare(context.Background(), c, "embed", Options{
+		Model: "cloud-embed:cloud", AllowRemote: true,
+	}); err != nil {
+		t.Fatalf("--allow-remote should consent to a cloud embedding override: %v", err)
 	}
 }
 
@@ -191,7 +227,7 @@ func TestPrepareValidatesVerifyLaneConsent(t *testing.T) {
 	c.OllamaTaskModels = map[string][]string{config.TaskVerify: {"cloud-gen:cloud"}}
 
 	if _, err := Prepare(context.Background(), c, "freshness", Options{WebVerify: true}); err == nil ||
-		!strings.Contains(err.Error(), "requires explicit --external consent") {
+		!strings.Contains(err.Error(), "requires explicit remote consent") {
 		t.Fatalf("a cloud verify default must demand consent, got %v", err)
 	}
 	// The same remote verify lane is not validated when verification is not

@@ -159,6 +159,16 @@ func TestDocumentAndSuggestionDetailEndpoints(t *testing.T) {
 	if suggestion.ID != 1 || suggestion.ProposedContent != "" || suggestion.Reason != "better place" {
 		t.Fatalf("suggestion=%+v", suggestion)
 	}
+	if suggestion.CurrentContent != "# doc" || suggestion.CurrentContentError != "" {
+		t.Fatalf("current_content=%q err=%q", suggestion.CurrentContent, suggestion.CurrentContentError)
+	}
+
+	// The list endpoint strips both heavy fields — they stay detail-only.
+	var listed []database.Suggestion
+	getJSON(t, srv.URL+"/api/suggestions", &listed)
+	if len(listed) != 1 || listed[0].CurrentContent != "" {
+		t.Fatalf("list suggestions=%+v", listed)
+	}
 
 	for _, path := range []string{"/api/suggestions/999", "/api/ops/999"} {
 		res, err := http.Get(srv.URL + path)

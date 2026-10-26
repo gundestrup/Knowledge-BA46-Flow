@@ -200,9 +200,11 @@ Four independent roles, each its own config field — mix freely:
   `external_sha256`/`external_model`, so the local `analyzed_*` lineage stays
   intact and a following normal run does not treat the corpus as new.
   `expand` and `freshness` use this lane when explicitly run with
-  `--external`. A cloud/remote generation model selected with `--model` also
-  requires `--external`; remote enrichment or embedding requires
-  `--allow-cloud`.
+  `--external`. A cloud/remote generation model selected with `--model` or
+  resolved as a task default also requires consent: `--external` (which
+  switches generation to the external lane) or `--allow-remote`, which only
+  consents and leaves per-task routing and lineage stamps untouched; remote
+  enrichment or embedding requires `--allow-cloud`.
   **Privacy:** document bodies go to that model's provider — the corpus
   leaves the machine. `no_llm_context` notes stay excluded.
 - `ollama_task_models` — per-task routing on top of the lanes: each task

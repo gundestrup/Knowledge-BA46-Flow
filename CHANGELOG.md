@@ -11,6 +11,17 @@ tag is prepared.
 
 ### Added
 
+- `--allow-remote` / `allow_remote: true` remote-consent flag: permits
+  cloud/remote execution for whatever models a run resolves — configured task
+  defaults or explicit overrides — on every lane WITHOUT switching to the
+  external lane model or its `external_*` stamps. The knowledge dashboard
+  shows a contextual "Allow cloud/remote" checkbox beside the operation
+  buttons whenever a resolved lane needs consent.
+- "Inspect proposed content" on expand/merge suggestions now opens a line
+  diff against the current file — added, removed, and unchanged lines are
+  highlighted so the reviewer's eye lands on what changed, with a
+  Diff/Full text toggle for the raw proposal. `GET /api/suggestions/{id}`
+  returns `current_content` (os.Root-confined, capped) to feed the view.
 - Dark mode for the web UI using Bulma 1.x built-in theming: a header toggle
   on all three pages cycles auto → light → dark and persists the choice in
   `localStorage`. "Auto" drops `data-theme` so Bulma's `prefers-color-scheme`

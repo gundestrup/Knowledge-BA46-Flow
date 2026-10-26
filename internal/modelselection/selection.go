@@ -17,6 +17,11 @@ type Options struct {
 	EmbedModel string
 	External   bool
 	AllowCloud bool
+	// AllowRemote consents to remote/cloud execution for whatever models the
+	// run resolves — configured defaults or explicit overrides — on every
+	// lane, WITHOUT rerouting to the external lane model. Unlike --external it
+	// only consents: task defaults keep their own model and lineage stamps.
+	AllowRemote bool
 	// WebVerify adds the freshness verification pass (verify task lane) to the
 	// validated set — its resolved model needs the same remote consent as any
 	// generation stage.
@@ -81,7 +86,7 @@ func validateOptions(c config.Config, op string, tasks []string, opts Options) (
 
 func verifyOverrides(ctx context.Context, client *ollama.Client, c *config.Config, op string, opts Options) error {
 	if op != "embed" && opts.Model != "" {
-		allowRemote := opts.External || (op == "enrich" && opts.AllowCloud)
+		allowRemote := opts.External || opts.AllowRemote || (op == "enrich" && opts.AllowCloud)
 		if err := verifyModel(ctx, client, c, opts.Model, config.TaskAnalyze, ollama.CapabilityCompletion, allowRemote); err != nil {
 			return err
 		}
@@ -91,7 +96,7 @@ func verifyOverrides(ctx context.Context, client *ollama.Client, c *config.Confi
 		embedOverride = opts.EmbeddingOverride()
 	}
 	if embedOverride != "" {
-		if err := verifyModel(ctx, client, c, embedOverride, config.TaskEmbed, ollama.CapabilityEmbedding, opts.AllowCloud); err != nil {
+		if err := verifyModel(ctx, client, c, embedOverride, config.TaskEmbed, ollama.CapabilityEmbedding, opts.AllowCloud || opts.AllowRemote); err != nil {
 			return err
 		}
 	}
@@ -104,7 +109,7 @@ func verifyModel(ctx context.Context, client *ollama.Client, c *config.Config, n
 		err = info.Validate(capability, allowRemote)
 	}
 	if err != nil {
-		return fmt.Errorf("verify %s model %q: %w (use --external for cloud generation, --allow-cloud for cloud embeddings/enrichment)", task, name, err)
+		return fmt.Errorf("verify %s model %q: %w (use --external or --allow-remote for cloud generation, --allow-cloud for cloud embeddings/enrichment)", task, name, err)
 	}
 	*c = c.WithModelOption(task, name)
 	return nil
@@ -117,9 +122,9 @@ func validateConfiguredTasks(c config.Config, tasks []string, opts Options) erro
 			return err
 		}
 		knownRemote := knownRemoteModel(c, model)
-		allowed := opts.External || (task == config.TaskEnrich && opts.AllowCloud)
+		allowed := opts.External || opts.AllowRemote || (task == config.TaskEnrich && opts.AllowCloud)
 		if knownRemote && !allowed {
-			return fmt.Errorf("model %q requires explicit --external consent (--allow-cloud for enrichment only)", model)
+			return fmt.Errorf("model %q requires explicit remote consent (--external or --allow-remote; --allow-cloud covers enrichment only)", model)
 		}
 	}
 	return nil
@@ -136,8 +141,8 @@ func validateEmbeddingRoute(c config.Config, op string, opts Options) error {
 			return err
 		}
 		knownRemote := model != "" && knownRemoteModel(c, model)
-		if knownRemote && !opts.AllowCloud {
-			return fmt.Errorf("embedding model %q requires explicit --allow-cloud consent", model)
+		if knownRemote && !opts.AllowCloud && !opts.AllowRemote {
+			return fmt.Errorf("embedding model %q requires explicit remote consent (--allow-cloud or --allow-remote)", model)
 		}
 	}
 	return nil

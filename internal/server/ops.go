@@ -51,6 +51,10 @@ type opRequest struct {
 	// AllowCloud opts into remote embeddings/enrichment; remote generation uses
 	// External instead.
 	AllowCloud bool `json:"allow_cloud"`
+	// AllowRemote consents to remote/cloud execution for the models this run
+	// resolves — defaults or overrides — on every lane, without switching to
+	// the external lane model. Routing and lineage stamps stay unchanged.
+	AllowRemote bool `json:"allow_remote"`
 	// WebVerify (freshness/all only) sends each flagged claim to Ollama's
 	// hosted web search so a second pass can judge it against live evidence.
 	// Claim text leaves the machine; requires OLLAMA_API_KEY.
@@ -116,7 +120,7 @@ func (o *ops) create(w http.ResponseWriter, r *http.Request) {
 	if b.DryRun {
 		c, err := modelselection.Prepare(r.Context(), o.c, b.Op, modelselection.Options{
 			Model: b.Model, EmbedModel: b.EmbedModel, External: b.External, AllowCloud: b.AllowCloud,
-			WebVerify: b.WebVerify,
+			AllowRemote: b.AllowRemote, WebVerify: b.WebVerify,
 		})
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err)
@@ -134,7 +138,7 @@ func (o *ops) create(w http.ResponseWriter, r *http.Request) {
 	}
 	c, err := modelselection.Prepare(r.Context(), o.c, b.Op, modelselection.Options{
 		Model: b.Model, EmbedModel: b.EmbedModel, External: b.External, AllowCloud: b.AllowCloud,
-		WebVerify: b.WebVerify,
+		AllowRemote: b.AllowRemote, WebVerify: b.WebVerify,
 	})
 	if err != nil {
 		o.end()
@@ -402,7 +406,7 @@ func (o *ops) runOp(ctx context.Context, j database.Job, request opRequest) (str
 		return fmt.Sprintf("Scanned %d markdown files; %d new/changed.", r.Seen, r.Changed), err
 	}
 	genClient := func(m string, timeout int) *ollama.Client {
-		return ollama.New(o.c.OllamaURL, m, timeout, o.c.OllamaNumCtx, o.c.OllamaThink, o.c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, external)
+		return ollama.New(o.c.OllamaURL, m, timeout, o.c.OllamaNumCtx, o.c.OllamaThink, o.c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, external || request.AllowRemote)
 	}
 	// progress keeps the running job's detail current — the UI polls it.
 	progress := func(p analyzer.Progress) {
@@ -413,7 +417,7 @@ func (o *ops) runOp(ctx context.Context, j database.Job, request opRequest) (str
 	taskOpts := analyzer.RunOptions{
 		Reanalyze: request.Reanalyze, ReanalyzeAll: request.ReanalyzeAll, External: external,
 		Model: model, EmbedModel: request.EmbedModel, AllowCloud: request.AllowCloud,
-		WebVerify: request.WebVerify, Progress: progress,
+		AllowRemote: request.AllowRemote, WebVerify: request.WebVerify, Progress: progress,
 	}
 	analyze := func() (string, error) {
 		analysisModel, err := o.c.TaskModel(config.TaskAnalyze, external, model)
@@ -426,14 +430,14 @@ func (o *ops) runOp(ctx context.Context, j database.Job, request opRequest) (str
 		}
 		gens := analyzer.Generators{
 			Analysis: genClient(analysisModel, o.c.RequestTimeoutSeconds),
-			Enrich:   ollama.New(o.c.OllamaURL, fastModel, int(o.c.EnrichmentTimeout().Seconds()), o.c.OllamaNumCtx, false, o.c.OllamaKeepAlive).WithOutputLimit(o.c.EnrichmentOutputTokens()).WithModelCheck(ollama.CapabilityCompletion, external || request.AllowCloud),
+			Enrich:   ollama.New(o.c.OllamaURL, fastModel, int(o.c.EnrichmentTimeout().Seconds()), o.c.OllamaNumCtx, false, o.c.OllamaKeepAlive).WithOutputLimit(o.c.EnrichmentOutputTokens()).WithModelCheck(ollama.CapabilityCompletion, external || request.AllowCloud || request.AllowRemote),
 		}
 		embedModel, err := o.c.TaskModel(config.TaskEmbed, false, request.EmbedModel)
 		if err != nil && !errors.Is(err, config.ErrNoTaskModel) {
 			return "", err
 		}
 		if embedModel != "" {
-			gens.Embed = ollama.New(o.c.OllamaURL, embedModel, o.c.RequestTimeoutSeconds, 0, false, o.c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityEmbedding, request.AllowCloud)
+			gens.Embed = ollama.New(o.c.OllamaURL, embedModel, o.c.RequestTimeoutSeconds, 0, false, o.c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityEmbedding, request.AllowCloud || request.AllowRemote)
 		}
 		r, err := analyzer.RunProgress(ctx, o.c, o.db, gens, taskOpts)
 		return r.Summary(analysisModel, fastModel), err
@@ -513,8 +517,8 @@ func (o *ops) enrich(ctx context.Context, j database.Job, opts analyzer.RunOptio
 		return "", err
 	}
 	r, err := analyzer.RunProgress(ctx, o.c, o.db, analyzer.Generators{
-		Analysis: ollama.New(o.c.OllamaURL, m, o.c.RequestTimeoutSeconds, o.c.OllamaNumCtx, o.c.OllamaThink, o.c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External || opts.AllowCloud),
-		Enrich:   ollama.New(o.c.OllamaURL, m, int(o.c.EnrichmentTimeout().Seconds()), o.c.OllamaNumCtx, false, o.c.OllamaKeepAlive).WithOutputLimit(o.c.EnrichmentOutputTokens()).WithModelCheck(ollama.CapabilityCompletion, opts.External || opts.AllowCloud),
+		Analysis: ollama.New(o.c.OllamaURL, m, o.c.RequestTimeoutSeconds, o.c.OllamaNumCtx, o.c.OllamaThink, o.c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External || opts.AllowCloud || opts.AllowRemote),
+		Enrich:   ollama.New(o.c.OllamaURL, m, int(o.c.EnrichmentTimeout().Seconds()), o.c.OllamaNumCtx, false, o.c.OllamaKeepAlive).WithOutputLimit(o.c.EnrichmentOutputTokens()).WithModelCheck(ollama.CapabilityCompletion, opts.External || opts.AllowCloud || opts.AllowRemote),
 	}, analyzer.RunOptions{
 		Reanalyze: opts.Reanalyze, ReanalyzeAll: opts.ReanalyzeAll, EnrichOnly: true, Model: m, Progress: opts.Progress,
 	})
@@ -532,7 +536,7 @@ func (o *ops) embed(ctx context.Context, j database.Job, opts analyzer.RunOption
 		return "", err
 	}
 	r, err := analyzer.RunEmbed(ctx, o.c, o.db, analyzer.Generators{
-		Embed: ollama.New(o.c.OllamaURL, m, o.c.RequestTimeoutSeconds, 0, false, o.c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityEmbedding, opts.AllowCloud),
+		Embed: ollama.New(o.c.OllamaURL, m, o.c.RequestTimeoutSeconds, 0, false, o.c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityEmbedding, opts.AllowCloud || opts.AllowRemote),
 	}, opts)
 	return r.Summary("embed", m), err
 }
@@ -701,12 +705,12 @@ func (o *ops) task(ctx context.Context, j database.Job, name string, opts analyz
 		return "", err
 	}
 	gens := analyzer.Generators{
-		Analysis: ollama.New(o.c.OllamaURL, m, o.c.RequestTimeoutSeconds, o.c.OllamaNumCtx, o.c.OllamaThink, o.c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External),
+		Analysis: ollama.New(o.c.OllamaURL, m, o.c.RequestTimeoutSeconds, o.c.OllamaNumCtx, o.c.OllamaThink, o.c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External || opts.AllowRemote),
 	}
 	if name == config.TaskFreshness && opts.WebVerify {
 		gens.Search = websearch.New(o.c.OllamaAPIKey)
 		verifyModel := o.c.VerifyModel(opts.External, opts.Model, m)
-		gens.Verify = ollama.New(o.c.OllamaURL, verifyModel, o.c.RequestTimeoutSeconds, o.c.OllamaNumCtx, o.c.OllamaThink, o.c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External)
+		gens.Verify = ollama.New(o.c.OllamaURL, verifyModel, o.c.RequestTimeoutSeconds, o.c.OllamaNumCtx, o.c.OllamaThink, o.c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, opts.External || opts.AllowRemote)
 	}
 	r, err := analyzer.RunTask(ctx, o.c, o.db, gens, name, opts)
 	return r.Summary(name, m), err

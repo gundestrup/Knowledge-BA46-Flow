@@ -12,6 +12,43 @@ const compactCount = new Intl.NumberFormat("en", {
   maximumFractionDigits: 1,
 });
 
+// lcsLines diffs two line lists with a classic LCS table, emitting ordered
+// ctx/add/del ops. Callers bound the input size (see diffLines) so the
+// (n+1)×(m+1) table stays small.
+function lcsLines(a, b) {
+  const n = a.length;
+  const m = b.length;
+  const width = m + 1;
+  const dp = new Int32Array((n + 1) * width);
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i * width + j] =
+        a[i] === b[j]
+          ? dp[(i + 1) * width + j + 1] + 1
+          : Math.max(dp[(i + 1) * width + j], dp[i * width + j + 1]);
+    }
+  }
+  const ops = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      ops.push({ t: "ctx", s: a[i] });
+      i++;
+      j++;
+    } else if (dp[(i + 1) * width + j] >= dp[i * width + j + 1]) {
+      ops.push({ t: "del", s: a[i] });
+      i++;
+    } else {
+      ops.push({ t: "add", s: b[j] });
+      j++;
+    }
+  }
+  for (; i < n; i++) ops.push({ t: "del", s: a[i] });
+  for (; j < m; j++) ops.push({ t: "add", s: b[j] });
+  return ops;
+}
+
 window.knowledgeDashboard = () => ({
   documents: [],
   suggestions: [],
@@ -19,6 +56,7 @@ window.knowledgeDashboard = () => ({
   progressDays: [],
   proposals: {},
   proposalOpen: {},
+  proposalView: {},
   statusFilter: "pending",
   originFilter: "all",
   pendingCount: 0,
@@ -28,6 +66,7 @@ window.knowledgeDashboard = () => ({
   reanalyze: false,
   external: false,
   allowCloud: false,
+  allowRemote: false,
   webVerify: false,
   stopping: false,
   llmConfigOpen: false,
@@ -265,6 +304,7 @@ window.knowledgeDashboard = () => ({
           ? this.embedModel
           : "",
         allow_cloud: this.allowCloud,
+        allow_remote: this.allowRemote,
         web_verify: ["freshness", "all"].includes(op) && this.webVerify,
         dry_run: true,
       });
@@ -338,7 +378,7 @@ window.knowledgeDashboard = () => ({
       check(
         this.generationModels,
         this.model,
-        op === "enrich" ? this.allowCloud : this.external,
+        (op === "enrich" ? this.allowCloud : this.external) || this.allowRemote,
         op === "enrich"
           ? this.t(
               "ui.kb.hint_enable_cloud",
@@ -354,13 +394,65 @@ window.knowledgeDashboard = () => ({
       check(
         this.embeddingModels,
         this.embedModel,
-        this.allowCloud,
+        this.allowCloud || this.allowRemote,
         this.t(
           "ui.kb.hint_enable_cloud",
           "Enable cloud/remote embeddings and enrichment.",
         ),
       );
     }
+  },
+
+  // isRemoteName mirrors the backend's knownRemoteModel heuristic: a verified
+  // locality wins, else the -cloud tag suffix or the external lane's model.
+  isRemoteName(name) {
+    if (!name) return false;
+    const hit = [...this.generationModels, ...this.embeddingModels].find(
+      (m) => m.name === name,
+    );
+    if (hit?.locality === "cloud" || hit?.locality === "remote") return true;
+    const tag = name.slice(name.lastIndexOf(":") + 1);
+    return (
+      tag === "cloud" || tag.endsWith("-cloud") || name === this.externalDefault
+    );
+  },
+
+  // needsRemoteConsent drives the inline allow_remote checkbox: it appears
+  // when any lane the current selection would run resolves to a remote model
+  // not already consented by the external lane or allow_cloud checkboxes.
+  needsRemoteConsent() {
+    const laneCapable = ["analyze", "expand", "freshness", "verify"];
+    const genLanes = new Set(["enrich", "analyze"]); // Analyse / Scan+analyse buttons
+    (
+      ({
+        all: ["enrich", "expand", "freshness", "analyze"],
+        expand: ["expand"],
+        freshness: ["freshness"],
+        enrich: ["enrich"],
+      })[this.task] || []
+    ).forEach((t) => {
+      genLanes.add(t);
+    });
+    if (this.webVerify && ["freshness", "all"].includes(this.task)) {
+      genLanes.add("verify");
+    }
+    const uncovered = (lane, kind) => {
+      const model =
+        kind === "embed"
+          ? this.effectiveEmbedModel()
+          : this.model ||
+            (this.external && laneCapable.includes(lane)
+              ? this.externalDefault
+              : this.taskInfo[lane]?.default || "");
+      if (!this.isRemoteName(model)) return false;
+      if (this.external && kind === "gen" && laneCapable.includes(lane))
+        return false;
+      if (this.allowCloud && (lane === "enrich" || kind === "embed"))
+        return false;
+      return true;
+    };
+    if ([...genLanes].some((lane) => uncovered(lane, "gen"))) return true;
+    return uncovered("embed", "embed");
   },
 
   async refreshData() {
@@ -549,6 +641,7 @@ window.knowledgeDashboard = () => ({
           ? this.embedModel
           : "",
         allow_cloud: llmOps.includes(op) && this.allowCloud,
+        allow_remote: llmOps.includes(op) && this.allowRemote,
         web_verify: ["freshness", "all"].includes(op) && this.webVerify,
       });
       this.busy = true;
@@ -625,13 +718,26 @@ window.knowledgeDashboard = () => ({
     this.proposals[id] = null;
     try {
       const suggestion = await this.requestJSON(`/api/suggestions/${id}`);
-      this.proposals[id] = suggestion.proposed_content || "";
+      const p = {
+        proposed: suggestion.proposed_content || "",
+        current: suggestion.current_content,
+        currentError: suggestion.current_content_error,
+      };
+      if (this.proposalHasDiff(p)) {
+        p.diff = this.diffLines(p.current, p.proposed);
+        p.unchanged = p.diff.every((o) => o.t === "ctx");
+      }
+      this.proposals[id] = p;
+      this.proposalView[id] = p.diff ? "diff" : "full";
     } catch (error) {
-      this.proposals[id] = this.t(
-        "ui.kb.proposal_load_failed",
-        "Unable to load proposed content: {{.Error}}",
-        { Error: error.message },
-      );
+      this.proposals[id] = {
+        proposed: this.t(
+          "ui.kb.proposal_load_failed",
+          "Unable to load proposed content: {{.Error}}",
+          { Error: error.message },
+        ),
+      };
+      this.proposalView[id] = "full";
     }
   },
 
@@ -639,12 +745,59 @@ window.knowledgeDashboard = () => ({
   // bound to a scope object, not the reactive proxy — `this.proposals`
   // reads inside a method are never tracked, so the binding went stale.
   // Pass the reactive value in from the expression instead.
-  proposalText(content) {
-    if (content === undefined || content === null)
+  proposalText(p) {
+    if (p === undefined || p === null)
       return this.t("ui.kb.loading", "Loading…");
+    const content = typeof p === "string" ? p : p.proposed;
     return (
       content || this.t("ui.kb.no_proposed_content", "(No proposed content)")
     );
+  },
+
+  // A diff is only meaningful when the handler could read the current file —
+  // absent field (old server) or a read error falls back to full text.
+  proposalHasDiff(p) {
+    return (
+      p !== null &&
+      typeof p === "object" &&
+      typeof p.current === "string" &&
+      !p.currentError
+    );
+  },
+
+  // Line diff for the inspector: common prefix/suffix lines are context, the
+  // middle runs an LCS so removed/added/changed regions are highlighted in
+  // order. Oversized middles degrade to whole-block del/add rather than
+  // allocating a quadratic matrix.
+  diffLines(oldText, newText) {
+    const a = oldText.split("\n");
+    const b = newText.split("\n");
+    let lo = 0;
+    while (lo < a.length && lo < b.length && a[lo] === b[lo]) lo++;
+    let hi = 0;
+    while (
+      hi < a.length - lo &&
+      hi < b.length - lo &&
+      a[a.length - 1 - hi] === b[b.length - 1 - hi]
+    )
+      hi++;
+    const aMid = a.slice(lo, a.length - hi);
+    const bMid = b.slice(lo, b.length - hi);
+    const ops = a.slice(0, lo).map((s) => ({ t: "ctx", s }));
+    if (aMid.length * bMid.length > 4000000) {
+      for (const s of aMid) ops.push({ t: "del", s });
+      for (const s of bMid) ops.push({ t: "add", s });
+    } else {
+      ops.push(...lcsLines(aMid, bMid));
+    }
+    for (const s of a.slice(a.length - hi)) ops.push({ t: "ctx", s });
+    return ops;
+  },
+
+  // The ops list is computed once at fetch time (p.diff) — CSP Alpine forbids
+  // x-html, so the template walks ops with x-for + x-text (inherently safe).
+  proposalDiffOps(p) {
+    return p?.diff || [];
   },
 
   async decide(id, status) {

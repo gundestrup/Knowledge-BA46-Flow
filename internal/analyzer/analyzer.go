@@ -271,6 +271,7 @@ type RunOptions struct {
 	Model        string
 	EmbedModel   string
 	AllowCloud   bool
+	AllowRemote  bool
 	WebVerify    bool
 	Progress     func(Progress)
 }
