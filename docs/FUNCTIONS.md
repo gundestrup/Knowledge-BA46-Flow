@@ -61,7 +61,7 @@ as unresolved. Like every suggestion it waits for a human accept.
 ## `check-links`
 
 The optional **external** link check — an explicit opt-in (`KBM-flow
-check-links`, the dashboard's _Check external links_ button, or
+check-links`, the dashboard's _Link Check_ button, or
 `{"op":"link-check"}` in `/api/ops`). It extracts every `http(s)://` URL from
 document bodies (fenced/inline code skipped), probes each unique URL once
 with a bounded client (HEAD, GET fallback for 405/501, 20s timeout, 8

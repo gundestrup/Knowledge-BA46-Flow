@@ -102,9 +102,9 @@ repositories for the report page, and a config with a dead Ollama URL), starts
   was built for — the panel must not stay on "Loading…"); Reject and Accept
   fire `/api/suggestions/{id}/decide` and remove cards; "Apply accepted"
   posts `/api/apply`, and the fixture file on disk is asserted to contain the
-  applied paragraph. The operation buttons are exercised for real: "Scan
-  repository", "Check external links", "Run task", and "Scan + analyze" each
-  fire `POST /api/ops` with the asserted payload, and "Analyze changes" with
+  applied paragraph. The operation buttons are exercised for real: "Scan",
+  "Link Check", "Run task", and "Scan + analyse" each
+  fire `POST /api/ops` with the asserted payload, and "Analyse" with
   `reanalyze`/`allow_cloud` ticked hits the dead fixture Ollama and must
   surface the failures in the job row instead of hanging. "Refresh from
   Ollama" fires `/api/models?discover=1` and surfaces the discovery error in

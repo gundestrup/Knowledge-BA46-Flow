@@ -597,9 +597,9 @@ async function main() {
       discoverySurface,
     );
 
-    // "Scan repository" — a real non-LLM op against the fixture.
+    // "Scan" — a real non-LLM op against the fixture.
     page.requests = [];
-    await page.clickUntilRequest("Scan repository", "POST", "/api/ops", {
+    await page.clickUntilRequest("Scan", "POST", "/api/ops", {
       body: '"op":"scan"',
     });
     await page.waitFor(
@@ -622,16 +622,16 @@ async function main() {
       ),
     );
 
-    // "Check external links" — real link-check op; fixture docs have no
+    // "Link Check" — real link-check op; fixture docs have no
     // external links, so it completes quickly with no network calls.
     await page.waitFor(
       `[...document.querySelectorAll("button")].some(
-        (x) => x.textContent.includes("Check external links") && !x.disabled)`,
+        (x) => x.textContent.includes("Link Check") && !x.disabled)`,
       20000,
       "idle before link-check",
     );
     page.requests = [];
-    await page.clickUntilRequest("Check external links", "POST", "/api/ops", {
+    await page.clickUntilRequest("Link Check", "POST", "/api/ops", {
       body: '"op":"link-check"',
     });
     await page.waitFor(
@@ -684,7 +684,7 @@ async function main() {
       ),
     );
     page.requests = [];
-    await page.clickUntilRequest("Analyze changes", "POST", "/api/ops", {
+    await page.clickUntilRequest("Analyse", "POST", "/api/ops", {
       body: '"op":"analyze"',
     });
     await page.waitFor(
@@ -710,16 +710,16 @@ async function main() {
       ),
     );
 
-    // "Scan + analyze" — the run composite op. Waits for the previous job to
+    // "Scan + analyse" — the run composite op. Waits for the previous job to
     // release busy, then scan succeeds and analyze reports failures.
     await page.waitFor(
       `[...document.querySelectorAll("button")].some(
-        (x) => x.textContent.includes("Scan + analyze") && !x.disabled)`,
+        (x) => x.textContent.includes("Scan + analyse") && !x.disabled)`,
       30000,
       "idle before run",
     );
     page.requests = [];
-    await page.clickUntilRequest("Scan + analyze", "POST", "/api/ops", {
+    await page.clickUntilRequest("Scan + analyse", "POST", "/api/ops", {
       body: '"op":"run"',
     });
     await page.waitFor(

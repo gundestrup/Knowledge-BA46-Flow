@@ -21,6 +21,10 @@
   width: 100%;
   text-overflow: ellipsis;
 }
+
+.kbm-check-list .checkbox {
+  display: flex;
+}
 .suggestion-card {
   border: 1px solid var(--kbm-line);
   border-left: 4px solid var(--kbm-steel);

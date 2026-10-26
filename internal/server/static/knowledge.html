@@ -52,6 +52,18 @@
           </li>
         </ul>
       </nav>
+      <div class="kbm-aside-footer">
+        <button
+          type="button"
+          class="button is-danger is-light is-small is-fullwidth"
+          :disabled="stopping"
+          :title="t('ui.kb.stop_title', 'Gracefully stop this KBM-flow server')"
+          @click="stopServer()"
+        >
+          <span class="kbm-icon icon-power" aria-hidden="true"></span>
+          <span x-text="t('ui.kb.stop_server', 'Stop server')"></span>
+        </button>
+      </div>
     </aside>
     <div
       class="kbm-aside-overlay"
@@ -180,14 +192,25 @@
         <div class="container dashboard">
           <section class="card mb-5">
             <header class="card-header">
-              <p class="card-header-title">
+              <div class="card-header-title">
                 <span class="icon is-medium kbm-icon-badge mr-2"
                   ><span class="kbm-icon icon-zap" aria-hidden="true"></span
                 ></span>
                 <span
                   x-text="t('ui.kb.operations_heading', 'Operations')"
                 ></span>
-              </p>
+              </div>
+              <div class="kbm-card-header-actions">
+                <button
+                  type="button"
+                  class="button is-warning is-small"
+                  :disabled="busy || applying || acceptedCount === 0"
+                  @click="applyAccepted()"
+                >
+                  <span class="kbm-icon icon-check" aria-hidden="true"></span>
+                  <span x-text="applyLabel()"></span>
+                </button>
+              </div>
             </header>
             <div class="card-content">
               <div class="buttons">
@@ -201,19 +224,7 @@
                     class="kbm-icon icon-scan-search"
                     aria-hidden="true"
                   ></span>
-                  <span x-text="t('ui.kb.scan_repo', 'Scan repository')"></span>
-                </button>
-                <button
-                  type="button"
-                  class="button is-light"
-                  :disabled="busy || applying"
-                  :title="t('ui.kb.check_links_title', 'Probe external http(s) links in documents and record the verdict in each note\'s kbm.link_check block — no LLM involved')"
-                  @click="startOperation('link-check')"
-                >
-                  <span class="kbm-icon icon-link-2" aria-hidden="true"></span>
-                  <span
-                    x-text="t('ui.kb.check_links', 'Check external links')"
-                  ></span>
+                  <span x-text="t('ui.kb.scan', 'Scan')"></span>
                 </button>
                 <button
                   type="button"
@@ -225,9 +236,7 @@
                     class="kbm-icon icon-file-search"
                     aria-hidden="true"
                   ></span>
-                  <span
-                    x-text="t('ui.kb.analyze_changes', 'Analyze changes')"
-                  ></span>
+                  <span x-text="t('ui.kb.analyse_changes', 'Analyse')"></span>
                 </button>
                 <button
                   type="button"
@@ -237,100 +246,19 @@
                 >
                   <span class="kbm-icon icon-play" aria-hidden="true"></span>
                   <span
-                    x-text="t('ui.kb.scan_analyze', 'Scan + analyze')"
+                    x-text="t('ui.kb.scan_analyse', 'Scan + analyse')"
                   ></span>
                 </button>
                 <button
                   type="button"
-                  class="button is-warning"
-                  :disabled="busy || applying || acceptedCount === 0"
-                  @click="applyAccepted()"
+                  class="button is-light"
+                  :disabled="busy || applying"
+                  :title="t('ui.kb.check_links_title', 'Probe external http(s) links in documents and record the verdict in each note\'s kbm.link_check block — no LLM involved')"
+                  @click="startOperation('link-check')"
                 >
-                  <span class="kbm-icon icon-check" aria-hidden="true"></span>
-                  <span x-text="applyLabel()"></span>
+                  <span class="kbm-icon icon-link-2" aria-hidden="true"></span>
+                  <span x-text="t('ui.kb.check_links', 'Link Check')"></span>
                 </button>
-                <button
-                  type="button"
-                  class="button is-danger is-light"
-                  :disabled="stopping"
-                  :title="t('ui.kb.stop_title', 'Gracefully stop this KBM-flow server')"
-                  @click="stopServer()"
-                >
-                  <span class="kbm-icon icon-power" aria-hidden="true"></span>
-                  <span x-text="t('ui.kb.stop_server', 'Stop server')"></span>
-                </button>
-                <button
-                  type="button"
-                  class="button is-light is-small"
-                  data-theme-toggle
-                  :aria-label="t('ui.common.theme_toggle', 'Toggle theme')"
-                >
-                  <span
-                    class="kbm-icon icon-monitor"
-                    aria-hidden="true"
-                    data-theme-icon
-                  ></span>
-                </button>
-                <div
-                  class="dropdown is-right"
-                  :class="{ 'is-active': localeOpen }"
-                  @click.outside="localeOpen = false"
-                >
-                  <div class="dropdown-trigger">
-                    <button
-                      type="button"
-                      class="button is-light is-small"
-                      aria-haspopup="true"
-                      :aria-expanded="localeOpen"
-                      :aria-label="t('ui.common.language', 'Language')"
-                      @click="localeOpen = !localeOpen"
-                    >
-                      <img
-                        class="kbm-flag"
-                        :src="localeFlag(displayLocale())"
-                        alt=""
-                      />
-                      <span x-text="localeLabel(displayLocale())"></span>
-                      <span
-                        class="kbm-icon ml-1 icon-chevron-down"
-                        aria-hidden="true"
-                      ></span>
-                    </button>
-                  </div>
-                  <div class="dropdown-menu" role="menu">
-                    <div class="dropdown-content">
-                      <button
-                        type="button"
-                        class="dropdown-item"
-                        role="menuitem"
-                        :class="{ 'is-active': locale === '' }"
-                        @click="setLocale('')"
-                      >
-                        <img
-                          class="kbm-flag"
-                          :src="localeFlag(resolvedLocale)"
-                          alt=""
-                        />
-                        <span
-                          x-text="t('ui.common.locale_auto', 'Automatic (browser)')"
-                          >Automatic (browser)</span
-                        >
-                      </button>
-                      <template x-for="l in locales" :key="l">
-                        <button
-                          type="button"
-                          class="dropdown-item"
-                          role="menuitem"
-                          :class="{ 'is-active': locale === l }"
-                          @click="setLocale(l)"
-                        >
-                          <img class="kbm-flag" :src="localeFlag(l)" alt="" />
-                          <span x-text="localeLabel(l)"></span>
-                        </button>
-                      </template>
-                    </div>
-                  </div>
-                </div>
               </div>
               <div class="model-controls mb-3">
                 <div class="model-control">
@@ -373,6 +301,8 @@
                     x-text="t('ui.kb.generation_mismatch', 'Differs from the model behind most existing analyses.')"
                   ></p>
                 </div>
+              </div>
+              <div class="model-controls mb-3">
                 <div class="model-control">
                   <label
                     class="label is-small"
@@ -500,65 +430,67 @@
                   <p class="has-text-warning" x-text="w"></p>
                 </template>
               </div>
-              <label
-                class="checkbox is-size-7 has-text-grey mb-2"
-                :title="t('ui.kb.reanalyze_title', 'Also re-analyze documents whose last analysis used a different model than configured')"
-              >
-                <input
-                  type="checkbox"
-                  x-model="reanalyze"
-                  @change="estimate = null"
-                />
-                <span
-                  x-text="t('ui.kb.reanalyze_label', 'Re-analyze documents processed by a different model')"
-                  >Re-analyze documents processed by a different model</span
+              <div class="kbm-check-list">
+                <label
+                  class="checkbox is-size-7 has-text-grey mb-2"
+                  :title="t('ui.kb.reanalyse_title', 'Also re-analyse documents whose last analysis used a different model than configured')"
                 >
-              </label>
-              <label
-                class="checkbox is-size-7 has-text-grey mb-2"
-                :title="t('ui.kb.external_title', 'Run analysis with ollama_model_external (enhanced lane, e.g. a cloud model). Results stamp the external_* markers and leave the local lineage untouched; document content is sent to that model.')"
-              >
-                <input
-                  type="checkbox"
-                  x-model="external"
-                  @change="estimate = null"
-                />
-                <span
-                  x-text="t('ui.kb.external_label', 'External generation lane (document content leaves this machine)')"
-                  >External generation lane (document content leaves this
-                  machine)</span
+                  <input
+                    type="checkbox"
+                    x-model="reanalyze"
+                    @change="estimate = null"
+                /> &nbsp;
+                  <span
+                    x-text="t('ui.kb.reanalyse_label', 'Re-analyse documents processed by a different model')"
+                    >Re-analyse documents processed by a different model</span
+                  >
+                </label>
+                <label
+                  class="checkbox is-size-7 has-text-grey mb-2"
+                  :title="t('ui.kb.external_title', 'Run analysis with ollama_model_external (enhanced lane, e.g. a cloud model). Results stamp the external_* markers and leave the local lineage untouched; document content is sent to that model.')"
                 >
-              </label>
-              <label
-                class="checkbox is-size-7 has-text-grey mb-2"
-                :title="t('ui.kb.allow_cloud_title', 'Separate consent for off-machine embedding/enrichment; does not change the generation lane')"
-              >
-                <input
-                  type="checkbox"
-                  x-model="allowCloud"
-                  @change="estimate = null"
-                />
-                <span
-                  x-text="t('ui.kb.allow_cloud_label', 'Allow cloud/remote embeddings and enrichment for this run')"
-                  >Allow cloud/remote embeddings and enrichment for this
-                  run</span
+                  <input
+                    type="checkbox"
+                    x-model="external"
+                    @change="estimate = null"
+                  /> &nbsp;
+                  <span
+                    x-text="t('ui.kb.external_label', 'External generation lane (document content leaves this machine)')"
+                    >External generation lane (document content leaves this
+                    machine)</span
+                  >
+                </label>
+                <label
+                  class="checkbox is-size-7 has-text-grey mb-2"
+                  :title="t('ui.kb.allow_cloud_title', 'Separate consent for off-machine embedding/enrichment; does not change the generation lane')"
                 >
-              </label>
-              <label
-                class="checkbox is-size-7 has-text-grey mb-2"
-                :title="t('ui.kb.web_verify_title', 'Verify freshness flags against Ollama\'s hosted web search — flagged claim text (never the whole document) is sent to ollama.com; requires OLLAMA_API_KEY')"
-              >
-                <input
-                  type="checkbox"
-                  x-model="webVerify"
-                  @change="estimate = null"
-                />
-                <span
-                  x-text="t('ui.kb.web_verify_label', 'Verify freshness flags via web search (claim text leaves this machine)')"
-                  >Verify freshness flags via web search (claim text leaves this
-                  machine)</span
+                  <input
+                    type="checkbox"
+                    x-model="allowCloud"
+                    @change="estimate = null"
+                  /> &nbsp;
+                  <span
+                    x-text="t('ui.kb.allow_cloud_label', 'Allow cloud/remote embeddings and enrichment for this run')"
+                    >Allow cloud/remote embeddings and enrichment for this
+                    run</span
+                  >
+                </label>
+                <label
+                  class="checkbox is-size-7 has-text-grey mb-2"
+                  :title="t('ui.kb.web_verify_title', 'Verify freshness flags against Ollama\'s hosted web search — flagged claim text (never the whole document) is sent to ollama.com; requires OLLAMA_API_KEY')"
                 >
-              </label>
+                  <input
+                    type="checkbox"
+                    x-model="webVerify"
+                    @change="estimate = null"
+                  /> &nbsp;
+                  <span
+                    x-text="t('ui.kb.web_verify_label', 'Verify freshness flags via web search (claim text leaves this machine)')"
+                    >Verify freshness flags via web search (claim text leaves
+                    this machine)</span
+                  >
+                </label>
+              </div>
               <p class="is-size-7 has-text-grey">
                 <span
                   class="status-dot"
@@ -1085,7 +1017,7 @@
               <p
                 class="has-text-grey is-size-7 mt-3"
                 x-show="documents.length === 0"
-                x-text="t('ui.kb.no_documents', 'No documents indexed. Start with Scan or Scan + analyze.')"
+                x-text="t('ui.kb.no_documents', 'No documents indexed. Start with Scan or Scan + analyse.')"
               ></p>
             </div>
           </section>
