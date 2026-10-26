@@ -1,1069 +1,1386 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light" />
+    <meta name="color-scheme" content="light dark" />
     <title>KBM-flow — repository report</title>
     <link rel="stylesheet" href="/static/vendor/bulma.min.css" />
-    <link rel="stylesheet" href="/static/dashboard.css" />
+    <link rel="stylesheet" href="/static/vendor/bulma-tooltip.min.css" />
+    <link rel="stylesheet" href="/static/base.css" />
     <link rel="stylesheet" href="/static/report.css" />
+    <script src="/static/theme.js"></script>
     <script defer src="/static/clientlog.js"></script>
     <script defer src="/static/vendor/chart.umd.js"></script>
+    <script defer src="/static/common.js"></script>
     <script defer src="/static/report.js"></script>
     <script defer src="/static/vendor/alpine.min.js"></script>
   </head>
   <body x-data="repoReportDashboard" x-init="init()">
-    <section class="hero kbm-hero report-hero">
-      <div class="hero-body">
-        <div class="container dashboard">
-          <p
-            class="eyebrow mb-3"
-            x-text="t('ui.report.eyebrow', 'Repository health · read-only checks')"
-          ></p>
-          <div class="report-hero-grid">
-            <div>
-              <h1
-                class="title is-1 mb-3"
-                x-text="t('ui.report.hero_title', 'One view across the fleet.')"
-              ></h1>
-              <p
-                class="subtitle is-5 mb-5"
-                x-text="t('ui.report.hero_subtitle', 'Read-only checks from your repository registry. This report does not sync, commit, or edit registered repositories.')"
-              ></p>
-            </div>
-            <div class="report-scope">
-              <span class="report-scope-mark" aria-hidden="true">R</span>
-              <p
-                class="has-text-weight-bold"
-                x-text="t('ui.report.read_only', 'Read-only report')"
-              ></p>
-              <p
-                class="is-size-7"
-                x-text="snapshot.remote_enabled ? t('ui.report.scope_remote', 'Local and remote checks') : t('ui.common.local_checks_only', 'Local checks only')"
-              ></p>
-            </div>
-          </div>
-          <div class="buttons">
-            <a class="button is-light" href="/">
-              <img class="report-icon" src="/static/icons/house.svg" alt="" />
-              <span x-text="t('ui.common.home', 'Home')"></span>
+    <aside class="kbm-aside" :class="{ 'is-open': navOpen }">
+      <div class="kbm-aside-brand">
+        <span class="kbm-icon icon-scan-search" aria-hidden="true"></span>
+        <span>KBM-flow</span>
+      </div>
+      <nav class="kbm-aside-menu" aria-label="Primary">
+        <p
+          class="menu-label"
+          x-text="t('ui.common.workspaces', 'Workspaces')"
+        ></p>
+        <ul class="menu-list">
+          <li>
+            <a href="/">
+              <span class="kbm-icon icon-house" aria-hidden="true"></span>
+              <span x-text="t('ui.common.home', 'Home')">Home</span>
             </a>
-            <a class="button is-light" href="/knowledge">
-              <img
-                class="report-icon"
-                src="/static/icons/book-open.svg"
-                alt=""
-              />
-              <span x-text="t('ui.report.knowledge_link', 'Knowledge')"></span>
+          </li>
+          <li>
+            <a href="/knowledge">
+              <span class="kbm-icon icon-book-open" aria-hidden="true"></span>
+              <span x-text="t('ui.common.knowledge', 'Knowledge')"
+                >Knowledge</span
+              >
             </a>
-            <button
-              class="button kbm-accent"
-              :disabled="busy || !snapshot.configured"
-              @click="startReport()"
-            >
-              <img
-                class="report-icon"
-                src="/static/icons/refresh-cw.svg"
-                alt=""
-              />
+          </li>
+          <li>
+            <a href="/report" class="is-active">
               <span
-                x-text="busy ? t('ui.report.checking', 'Checking repositories…') : t('ui.report.refresh_report', 'Refresh report')"
+                class="kbm-icon icon-chart-column"
+                aria-hidden="true"
               ></span>
-            </button>
-            <button
-              class="button is-light"
-              :disabled="busy || !snapshot.configured"
-              @click="startReport({ localOnly: true })"
-            >
-              <img
-                class="report-icon"
-                src="/static/icons/hard-drive.svg"
-                alt=""
-              />
-              <span
-                x-text="t('ui.common.local_checks_only', 'Local checks only')"
-              ></span>
-            </button>
-            <button
-              class="button is-warning is-light"
-              :disabled="busy || !snapshot.configured"
-              @click="startReport({ force: true })"
-            >
-              <img class="report-icon" src="/static/icons/zap.svg" alt="" />
-              <span
-                x-text="t('ui.report.force_remote', 'Force remote refresh')"
-              ></span>
-            </button>
-            <div
-              class="dropdown is-right"
-              :class="{ 'is-active': localeOpen }"
-              @click.outside="localeOpen = false"
-            >
-              <div class="dropdown-trigger">
+              <span x-text="t('ui.common.report', 'Report')">Report</span>
+            </a>
+          </li>
+        </ul>
+      </nav>
+    </aside>
+    <div
+      class="kbm-aside-overlay"
+      :class="{ 'is-open': navOpen }"
+      @click="navOpen = false"
+    ></div>
+    <div class="kbm-shell">
+      <nav class="kbm-navbar">
+        <button
+          type="button"
+          class="navbar-burger kbm-aside-burger"
+          :class="{ 'is-active': navOpen }"
+          :aria-label="t('ui.common.menu', 'Menu')"
+          :aria-expanded="navOpen"
+          @click="navOpen = !navOpen"
+          @keydown.escape.window="navOpen = false"
+        >
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+        </button>
+        <div class="kbm-navbar-end">
+          <button
+            type="button"
+            class="button is-light is-small"
+            data-theme-toggle
+            :aria-label="t('ui.common.theme_toggle', 'Toggle theme')"
+          >
+            <span
+              class="kbm-icon icon-monitor"
+              aria-hidden="true"
+              data-theme-icon
+            ></span>
+          </button>
+          <div
+            class="dropdown is-right"
+            :class="{ 'is-active': localeOpen }"
+            @click.outside="localeOpen = false"
+          >
+            <div class="dropdown-trigger">
+              <button
+                type="button"
+                class="button is-light is-small"
+                aria-haspopup="true"
+                :aria-expanded="localeOpen"
+                :aria-label="t('ui.common.language', 'Language')"
+                @click="localeOpen = !localeOpen"
+              >
+                <img
+                  class="kbm-flag"
+                  :src="localeFlag(displayLocale())"
+                  alt=""
+                />
+                <span x-text="localeLabel(displayLocale())"></span>
+                <span
+                  class="kbm-icon ml-1 icon-chevron-down"
+                  aria-hidden="true"
+                ></span>
+              </button>
+            </div>
+            <div class="dropdown-menu" role="menu">
+              <div class="dropdown-content">
                 <button
                   type="button"
-                  class="button is-light is-small"
-                  aria-haspopup="true"
-                  :aria-expanded="localeOpen"
-                  :aria-label="t('ui.common.language', 'Language')"
-                  @click="localeOpen = !localeOpen"
+                  class="dropdown-item"
+                  role="menuitem"
+                  :class="{ 'is-active': locale === '' }"
+                  @click="setLocale('')"
                 >
                   <img
                     class="kbm-flag"
-                    :src="localeFlag(displayLocale())"
+                    :src="localeFlag(resolvedLocale)"
                     alt=""
                   />
-                  <span x-text="localeLabel(displayLocale())"></span>
-                  <img
-                    class="report-icon ml-1"
-                    src="/static/icons/chevron-down.svg"
-                    alt=""
-                  />
+                  <span
+                    x-text="t('ui.common.locale_auto', 'Automatic (browser)')"
+                    >Automatic (browser)</span
+                  >
                 </button>
-              </div>
-              <div class="dropdown-menu" role="menu">
-                <div class="dropdown-content">
-                  <a
+                <template x-for="l in locales" :key="l">
+                  <button
+                    type="button"
                     class="dropdown-item"
                     role="menuitem"
-                    :class="{ 'is-active': locale === '' }"
-                    @click="setLocale('')"
+                    :class="{ 'is-active': locale === l }"
+                    @click="setLocale(l)"
                   >
-                    <img
-                      class="kbm-flag"
-                      :src="localeFlag(resolvedLocale)"
-                      alt=""
-                    />
-                    <span
-                      x-text="t('ui.common.locale_auto', 'Automatic (browser)')"
-                    ></span>
-                  </a>
-                  <template x-for="l in locales" :key="l">
-                    <a
-                      class="dropdown-item"
-                      role="menuitem"
-                      :class="{ 'is-active': locale === l }"
-                      @click="setLocale(l)"
-                    >
-                      <img class="kbm-flag" :src="localeFlag(l)" alt="" />
-                      <span x-text="localeLabel(l)"></span>
-                    </a>
-                  </template>
-                </div>
+                    <img class="kbm-flag" :src="localeFlag(l)" alt="" />
+                    <span x-text="localeLabel(l)"></span>
+                  </button>
+                </template>
               </div>
             </div>
           </div>
-          <p class="is-size-7 has-text-white-ter" role="status">
-            <span class="status-dot" :class="busy ? 'is-warning' : ''"></span>
-            <span
-              x-text="busy ? t('ui.report.run_in_progress', 'A report run is in progress') : statusText()"
-            ></span>
-          </p>
         </div>
-      </div>
-    </section>
-
-    <main class="section pt-5">
-      <div class="container dashboard">
-        <template x-if="error">
-          <article class="message is-danger" role="alert">
-            <div class="message-body" x-text="error"></div>
-          </article>
-        </template>
-        <template x-if="notice">
-          <div
-            class="notification is-light"
-            role="status"
-            x-text="notice"
-          ></div>
-        </template>
-        <template x-if="!snapshot.configured">
-          <article class="message is-warning">
-            <div class="message-body">
-              <span x-text="t('ui.report.config_hint_1', 'Configure')"></span>
-              <code>report.registry_path</code>
-              <span
-                x-text="t('ui.report.config_hint_2', 'in the config file to enable this dashboard. The report reads the YAML registry and optional policy file in place.')"
-              ></span>
-            </div>
-          </article>
-        </template>
-        <template x-if="snapshot.configured && !snapshot.generated_at && !busy">
-          <div
-            class="notification is-light"
-            x-text="t('ui.report.no_snapshot_yet', 'No snapshot yet. Start a report to inspect the configured repositories.')"
-          ></div>
-        </template>
-
-        <template x-if="snapshot.generated_at">
-          <div>
-            <div class="columns is-variable is-4 mb-2 is-multiline">
-              <div class="column">
-                <div class="box kbm-box stat-box">
-                  <p
-                    class="stat-number"
-                    x-text="snapshot.summary.repositories"
-                  ></p>
-                  <p
-                    class="stat-label mt-2"
-                    x-text="t('ui.report.stat_repos', 'Registered repositories')"
-                  ></p>
-                </div>
+      </nav>
+      <section class="kbm-title-bar">
+        <ul>
+          <li>KBM-flow</li>
+          <li x-text="t('ui.kb.repo_report', 'Repository report')"></li>
+        </ul>
+      </section>
+      <section class="kbm-hero-bar">
+        <div class="level">
+          <div class="level-left">
+            <div>
+              <p
+                class="eyebrow mb-1"
+                x-text="t('ui.report.eyebrow', 'Repository health · read-only checks')"
+              ></p>
+              <h1
+                class="title is-3"
+                x-text="t('ui.report.hero_title', 'One view across the fleet.')"
+              >
+                One view across the fleet.
+              </h1>
+              <p
+                class="subtitle is-6 mb-2"
+                x-text="t('ui.report.hero_subtitle', 'Read-only checks from your repository registry. This report does not sync, commit, or edit registered repositories.')"
+              ></p>
+              <div class="report-scope">
+                <span class="report-scope-mark" aria-hidden="true">R</span>
+                <p
+                  class="has-text-weight-bold"
+                  x-text="t('ui.report.read_only', 'Read-only report')"
+                ></p>
+                <p
+                  class="is-size-7"
+                  x-text="snapshot.remote_enabled ? t('ui.report.scope_remote', 'Local and remote checks') : t('ui.common.local_checks_only', 'Local checks only')"
+                ></p>
               </div>
-              <div class="column">
-                <div class="box kbm-box stat-box">
-                  <p class="stat-number" x-text="snapshot.summary.dirty"></p>
-                  <p
-                    class="stat-label mt-2"
-                    x-text="t('ui.common.dirty_trees', 'Dirty working trees')"
-                  ></p>
-                </div>
-              </div>
-              <div class="column">
-                <div class="box kbm-box stat-box">
-                  <p class="stat-number" x-text="snapshot.summary.problems"></p>
-                  <p
-                    class="stat-label mt-2"
-                    x-text="t('ui.common.findings', 'Findings')"
-                  ></p>
-                </div>
-              </div>
-              <div class="column">
-                <div class="box kbm-box stat-box">
-                  <p
-                    class="stat-number"
-                    x-text="snapshot.summary.sonar_projects"
-                  ></p>
-                  <p
-                    class="stat-label mt-2"
-                    x-text="t('ui.report.stat_sonar', 'Sonar configurations')"
-                  ></p>
-                </div>
-              </div>
-              <div class="column">
-                <div class="box kbm-box stat-box">
-                  <p
-                    class="stat-number"
-                    x-text="snapshot.summary.semgrep_projects"
-                  ></p>
-                  <p
-                    class="stat-label mt-2"
-                    x-text="t('ui.report.stat_semgrep', 'Semgrep configurations')"
-                  ></p>
-                </div>
-              </div>
-              <div class="column">
-                <div class="box kbm-box stat-box">
-                  <p
-                    class="stat-number"
-                    x-text="snapshot.summary.node_projects"
-                  ></p>
-                  <p
-                    class="stat-label mt-2"
-                    x-text="t('ui.report.stat_node', 'Node projects')"
-                  ></p>
-                </div>
-              </div>
-              <div class="column">
-                <div class="box kbm-box stat-box">
-                  <p
-                    class="stat-number"
-                    x-text="snapshot.summary.npm_outdated == null ? '—' : snapshot.summary.npm_outdated"
-                  ></p>
-                  <p
-                    class="stat-label mt-2"
-                    x-text="t('ui.report.stat_npm_outdated', 'Outdated npm packages')"
-                  ></p>
-                </div>
-              </div>
-              <div class="column">
-                <div class="box kbm-box stat-box">
-                  <p
-                    class="stat-number"
-                    x-text="snapshot.summary.node_outdated == null ? '—' : snapshot.summary.node_outdated"
-                  ></p>
-                  <p
-                    class="stat-label mt-2"
-                    x-text="t('ui.report.stat_node_outdated', 'Outdated Node pins')"
-                  ></p>
-                </div>
-              </div>
-            </div>
-
-            <template x-if="snapshot.remote_enabled">
-              <section class="box kbm-box mb-5 report-comparison">
-                <div class="level is-mobile mb-3">
-                  <div class="level-left">
-                    <div>
-                      <p
-                        class="eyebrow"
-                        x-text="t('ui.report.collectors_eyebrow', 'Current Go collectors')"
-                      ></p>
-                      <h2
-                        class="title is-4 section-heading mb-0"
-                        x-text="t('ui.report.remote_checks', 'Remote checks')"
-                      ></h2>
-                    </div>
-                  </div>
-                  <div class="level-right">
-                    <p
-                      class="report-generated"
-                      x-text="t('ui.report.remote_run', 'Remote check run · {{.Time}}', { Time: formatTime(snapshot.remote_generated_at) }) + (snapshot.summary.remote_stale_repositories ? t('ui.report.stale_repos', ' · {{.Count}} stale repos', { Count: snapshot.summary.remote_stale_repositories }) : '')"
-                    ></p>
-                  </div>
-                </div>
-                <div class="columns is-variable is-3 mb-0">
-                  <div class="column">
-                    <p
-                      class="report-comparison-number"
-                      x-text="snapshot.summary.sonar_blocked == null ? '—' : snapshot.summary.sonar_blocked"
-                    ></p>
-                    <p
-                      class="stat-label"
-                      x-text="t('ui.common.sonar_gates_blocked', 'Sonar gates blocked')"
-                    ></p>
-                    <p
-                      class="report-generated"
-                      x-text="t('ui.report.projects_reported', '{{.Count}} projects reported', { Count: snapshot.summary.sonar_reported_projects })"
-                    ></p>
-                  </div>
-                  <div class="column">
-                    <p
-                      class="report-comparison-number"
-                      x-text="snapshot.summary.semgrep_blocked == null ? '—' : snapshot.summary.semgrep_blocked"
-                    ></p>
-                    <p
-                      class="stat-label"
-                      x-text="t('ui.common.semgrep_blocked', 'Repositories with Semgrep blocks')"
-                    ></p>
-                    <p
-                      class="report-generated"
-                      x-text="snapshot.summary.semgrep_open_findings == null ? t('ui.report.not_collected', 'Not collected') : t('ui.report.open_findings', '{{.Count}} open findings', { Count: snapshot.summary.semgrep_open_findings })"
-                    ></p>
-                  </div>
-                  <div class="column">
-                    <p
-                      class="report-comparison-number"
-                      x-text="snapshot.summary.open_prs == null ? '—' : snapshot.summary.open_prs"
-                    ></p>
-                    <p
-                      class="stat-label"
-                      x-text="t('ui.common.open_prs', 'Open PRs')"
-                    ></p>
-                    <p
-                      class="report-generated"
-                      x-text="t('ui.report.repos_reported', '{{.Count}} repositories reported', { Count: snapshot.summary.open_pr_repositories })"
-                    ></p>
-                  </div>
-                </div>
-              </section>
-            </template>
-            <template x-if="!snapshot.remote_enabled">
-              <div class="notification is-light mb-5">
+              <p class="is-size-7 has-text-grey mt-2" role="status">
                 <span
-                  x-text="t('ui.report.remote_not_refreshed', 'Remote checks were not refreshed on this run. Any remote values shown below are the last known results.')"
+                  class="status-dot"
+                  :class="busy ? 'is-warning' : ''"
                 ></span>
                 <span
-                  x-show="snapshot.remote_generated_at"
-                  x-text="t('ui.report.last_remote_run', ' Last remote run · {{.Time}}', { Time: formatTime(snapshot.remote_generated_at) })"
+                  x-text="busy ? t('ui.report.run_in_progress', 'A report run is in progress') : statusText()"
                 ></span>
-              </div>
-            </template>
-
-            <template
-              x-if="snapshot.comparison && snapshot.comparison.available"
-            >
-              <section class="box kbm-box mb-5 report-comparison">
-                <div class="level is-mobile mb-3">
-                  <div class="level-left">
-                    <div>
-                      <p
-                        class="eyebrow"
-                        x-text="t('ui.report.ruby_ref_eyebrow', 'Ruby report reference')"
-                      ></p>
-                      <h2
-                        class="title is-4 section-heading mb-0"
-                        x-text="t('ui.report.comparison_totals', 'Comparison totals')"
-                      ></h2>
-                    </div>
-                  </div>
-                  <div class="level-right">
-                    <p
-                      class="is-size-7 has-text-grey"
-                      x-text="t('ui.report.source_snapshot', 'Source snapshot · {{.Time}}', { Time: formatTime(snapshot.comparison.generated_at) })"
-                    ></p>
-                  </div>
-                </div>
-                <div class="columns is-variable is-3 mb-0">
-                  <div class="column">
-                    <p
-                      class="report-comparison-number"
-                      x-text="snapshot.comparison.sonar_blocked == null ? '—' : snapshot.comparison.sonar_blocked"
-                    ></p>
-                    <p
-                      class="stat-label"
-                      x-text="t('ui.common.sonar_gates_blocked', 'Sonar gates blocked')"
-                    ></p>
-                    <p
-                      class="report-generated"
-                      x-text="t('ui.report.projects_reported', '{{.Count}} projects reported', { Count: snapshot.comparison.sonar_reported_projects })"
-                    ></p>
-                  </div>
-                  <div class="column">
-                    <p
-                      class="report-comparison-number"
-                      x-text="snapshot.comparison.semgrep_blocked == null ? '—' : snapshot.comparison.semgrep_blocked"
-                    ></p>
-                    <p
-                      class="stat-label"
-                      x-text="t('ui.common.semgrep_blocked', 'Repositories with Semgrep blocks')"
-                    ></p>
-                    <p
-                      class="report-generated"
-                      x-text="snapshot.comparison.semgrep_open_findings == null ? t('ui.report.not_collected_source', 'Not collected in source snapshot') : t('ui.report.open_findings', '{{.Count}} open findings', { Count: snapshot.comparison.semgrep_open_findings })"
-                    ></p>
-                  </div>
-                  <div class="column">
-                    <p
-                      class="report-comparison-number"
-                      x-text="snapshot.comparison.open_prs == null ? '—' : snapshot.comparison.open_prs"
-                    ></p>
-                    <p
-                      class="stat-label"
-                      x-text="t('ui.common.open_prs', 'Open PRs')"
-                    ></p>
-                    <p
-                      class="report-generated"
-                      x-text="snapshot.comparison.open_prs == null ? t('ui.report.not_collected_source', 'Not collected in source snapshot') : t('ui.report.repos_reported', '{{.Count}} repositories reported', { Count: snapshot.comparison.open_pr_repositories })"
-                    ></p>
-                  </div>
-                </div>
-              </section>
-            </template>
-            <template
-              x-if="snapshot.comparison && snapshot.comparison.error && snapshot.comparison.error !== 'not configured'"
-            >
-              <div
-                class="notification is-warning"
-                role="status"
-                x-text="snapshot.comparison.error"
-              ></div>
-            </template>
-
-            <section class="box kbm-box mb-5">
-              <div class="level is-mobile mb-4 report-toolbar">
-                <div class="level-left">
-                  <div>
-                    <p
-                      class="eyebrow"
-                      x-text="t('ui.report.inventory_eyebrow', 'Local inventory')"
-                    ></p>
-                    <h2
-                      class="title is-3 section-heading mb-0"
-                      x-text="t('ui.common.repositories', 'Repositories')"
-                    ></h2>
-                  </div>
-                </div>
-                <div class="level-right">
-                  <div class="report-controls">
-                    <label class="report-filter">
-                      <span
-                        class="is-sr-only"
-                        x-text="t('ui.report.search_sr', 'Search repositories')"
-                      ></span>
-                      <input
-                        class="input"
-                        type="search"
-                        :placeholder="t('ui.report.search_placeholder', 'Search names, paths, packages')"
-                        x-model="filter"
-                      />
-                    </label>
-                    <label class="report-signal-filter">
-                      <span
-                        class="is-sr-only"
-                        x-text="t('ui.report.filter_tree_sr', 'Filter by working tree')"
-                      ></span>
-                      <span class="select is-fullwidth">
-                        <select x-model="treeFilter">
-                          <option
-                            value="all"
-                            x-text="t('ui.report.filter_tree_all', 'All working trees')"
-                          ></option>
-                          <option
-                            value="dirty"
-                            x-text="t('ui.common.dirty_trees', 'Dirty working trees')"
-                          ></option>
-                          <option
-                            value="clean"
-                            x-text="t('ui.report.filter_tree_clean', 'Clean working trees')"
-                          ></option>
-                        </select>
-                      </span>
-                    </label>
-                    <label class="report-signal-filter">
-                      <span
-                        class="is-sr-only"
-                        x-text="t('ui.report.filter_checks_sr', 'Filter by checks')"
-                      ></span>
-                      <span class="select is-fullwidth">
-                        <select x-model="checksFilter">
-                          <option
-                            value="all"
-                            x-text="t('ui.report.filter_checks_all', 'All check states')"
-                          ></option>
-                          <option
-                            value="has"
-                            x-text="t('ui.report.filter_checks_has', 'Has checks')"
-                          ></option>
-                          <option
-                            value="none"
-                            x-text="t('ui.report.filter_checks_none', 'No checks')"
-                          ></option>
-                        </select>
-                      </span>
-                    </label>
-                    <label class="report-signal-filter">
-                      <span
-                        class="is-sr-only"
-                        x-text="t('ui.report.filter_signal_sr', 'Filter by repository signals')"
-                      ></span>
-                      <span class="select is-fullwidth">
-                        <select x-model="signalFilter">
-                          <option
-                            value="all"
-                            x-text="t('ui.report.signal_all', 'All signals')"
-                          ></option>
-                          <option
-                            value="pull-requests"
-                            x-text="t('ui.report.signal_prs', 'Open pull requests')"
-                          ></option>
-                          <option
-                            value="dependabot"
-                            x-text="t('ui.report.signal_dependabot', 'Dependabot alerts')"
-                          ></option>
-                          <option
-                            value="code-scanning"
-                            x-text="t('ui.report.signal_scanning', 'Code scanning alerts')"
-                          ></option>
-                          <option
-                            value="semgrep"
-                            x-text="t('ui.report.signal_semgrep', 'Semgrep issues')"
-                          ></option>
-                          <option
-                            value="sonar"
-                            x-text="t('ui.report.signal_sonar', 'Sonar gate issues')"
-                          ></option>
-                          <option
-                            value="codefactor"
-                            x-text="t('ui.report.signal_codefactor', 'CodeFactor below B−')"
-                          ></option>
-                          <option
-                            value="coverage"
-                            x-text="t('ui.report.signal_coverage', 'Codecov below target')"
-                          ></option>
-                          <option
-                            value="any"
-                            x-text="t('ui.report.signal_any', 'Any signal')"
-                          ></option>
-                          <option
-                            value="all-signals"
-                            x-text="t('ui.report.signal_all_three', 'PR + Semgrep + Sonar')"
-                          ></option>
-                        </select>
-                      </span>
-                    </label>
-                    <span
-                      class="report-filter-count"
-                      aria-live="polite"
-                      x-text="repoCountText()"
-                    ></span>
-                  </div>
-                </div>
-              </div>
-              <p class="report-generated mb-4">
-                <span x-text="t('ui.report.snapshot_label', 'Snapshot')"></span>
-                <time x-text="formatTime(snapshot.generated_at)"></time>
-                <template x-for="pin in policyPins()" :key="pin.key">
-                  <span>· <code x-text="pin.text"></code></span>
-                </template>
               </p>
+            </div>
+          </div>
+          <div class="level-right">
+            <div class="buttons are-small">
+              <button
+                type="button"
+                class="button is-primary"
+                :disabled="busy || !snapshot.configured"
+                @click="startReport()"
+              >
+                <span
+                  class="kbm-icon icon-refresh-cw"
+                  aria-hidden="true"
+                ></span>
+                <span
+                  x-text="busy ? t('ui.report.checking', 'Checking repositories…') : t('ui.report.refresh_report', 'Refresh report')"
+                ></span>
+              </button>
+              <button
+                type="button"
+                class="button is-light"
+                :disabled="busy || !snapshot.configured"
+                @click="startReport({ localOnly: true })"
+              >
+                <span
+                  class="kbm-icon icon-hard-drive"
+                  aria-hidden="true"
+                ></span>
+                <span
+                  x-text="t('ui.common.local_checks_only', 'Local checks only')"
+                ></span>
+              </button>
+              <button
+                type="button"
+                class="button is-warning is-light"
+                :disabled="busy || !snapshot.configured"
+                @click="startReport({ force: true })"
+              >
+                <span class="kbm-icon icon-zap" aria-hidden="true"></span>
+                <span
+                  x-text="t('ui.report.force_remote', 'Force remote refresh')"
+                ></span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+      <main class="kbm-main-section">
+        <div class="container dashboard">
+          <template x-if="error">
+            <article class="message is-danger" role="alert">
+              <div class="message-body" x-text="error"></div>
+            </article>
+          </template>
+          <template x-if="notice">
+            <div
+              class="notification is-light"
+              role="status"
+              x-text="notice"
+            ></div>
+          </template>
+          <template x-if="!snapshot.configured">
+            <article class="message is-warning">
+              <div class="message-body">
+                <span x-text="t('ui.report.config_hint_1', 'Configure')"></span>
+                <code>report.registry_path</code>
+                <span
+                  x-text="t('ui.report.config_hint_2', 'in the config file to enable this dashboard. The report reads the YAML registry and optional policy file in place.')"
+                ></span>
+              </div>
+            </article>
+          </template>
+          <template
+            x-if="snapshot.configured && !snapshot.generated_at && !busy"
+          >
+            <div
+              class="notification is-light"
+              x-text="t('ui.report.no_snapshot_yet', 'No snapshot yet. Start a report to inspect the configured repositories.')"
+            ></div>
+          </template>
 
-              <div class="table-container report-table-container">
-                <table class="table is-fullwidth report-table">
-                  <thead>
-                    <tr>
-                      <th scope="col" :aria-sort="sortAria('name')">
-                        <button
-                          class="report-sort-button"
-                          type="button"
-                          @click="sortBy('name')"
-                        >
-                          <span
-                            x-text="t('ui.report.col_repo', 'Repository')"
-                          ></span>
-                          <img
-                            class="report-icon report-sort-icon"
+          <template x-if="snapshot.generated_at">
+            <div>
+              <div class="columns is-variable is-4 mb-2 is-multiline">
+                <div class="column">
+                  <div class="card kbm-tile">
+                    <div class="card-content">
+                      <div class="kbm-tile-row">
+                        <span class="icon is-large kbm-icon-badge"
+                          ><span
+                            class="kbm-icon icon-folder-git-2"
                             aria-hidden="true"
-                            :src="iconUrl(sortIcon('name'))"
-                            alt=""
-                          />
-                        </button>
-                      </th>
-                      <th scope="col" :aria-sort="sortAria('working-tree')">
-                        <button
-                          class="report-sort-button"
-                          type="button"
-                          @click="sortBy('working-tree')"
-                        >
-                          <span
-                            x-text="t('ui.report.col_tree', 'Working tree')"
-                          ></span>
-                          <img
-                            class="report-icon report-sort-icon"
+                          ></span
+                        ></span>
+                        <div>
+                          <p
+                            class="stat-label"
+                            x-text="t('ui.report.stat_repos', 'Registered repositories')"
+                          ></p>
+                          <p
+                            class="stat-number"
+                            x-text="snapshot.summary.repositories"
+                          ></p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="column">
+                  <div class="card kbm-tile">
+                    <div class="card-content">
+                      <div class="kbm-tile-row">
+                        <span class="icon is-large kbm-icon-badge"
+                          ><span
+                            class="kbm-icon icon-merge"
                             aria-hidden="true"
-                            :src="iconUrl(sortIcon('working-tree'))"
-                            alt=""
-                          />
-                        </button>
-                      </th>
-                      <th scope="col" :aria-sort="sortAria('sync')">
-                        <button
-                          class="report-sort-button"
-                          type="button"
-                          @click="sortBy('sync')"
-                        >
-                          <span
-                            x-text="t('ui.report.col_sync', 'Sync baseline')"
-                          ></span>
-                          <img
-                            class="report-icon report-sort-icon"
+                          ></span
+                        ></span>
+                        <div>
+                          <p
+                            class="stat-label"
+                            x-text="t('ui.common.dirty_trees', 'Dirty working trees')"
+                          ></p>
+                          <p
+                            class="stat-number"
+                            x-text="snapshot.summary.dirty"
+                          ></p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="column">
+                  <div class="card kbm-tile">
+                    <div class="card-content">
+                      <div class="kbm-tile-row">
+                        <span class="icon is-large kbm-icon-badge"
+                          ><span
+                            class="kbm-icon icon-scan-search"
                             aria-hidden="true"
-                            :src="iconUrl(sortIcon('sync'))"
-                            alt=""
-                          />
-                        </button>
-                      </th>
-                      <th scope="col" :aria-sort="sortAria('checks')">
-                        <button
-                          class="report-sort-button"
-                          type="button"
-                          @click="sortBy('checks')"
-                        >
-                          <span x-text="t('ui.common.checks', 'Checks')"></span>
-                          <img
-                            class="report-icon report-sort-icon"
-                            aria-hidden="true"
-                            :src="iconUrl(sortIcon('checks'))"
-                            alt=""
-                          />
-                        </button>
-                      </th>
-                      <th scope="col" :aria-sort="sortAria('findings')">
-                        <button
-                          class="report-sort-button"
-                          type="button"
-                          @click="sortBy('findings')"
-                        >
-                          <span
+                          ></span
+                        ></span>
+                        <div>
+                          <p
+                            class="stat-label"
                             x-text="t('ui.common.findings', 'Findings')"
-                          ></span>
-                          <img
-                            class="report-icon report-sort-icon"
+                          ></p>
+                          <p
+                            class="stat-number"
+                            x-text="snapshot.summary.problems"
+                          ></p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="column">
+                  <div class="card kbm-tile">
+                    <div class="card-content">
+                      <div class="kbm-tile-row">
+                        <span class="icon is-large kbm-icon-badge"
+                          ><span
+                            class="kbm-icon icon-sonarqubecloud"
                             aria-hidden="true"
-                            :src="iconUrl(sortIcon('findings'))"
-                            alt=""
-                          />
-                        </button>
-                      </th>
-                      <th
-                        scope="col"
-                        x-text="t('ui.report.col_full', 'Full report')"
-                      ></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <template x-for="repo in filteredRepos" :key="repo.name">
-                      <tr>
-                        <td>
-                          <strong x-text="repo.name"></strong>
-                          <p class="report-path is-mono" x-text="repo.path"></p>
+                          ></span
+                        ></span>
+                        <div>
                           <p
-                            class="report-url is-size-7"
-                            x-show="repo.url"
-                            x-text="repo.url"
+                            class="stat-label"
+                            x-text="t('ui.report.stat_sonar', 'Sonar configurations')"
                           ></p>
-                          <img
-                            x-show="repo.github"
-                            class="report-icon"
-                            src="/static/icons/github.svg"
-                            alt=""
-                          />
-                          <img
-                            x-show="repo.forgejo"
-                            class="report-icon"
-                            src="/static/icons/forgejo.svg"
-                            alt=""
-                          />
-                          <a
-                            class="report-repo-link is-size-7"
-                            x-show="repo.web_url"
-                            :href="repo.web_url"
-                            :aria-label="t('ui.report.open_repo_aria', 'Open {{.Name}} repository in a new tab', { Name: repo.name })"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            x-text="t('ui.report.open_repo', 'Open repository ↗')"
-                          >
-                          </a>
-                          <button
-                            class="button is-small is-light mt-2"
-                            :disabled="busy"
-                            @click.stop="startReport({ repo: repo.name })"
-                          >
-                            <img
-                              class="report-icon"
-                              src="/static/icons/refresh-cw.svg"
-                              alt=""
-                            />
-                            <span
-                              x-text="t('ui.report.refresh_repo', 'Refresh this repo')"
-                            ></span>
-                          </button>
-                          <span
-                            class="tag is-light mt-2"
-                            :class="repo.path_exists ? 'is-success' : 'is-danger'"
-                            x-text="repo.path_exists ? t('ui.report.present', 'present') : t('ui.report.missing', 'missing')"
-                          ></span>
-                        </td>
-                        <td>
                           <p
-                            class="is-mono"
-                            x-text="repo.head_sha || t('ui.report.no_head', 'no Git HEAD')"
+                            class="stat-number"
+                            x-text="snapshot.summary.sonar_projects"
                           ></p>
-                          <span
-                            class="tag is-light mt-2"
-                            :class="repo.dirty ? 'is-warning' : 'is-success'"
-                          >
-                            <img
-                              class="report-icon"
-                              src="/static/icons/git.svg"
-                              alt=""
-                            />
-                            <span
-                              x-text="repo.dirty ? t('ui.report.dirty', 'dirty') : t('ui.report.clean', 'clean')"
-                            ></span>
-                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="column">
+                  <div class="card kbm-tile">
+                    <div class="card-content">
+                      <div class="kbm-tile-row">
+                        <span class="icon is-large kbm-icon-badge"
+                          ><span
+                            class="kbm-icon icon-semgrep"
+                            aria-hidden="true"
+                          ></span
+                        ></span>
+                        <div>
                           <p
-                            class="report-error mt-2"
-                            x-show="repo.error"
-                            x-text="repo.error"
+                            class="stat-label"
+                            x-text="t('ui.report.stat_semgrep', 'Semgrep configurations')"
                           ></p>
-                        </td>
-                        <td>
-                          <p class="is-mono" x-text="driftText(repo)"></p>
                           <p
-                            class="report-path is-mono"
-                            x-text="repo.sync.repo_commit || '—'"
+                            class="stat-number"
+                            x-text="snapshot.summary.semgrep_projects"
                           ></p>
-                          <span
-                            class="tag is-light mt-2"
-                            :class="repo.sync.marker === 'present' ? 'is-success' : 'is-warning'"
-                            x-text="repo.sync.marker === 'present' ? t('ui.report.marker_present', 'marker present') : repo.sync.marker || t('ui.report.no_marker', 'no marker')"
-                          ></span>
-                        </td>
-                        <td>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="column">
+                  <div class="card kbm-tile">
+                    <div class="card-content">
+                      <div class="kbm-tile-row">
+                        <span class="icon is-large kbm-icon-badge"
+                          ><span
+                            class="kbm-icon icon-nodedotjs"
+                            aria-hidden="true"
+                          ></span
+                        ></span>
+                        <div>
                           <p
-                            x-show="repo.scanners.length === 0"
-                            x-text="t('ui.report.no_scanner', 'No scanner config')"
+                            class="stat-label"
+                            x-text="t('ui.report.stat_node', 'Node projects')"
                           ></p>
-                          <div class="report-scanners">
-                            <template
-                              x-for="scanner in repo.scanners"
-                              :key="scanner"
+                          <p
+                            class="stat-number"
+                            x-text="snapshot.summary.node_projects"
+                          ></p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="column">
+                  <div class="card kbm-tile">
+                    <div class="card-content">
+                      <div class="kbm-tile-row">
+                        <span class="icon is-large kbm-icon-badge"
+                          ><span
+                            class="kbm-icon icon-dependabot"
+                            aria-hidden="true"
+                          ></span
+                        ></span>
+                        <div>
+                          <p
+                            class="stat-label"
+                            x-text="t('ui.report.stat_npm_outdated', 'Outdated npm packages')"
+                          ></p>
+                          <p
+                            class="stat-number"
+                            x-text="snapshot.summary.npm_outdated == null ? '—' : snapshot.summary.npm_outdated"
+                          ></p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="column">
+                  <div class="card kbm-tile">
+                    <div class="card-content">
+                      <div class="kbm-tile-row">
+                        <span class="icon is-large kbm-icon-badge"
+                          ><span
+                            class="kbm-icon icon-arrow-up"
+                            aria-hidden="true"
+                          ></span
+                        ></span>
+                        <div>
+                          <p
+                            class="stat-label"
+                            x-text="t('ui.report.stat_node_outdated', 'Outdated Node pins')"
+                          ></p>
+                          <p
+                            class="stat-number"
+                            x-text="snapshot.summary.node_outdated == null ? '—' : snapshot.summary.node_outdated"
+                          ></p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <template x-if="snapshot.remote_enabled">
+                <section class="card mb-5 report-comparison">
+                  <header class="card-header">
+                    <div class="card-header-title">
+                      <span class="icon is-medium kbm-icon-badge mr-2"
+                        ><span
+                          class="kbm-icon icon-scan-search"
+                          aria-hidden="true"
+                        ></span
+                      ></span>
+                      <div>
+                        <p
+                          class="eyebrow"
+                          x-text="t('ui.report.collectors_eyebrow', 'Current Go collectors')"
+                        ></p>
+                        <span
+                          x-text="t('ui.report.remote_checks', 'Remote checks')"
+                        ></span>
+                      </div>
+                    </div>
+                    <div class="kbm-card-header-actions">
+                      <p
+                        class="report-generated"
+                        x-text="t('ui.report.remote_run', 'Remote check run · {{.Time}}', { Time: formatTime(snapshot.remote_generated_at) }) + (snapshot.summary.remote_stale_repositories ? t('ui.report.stale_repos', ' · {{.Count}} stale repos', { Count: snapshot.summary.remote_stale_repositories }) : '')"
+                      ></p>
+                    </div>
+                  </header>
+                  <div class="card-content">
+                    <div class="columns is-variable is-3 mb-0">
+                      <div class="column">
+                        <p
+                          class="report-comparison-number"
+                          x-text="snapshot.summary.sonar_blocked == null ? '—' : snapshot.summary.sonar_blocked"
+                        ></p>
+                        <p
+                          class="stat-label"
+                          x-text="t('ui.common.sonar_gates_blocked', 'Sonar gates blocked')"
+                        ></p>
+                        <p
+                          class="report-generated"
+                          x-text="t('ui.report.projects_reported', '{{.Count}} projects reported', { Count: snapshot.summary.sonar_reported_projects })"
+                        ></p>
+                      </div>
+                      <div class="column">
+                        <p
+                          class="report-comparison-number"
+                          x-text="snapshot.summary.semgrep_blocked == null ? '—' : snapshot.summary.semgrep_blocked"
+                        ></p>
+                        <p
+                          class="stat-label"
+                          x-text="t('ui.common.semgrep_blocked', 'Repositories with Semgrep blocks')"
+                        ></p>
+                        <p
+                          class="report-generated"
+                          x-text="snapshot.summary.semgrep_open_findings == null ? t('ui.report.not_collected', 'Not collected') : t('ui.report.open_findings', '{{.Count}} open findings', { Count: snapshot.summary.semgrep_open_findings })"
+                        ></p>
+                      </div>
+                      <div class="column">
+                        <p
+                          class="report-comparison-number"
+                          x-text="snapshot.summary.open_prs == null ? '—' : snapshot.summary.open_prs"
+                        ></p>
+                        <p
+                          class="stat-label"
+                          x-text="t('ui.common.open_prs', 'Open PRs')"
+                        ></p>
+                        <p
+                          class="report-generated"
+                          x-text="t('ui.report.repos_reported', '{{.Count}} repositories reported', { Count: snapshot.summary.open_pr_repositories })"
+                        ></p>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </template>
+              <template x-if="!snapshot.remote_enabled">
+                <div class="notification is-light mb-5">
+                  <span
+                    x-text="t('ui.report.remote_not_refreshed', 'Remote checks were not refreshed on this run. Any remote values shown below are the last known results.')"
+                  ></span>
+                  <span
+                    x-show="snapshot.remote_generated_at"
+                    x-text="t('ui.report.last_remote_run', ' Last remote run · {{.Time}}', { Time: formatTime(snapshot.remote_generated_at) })"
+                  ></span>
+                </div>
+              </template>
+
+              <template
+                x-if="snapshot.comparison && snapshot.comparison.available"
+              >
+                <section class="card mb-5 report-comparison">
+                  <header class="card-header">
+                    <div class="card-header-title">
+                      <span class="icon is-medium kbm-icon-badge mr-2"
+                        ><span
+                          class="kbm-icon icon-chart-column"
+                          aria-hidden="true"
+                        ></span
+                      ></span>
+                      <div>
+                        <p
+                          class="eyebrow"
+                          x-text="t('ui.report.ruby_ref_eyebrow', 'Ruby report reference')"
+                        ></p>
+                        <span
+                          x-text="t('ui.report.comparison_totals', 'Comparison totals')"
+                        ></span>
+                      </div>
+                    </div>
+                    <div class="kbm-card-header-actions">
+                      <p
+                        class="is-size-7 has-text-grey"
+                        x-text="t('ui.report.source_snapshot', 'Source snapshot · {{.Time}}', { Time: formatTime(snapshot.comparison.generated_at) })"
+                      ></p>
+                    </div>
+                  </header>
+                  <div class="card-content">
+                    <div class="columns is-variable is-3 mb-0">
+                      <div class="column">
+                        <p
+                          class="report-comparison-number"
+                          x-text="snapshot.comparison.sonar_blocked == null ? '—' : snapshot.comparison.sonar_blocked"
+                        ></p>
+                        <p
+                          class="stat-label"
+                          x-text="t('ui.common.sonar_gates_blocked', 'Sonar gates blocked')"
+                        ></p>
+                        <p
+                          class="report-generated"
+                          x-text="t('ui.report.projects_reported', '{{.Count}} projects reported', { Count: snapshot.comparison.sonar_reported_projects })"
+                        ></p>
+                      </div>
+                      <div class="column">
+                        <p
+                          class="report-comparison-number"
+                          x-text="snapshot.comparison.semgrep_blocked == null ? '—' : snapshot.comparison.semgrep_blocked"
+                        ></p>
+                        <p
+                          class="stat-label"
+                          x-text="t('ui.common.semgrep_blocked', 'Repositories with Semgrep blocks')"
+                        ></p>
+                        <p
+                          class="report-generated"
+                          x-text="snapshot.comparison.semgrep_open_findings == null ? t('ui.report.not_collected_source', 'Not collected in source snapshot') : t('ui.report.open_findings', '{{.Count}} open findings', { Count: snapshot.comparison.semgrep_open_findings })"
+                        ></p>
+                      </div>
+                      <div class="column">
+                        <p
+                          class="report-comparison-number"
+                          x-text="snapshot.comparison.open_prs == null ? '—' : snapshot.comparison.open_prs"
+                        ></p>
+                        <p
+                          class="stat-label"
+                          x-text="t('ui.common.open_prs', 'Open PRs')"
+                        ></p>
+                        <p
+                          class="report-generated"
+                          x-text="snapshot.comparison.open_prs == null ? t('ui.report.not_collected_source', 'Not collected in source snapshot') : t('ui.report.repos_reported', '{{.Count}} repositories reported', { Count: snapshot.comparison.open_pr_repositories })"
+                        ></p>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </template>
+              <template
+                x-if="snapshot.comparison && snapshot.comparison.error && snapshot.comparison.error !== 'not configured'"
+              >
+                <div
+                  class="notification is-warning"
+                  role="status"
+                  x-text="snapshot.comparison.error"
+                ></div>
+              </template>
+
+              <section class="card mb-5">
+                <header class="card-header">
+                  <div class="card-header-title">
+                    <span class="icon is-medium kbm-icon-badge mr-2"
+                      ><span
+                        class="kbm-icon icon-hard-drive"
+                        aria-hidden="true"
+                      ></span
+                    ></span>
+                    <div>
+                      <p
+                        class="eyebrow"
+                        x-text="t('ui.report.inventory_eyebrow', 'Local inventory')"
+                      ></p>
+                      <span
+                        x-text="t('ui.common.repositories', 'Repositories')"
+                      ></span>
+                    </div>
+                  </div>
+                  <div class="kbm-card-header-actions">
+                    <div class="report-controls">
+                      <label class="report-filter">
+                        <span
+                          class="is-sr-only"
+                          x-text="t('ui.report.search_sr', 'Search repositories')"
+                          >Search repositories</span
+                        >
+                        <input
+                          class="input"
+                          type="search"
+                          :placeholder="t('ui.report.search_placeholder', 'Search names, paths, packages')"
+                          x-model="filter"
+                        />
+                      </label>
+                      <label class="report-signal-filter">
+                        <span
+                          class="is-sr-only"
+                          x-text="t('ui.report.filter_tree_sr', 'Filter by working tree')"
+                          >Filter by working tree</span
+                        >
+                        <span class="select is-fullwidth">
+                          <select x-model="treeFilter">
+                            <option
+                              value="all"
+                              x-text="t('ui.report.filter_tree_all', 'All working trees')"
+                            ></option>
+                            <option
+                              value="dirty"
+                              x-text="t('ui.common.dirty_trees', 'Dirty working trees')"
+                            ></option>
+                            <option
+                              value="clean"
+                              x-text="t('ui.report.filter_tree_clean', 'Clean working trees')"
+                            ></option>
+                          </select>
+                        </span>
+                      </label>
+                      <label class="report-signal-filter">
+                        <span
+                          class="is-sr-only"
+                          x-text="t('ui.report.filter_checks_sr', 'Filter by checks')"
+                          >Filter by checks</span
+                        >
+                        <span class="select is-fullwidth">
+                          <select x-model="checksFilter">
+                            <option
+                              value="all"
+                              x-text="t('ui.report.filter_checks_all', 'All check states')"
+                            ></option>
+                            <option
+                              value="has"
+                              x-text="t('ui.report.filter_checks_has', 'Has checks')"
+                            ></option>
+                            <option
+                              value="none"
+                              x-text="t('ui.report.filter_checks_none', 'No checks')"
+                            ></option>
+                          </select>
+                        </span>
+                      </label>
+                      <label class="report-signal-filter">
+                        <span
+                          class="is-sr-only"
+                          x-text="t('ui.report.filter_signal_sr', 'Filter by repository signals')"
+                          >Filter by repository signals</span
+                        >
+                        <span class="select is-fullwidth">
+                          <select x-model="signalFilter">
+                            <option
+                              value="all"
+                              x-text="t('ui.report.signal_all', 'All signals')"
+                            ></option>
+                            <option
+                              value="pull-requests"
+                              x-text="t('ui.report.signal_prs', 'Open pull requests')"
+                            ></option>
+                            <option
+                              value="dependabot"
+                              x-text="t('ui.report.signal_dependabot', 'Dependabot alerts')"
+                            ></option>
+                            <option
+                              value="code-scanning"
+                              x-text="t('ui.report.signal_scanning', 'Code scanning alerts')"
+                            ></option>
+                            <option
+                              value="semgrep"
+                              x-text="t('ui.report.signal_semgrep', 'Semgrep issues')"
+                            ></option>
+                            <option
+                              value="sonar"
+                              x-text="t('ui.report.signal_sonar', 'Sonar gate issues')"
+                            ></option>
+                            <option
+                              value="codefactor"
+                              x-text="t('ui.report.signal_codefactor', 'CodeFactor below B−')"
+                            ></option>
+                            <option
+                              value="coverage"
+                              x-text="t('ui.report.signal_coverage', 'Codecov below target')"
+                            ></option>
+                            <option
+                              value="any"
+                              x-text="t('ui.report.signal_any', 'Any signal')"
+                            ></option>
+                            <option
+                              value="all-signals"
+                              x-text="t('ui.report.signal_all_three', 'PR + Semgrep + Sonar')"
+                            ></option>
+                          </select>
+                        </span>
+                      </label>
+                      <span
+                        class="report-filter-count"
+                        aria-live="polite"
+                        x-text="repoCountText()"
+                      ></span>
+                    </div>
+                  </div>
+                </header>
+                <div class="card-content">
+                  <p class="report-generated mb-4">
+                    <span
+                      x-text="t('ui.report.snapshot_label', 'Snapshot')"
+                    ></span>
+                    <time x-text="formatTime(snapshot.generated_at)"></time>
+                    <template x-for="pin in policyPins()" :key="pin.key">
+                      <span>· <code x-text="pin.text"></code></span>
+                    </template>
+                  </p>
+
+                  <div class="table-container report-table-container">
+                    <table class="table is-fullwidth report-table">
+                      <thead>
+                        <tr>
+                          <th scope="col" :aria-sort="sortAria('name')">
+                            <button
+                              class="report-sort-button"
+                              type="button"
+                              @click="sortBy('name')"
                             >
+                              <span
+                                x-text="t('ui.report.col_repo', 'Repository')"
+                              ></span>
+                              <span
+                                class="kbm-icon report-sort-icon"
+                                :class="sortIcon('name')"
+                                aria-hidden="true"
+                              ></span>
+                            </button>
+                          </th>
+                          <th scope="col" :aria-sort="sortAria('working-tree')">
+                            <button
+                              class="report-sort-button"
+                              type="button"
+                              @click="sortBy('working-tree')"
+                            >
+                              <span
+                                x-text="t('ui.report.col_tree', 'Working tree')"
+                              ></span>
+                              <span
+                                class="kbm-icon report-sort-icon"
+                                :class="sortIcon('working-tree')"
+                                aria-hidden="true"
+                              ></span>
+                            </button>
+                          </th>
+                          <th scope="col" :aria-sort="sortAria('sync')">
+                            <button
+                              class="report-sort-button"
+                              type="button"
+                              @click="sortBy('sync')"
+                            >
+                              <span
+                                x-text="t('ui.report.col_sync', 'Sync baseline')"
+                              ></span>
+                              <span
+                                class="kbm-icon report-sort-icon"
+                                :class="sortIcon('sync')"
+                                aria-hidden="true"
+                              ></span>
+                            </button>
+                          </th>
+                          <th scope="col" :aria-sort="sortAria('checks')">
+                            <button
+                              class="report-sort-button"
+                              type="button"
+                              @click="sortBy('checks')"
+                            >
+                              <span
+                                x-text="t('ui.common.checks', 'Checks')"
+                              ></span>
+                              <span
+                                class="kbm-icon report-sort-icon"
+                                :class="sortIcon('checks')"
+                                aria-hidden="true"
+                              ></span>
+                            </button>
+                          </th>
+                          <th scope="col" :aria-sort="sortAria('findings')">
+                            <button
+                              class="report-sort-button"
+                              type="button"
+                              @click="sortBy('findings')"
+                            >
+                              <span
+                                x-text="t('ui.common.findings', 'Findings')"
+                              ></span>
+                              <span
+                                class="kbm-icon report-sort-icon"
+                                :class="sortIcon('findings')"
+                                aria-hidden="true"
+                              ></span>
+                            </button>
+                          </th>
+                        </tr>
+                      </thead>
+                      <template x-for="repo in filteredRepos" :key="repo.name">
+                        <tbody>
+                          <tr>
+                            <td>
+                              <p>
+                                <span
+                                  class="kbm-icon icon-github mr-1"
+                                  aria-hidden="true"
+                                  x-show="repo.github"
+                                ></span>
+                                <span
+                                  class="kbm-icon icon-forgejo mr-1"
+                                  aria-hidden="true"
+                                  x-show="repo.forgejo"
+                                ></span>
+                                <strong x-text="repo.name"></strong>
+                              </p>
+                              <p
+                                class="report-path is-mono"
+                                x-text="repo.path"
+                              ></p>
+                              <!-- biome-ignore lint/a11y/useValidAnchor: href is bound via Alpine; hidden until repo.web_url is set -->
                               <a
-                                class="report-scanner"
-                                :href="scannerUrl(repo, scanner) || null"
-                                :title="scannerTitle(repo, scanner)"
+                                class="button is-small is-light mt-2 has-tooltip has-tooltip-right has-tooltip-multiline has-tooltip-text-left"
+                                x-show="repo.web_url"
+                                :href="repo.web_url"
+                                :data-tooltip="repo.url"
+                                :aria-label="t('ui.report.open_repo_aria', 'Open {{.Name}} repository in a new tab', { Name: repo.name })"
                                 target="_blank"
                                 rel="noopener noreferrer"
                               >
-                                <img
-                                  x-show="scannerIcon(scanner)"
-                                  class="report-icon"
-                                  :src="iconUrl(scannerIcon(scanner))"
-                                  :alt="''"
-                                />
                                 <span
-                                  x-text="scannerLabel(repo, scanner)"
+                                  class="kbm-icon icon-link-2"
+                                  aria-hidden="true"
                                 ></span>
+                                <span
+                                  x-text="t('ui.report.open_repo', 'Open repository')"
+                                  >Open repository</span
+                                >
                               </a>
-                            </template>
-                          </div>
-                          <p class="report-path mt-2" x-show="repo.github">
-                            <a
-                              :href="codefactorUrl(repo) || null"
-                              :title="codefactorUrl(repo) ? 'CodeFactor report — ' + codefactorUrl(repo) : 'CodeFactor'"
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              <img
-                                class="report-icon"
-                                src="/static/icons/codefactor.svg"
-                                alt=""
-                              />
-                              CodeFactor:
+                              <button
+                                type="button"
+                                class="button is-small is-light mt-2"
+                                :disabled="busy"
+                                @click.stop="startReport({ repo: repo.name })"
+                              >
+                                <span
+                                  class="kbm-icon icon-refresh-cw"
+                                  aria-hidden="true"
+                                ></span>
+                                <span
+                                  x-text="t('ui.report.refresh_repo', 'Refresh')"
+                                ></span>
+                              </button>
+                              <button
+                                type="button"
+                                class="button is-small is-light mt-2"
+                                :aria-expanded="expandedRepo === repo.name"
+                                @click.stop="toggleExpand(repo.name)"
+                              >
+                                <span
+                                  class="kbm-icon"
+                                  :class="expandedRepo === repo.name ? 'icon-chevron-up' : 'icon-chevron-down'"
+                                  aria-hidden="true"
+                                ></span>
+                                <span
+                                  x-text="expandedRepo === repo.name ? t('ui.report.collapse', 'Collapse') : t('ui.report.expand', 'Expand')"
+                                  >Expand</span
+                                >
+                              </button>
                               <span
-                                x-text="(repo.codefactor || 'n/a') + (repo.codefactor_stale ? t('ui.report.stale_suffix', ' (stale)') : '')"
+                                class="tag is-light mt-2"
+                                :class="repo.path_exists ? 'is-success' : 'is-danger'"
+                                x-text="repo.path_exists ? t('ui.report.present', 'present') : t('ui.report.missing', 'missing')"
                               ></span>
-                            </a>
-                          </p>
-                          <p class="report-path mt-2" x-show="repo.github">
-                            <a
-                              :href="codecovUrl(repo) || null"
-                              :title="codecovUrl(repo) ? 'Codecov — ' + codecovUrl(repo) : 'Codecov'"
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              <img
-                                class="report-icon"
-                                src="/static/icons/codecov.svg"
-                                alt=""
-                              />
-                              Codecov:
-                              <span x-text="codecovLabel(repo)"></span>
-                            </a>
-                          </p>
-                          <p
-                            class="report-path mt-2"
-                            x-show="repo.semgrep_license && !repo.scanners.includes('semgrep')"
-                          >
-                            Semgrep: <span x-text="repo.semgrep_license"></span>
-                          </p>
-                          <template
-                            x-for="issue in repo.ruby_issues"
-                            :key="issue"
-                          >
-                            <p
-                              class="report-check-issue mt-2"
-                              x-text="issue"
-                            ></p>
-                          </template>
-                          <p
-                            class="report-path mt-2"
-                            x-show="(repo.npm_projects || []).length"
-                            x-text="npmProjectText(repo)"
-                          ></p>
-                          <template
-                            x-for="issue in repo.node_issues || []"
-                            :key="issue"
-                          >
-                            <p
-                              class="report-check-issue mt-2"
-                              x-text="issue"
-                            ></p>
-                          </template>
-                          <template
-                            x-for="issue in repo.toolchain_issues || []"
-                            :key="issue"
-                          >
-                            <p
-                              class="report-check-issue mt-2"
-                              x-text="issue"
-                            ></p>
-                          </template>
-                        </td>
-                        <td>
-                          <template x-if="repo.problems.length === 0">
-                            <p class="report-findings-status">
-                              <img
-                                class="report-icon report-icon-ok"
-                                src="/static/icons/square-check-big.svg"
-                                alt=""
-                              />
+                            </td>
+                            <td>
+                              <p
+                                class="is-mono"
+                                x-text="repo.head_sha || t('ui.report.no_head', 'no Git HEAD')"
+                              ></p>
                               <span
-                                class="is-sr-only"
-                                x-text="t('ui.report.no_findings_sr', 'no findings')"
-                              ></span>
-                            </p>
-                          </template>
-                          <template x-if="repo.problems.length > 0">
-                            <p class="report-findings-status">
-                              <img
-                                class="report-icon report-icon-danger"
-                                src="/static/icons/square-x.svg"
-                                alt=""
-                              />
-                              <span x-text="repo.problems.length"></span>
+                                class="tag is-light mt-2"
+                                :class="repo.dirty ? 'is-warning' : 'is-success'"
+                              >
+                                <span
+                                  class="kbm-icon icon-git-branch"
+                                  aria-hidden="true"
+                                ></span>
+                                <span
+                                  x-text="repo.dirty ? t('ui.report.dirty', 'dirty') : t('ui.report.clean', 'clean')"
+                                ></span>
+                              </span>
+                              <p
+                                class="report-error mt-2"
+                                x-show="repo.error"
+                                x-text="repo.error"
+                              ></p>
+                            </td>
+                            <td>
+                              <p class="is-mono" x-text="driftText(repo)"></p>
+                              <p
+                                class="report-path is-mono"
+                                x-text="repo.sync.repo_commit || '—'"
+                              ></p>
                               <span
-                                class="is-sr-only"
-                                x-text="t('ui.report.findings_sr', 'findings')"
+                                class="tag is-light mt-2"
+                                :class="repo.sync.marker === 'present' ? 'is-success' : 'is-warning'"
+                                x-text="repo.sync.marker === 'present' ? t('ui.report.marker_present', 'marker present') : repo.sync.marker || t('ui.report.no_marker', 'no marker')"
                               ></span>
-                            </p>
-                          </template>
-                          <template
-                            x-for="problem in repo.problems"
-                            :key="problem"
+                            </td>
+                            <td>
+                              <p
+                                x-show="repoScanners(repo).length === 0"
+                                x-text="t('ui.report.no_scanner', 'No scanner config')"
+                              ></p>
+                              <div class="report-scanners">
+                                <template
+                                  x-for="scanner in repoScanners(repo)"
+                                  :key="scanner"
+                                >
+                                  <!-- biome-ignore lint/a11y/useValidAnchor: href bound via Alpine; placeholder anchor is valid when the scanner has no URL -->
+                                  <a
+                                    class="report-scanner"
+                                    :href="scannerUrl(repo, scanner) || null"
+                                    :title="scannerTitle(repo, scanner)"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                  >
+                                    <span
+                                      x-show="scannerIcon(scanner)"
+                                      class="kbm-icon"
+                                      :class="scannerIcon(scanner)"
+                                      aria-hidden="true"
+                                    ></span>
+                                    <span x-text="scannerLabel(repo, scanner)"
+                                      >Scanner</span
+                                    >
+                                  </a>
+                                </template>
+                              </div>
+                              <p class="report-path mt-2" x-show="repo.github">
+                                <!-- biome-ignore lint/a11y/useValidAnchor: href bound via Alpine; placeholder anchor is valid when no CodeFactor URL exists -->
+                                <a
+                                  :href="codefactorUrl(repo) || null"
+                                  :title="codefactorUrl(repo) ? 'CodeFactor report — ' + codefactorUrl(repo) : 'CodeFactor'"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  <span
+                                    class="kbm-icon icon-codefactor"
+                                    aria-hidden="true"
+                                  ></span>
+                                  CodeFactor:
+                                  <span
+                                    x-text="(repo.codefactor || 'n/a') + (repo.codefactor_stale ? t('ui.report.stale_suffix', ' (stale)') : '')"
+                                  ></span>
+                                </a>
+                              </p>
+                              <p class="report-path mt-2" x-show="repo.github">
+                                <!-- biome-ignore lint/a11y/useValidAnchor: href bound via Alpine; placeholder anchor is valid when no Codecov URL exists -->
+                                <a
+                                  :href="codecovUrl(repo) || null"
+                                  :title="codecovUrl(repo) ? 'Codecov — ' + codecovUrl(repo) : 'Codecov'"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  <span
+                                    class="kbm-icon icon-codecov"
+                                    aria-hidden="true"
+                                  ></span>
+                                  Codecov:
+                                  <span x-text="codecovLabel(repo)"></span>
+                                </a>
+                              </p>
+                              <p
+                                class="report-path mt-2"
+                                x-show="repo.semgrep_license && !repo.scanners.includes('semgrep')"
+                              >
+                                Semgrep:
+                                <span x-text="repo.semgrep_license"></span>
+                              </p>
+                              <template
+                                x-for="issue in repo.ruby_issues"
+                                :key="issue"
+                              >
+                                <p
+                                  class="report-check-issue mt-2"
+                                  x-text="issue"
+                                ></p>
+                              </template>
+                              <p
+                                class="report-path mt-2"
+                                x-show="(repo.npm_projects || []).length"
+                                x-text="npmProjectText(repo)"
+                              ></p>
+                              <template
+                                x-for="issue in repo.node_issues || []"
+                                :key="issue"
+                              >
+                                <p
+                                  class="report-check-issue mt-2"
+                                  x-text="issue"
+                                ></p>
+                              </template>
+                              <template
+                                x-for="issue in repo.toolchain_issues || []"
+                                :key="issue"
+                              >
+                                <p
+                                  class="report-check-issue mt-2"
+                                  x-text="issue"
+                                ></p>
+                              </template>
+                            </td>
+                            <td>
+                              <template x-if="repo.problems.length === 0">
+                                <p class="report-findings-status">
+                                  <span
+                                    class="kbm-icon report-icon-ok icon-square-check-big"
+                                    aria-hidden="true"
+                                  ></span>
+                                  <span
+                                    class="is-sr-only"
+                                    x-text="t('ui.report.no_findings_sr', 'no findings')"
+                                    >no findings</span
+                                  >
+                                </p>
+                              </template>
+                              <template x-if="repo.problems.length > 0">
+                                <p class="report-findings-status">
+                                  <span
+                                    class="kbm-icon report-icon-danger icon-square-x"
+                                    aria-hidden="true"
+                                  ></span>
+                                  <span x-text="repo.problems.length"></span>
+                                  <span
+                                    class="is-sr-only"
+                                    x-text="t('ui.report.findings_sr', 'findings')"
+                                    >findings</span
+                                  >
+                                </p>
+                              </template>
+                              <template
+                                x-for="problem in repo.problems"
+                                :key="problem"
+                              >
+                                <p class="report-problem" x-text="problem"></p>
+                              </template>
+                            </td>
+                          </tr>
+                          <tr
+                            x-show="expandedRepo === repo.name"
+                            x-cloak
+                            class="report-expanded-row"
                           >
-                            <p class="report-problem" x-text="problem"></p>
-                          </template>
-                        </td>
-                        <td>
-                          <div class="report-detail-links">
-                            <template
-                              x-for="link in repoLinks(repo)"
-                              :key="link.url"
-                            >
-                              <a
-                                :href="link.url"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                x-text="link.label"
-                              ></a>
-                            </template>
-                          </div>
-                          <details class="report-row-details">
-                            <summary>
-                              <img
-                                class="report-icon"
-                                src="/static/icons/chevron-down.svg"
-                                alt=""
-                              />
-                              <span
-                                x-text="t('ui.report.expand', 'Expand')"
-                              ></span>
-                            </summary>
-                            <pre
-                              class="report-detail-content"
-                              x-text="repoDetails(repo, snapshot)"
-                            ></pre>
-                          </details>
-                        </td>
-                      </tr>
-                    </template>
-                    <tr x-show="filteredRepos.length === 0">
-                      <td
-                        colspan="6"
-                        class="has-text-centered has-text-grey"
-                        x-text="t('ui.report.no_match', 'No repositories match this filter.')"
-                      ></td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            <section class="box kbm-box mb-5">
-              <p
-                class="eyebrow"
-                x-text="t('ui.report.fleet_eyebrow', 'Fleet-wide package analysis')"
-              ></p>
-              <h2
-                class="title is-4 section-heading"
-                x-text="t('ui.report.gem_health', 'Gem health')"
-              ></h2>
-              <pre
-                class="report-detail-content"
-                x-text="gemFleetDetails()"
-              ></pre>
-              <details
-                class="report-fleet-constrained mt-3"
-                x-show="gemFleetConstrained()"
-              >
-                <summary x-text="gemFleetConstrainedSummary()"></summary>
-                <pre
-                  class="report-detail-content"
-                  x-text="gemFleetConstrained()"
-                ></pre>
-              </details>
-            </section>
-
-            <section class="box kbm-box mb-5">
-              <p
-                class="eyebrow"
-                x-text="t('ui.report.fleet_eyebrow', 'Fleet-wide package analysis')"
-              ></p>
-              <h2
-                class="title is-4 section-heading"
-                x-text="t('ui.report.node_health', 'Node and npm health')"
-              ></h2>
-              <pre
-                class="report-detail-content"
-                x-text="nodeFleetDetails()"
-              ></pre>
-              <details
-                class="report-fleet-constrained mt-3"
-                x-show="nodeFleetConstrained()"
-              >
-                <summary x-text="nodeFleetConstrainedSummary()"></summary>
-                <pre
-                  class="report-detail-content"
-                  x-text="nodeFleetConstrained()"
-                ></pre>
-              </details>
-            </section>
-          </div>
-        </template>
-
-        <section class="box kbm-box">
-          <div class="level is-mobile mb-4">
-            <div class="level-left">
-              <div>
-                <p
-                  class="eyebrow"
-                  x-text="t('ui.report.history_eyebrow', 'Durable run log')"
-                ></p>
-                <h2
-                  class="title is-4 section-heading mb-0"
-                  x-text="t('ui.report.recent_runs', 'Recent report runs')"
-                ></h2>
-              </div>
-            </div>
-          </div>
-          <p
-            class="has-text-grey mb-4"
-            x-show="reportHistory.length === 0"
-            x-text="t('ui.report.trend_empty', 'Trend points appear here once the report has run.')"
-          ></p>
-          <div class="report-chart mb-4" x-show="reportHistory.length > 0">
-            <canvas
-              id="reportHistoryChart"
-              role="img"
-              :aria-label="t('ui.report.chart_aria', 'Report metrics over time')"
-            ></canvas>
-          </div>
-          <template x-if="jobs.length === 0">
-            <p
-              class="has-text-grey"
-              x-text="t('ui.report.no_runs', 'No report runs recorded yet.')"
-            ></p>
-          </template>
-          <template x-for="job in jobs" :key="job.id">
-            <article class="job-row py-3">
-              <div class="level is-mobile mb-1">
-                <div class="level-left">
-                  <div class="tags mb-0">
-                    <span
-                      class="tag"
-                      :class="jobTagClass(job.status)"
-                      x-text="job.status"
-                    ></span>
-                    <span class="tag is-light" x-text="'#' + job.id"></span>
+                            <td colspan="5">
+                              <div class="report-detail-links">
+                                <template
+                                  x-for="link in repoLinks(repo)"
+                                  :key="link.url"
+                                >
+                                  <!-- biome-ignore lint/a11y/useValidAnchor: href bound via Alpine; repoLinks only yields entries with a URL -->
+                                  <a
+                                    :href="link.url"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    x-text="link.label"
+                                    >Repository link</a
+                                  >
+                                </template>
+                              </div>
+                              <pre
+                                class="report-detail-content"
+                                x-text="repoDetails(repo, snapshot)"
+                              ></pre>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </template>
+                      <tbody>
+                        <tr x-show="filteredRepos.length === 0">
+                          <td
+                            colspan="5"
+                            class="has-text-centered has-text-grey"
+                            x-text="t('ui.report.no_match', 'No repositories match this filter.')"
+                          ></td>
+                        </tr>
+                      </tbody>
+                    </table>
                   </div>
                 </div>
-                <div class="level-right">
-                  <time
-                    class="is-size-7 has-text-grey"
-                    x-text="formatTime(job.started)"
-                  ></time>
+              </section>
+
+              <section class="card mb-5">
+                <header class="card-header">
+                  <div class="card-header-title">
+                    <span class="icon is-medium kbm-icon-badge mr-2"
+                      ><span class="kbm-icon icon-gem" aria-hidden="true"></span
+                    ></span>
+                    <div>
+                      <p
+                        class="eyebrow"
+                        x-text="t('ui.report.fleet_eyebrow', 'Fleet-wide package analysis')"
+                      ></p>
+                      <span
+                        x-text="t('ui.report.gem_health', 'Gem health')"
+                      ></span>
+                    </div>
+                  </div>
+                </header>
+                <div class="card-content">
+                  <pre
+                    class="report-detail-content"
+                    x-text="gemFleetDetails()"
+                  ></pre>
+                  <details
+                    class="report-fleet-constrained mt-3"
+                    x-show="gemFleetConstrained()"
+                  >
+                    <summary x-text="gemFleetConstrainedSummary()"></summary>
+                    <pre
+                      class="report-detail-content"
+                      x-text="gemFleetConstrained()"
+                    ></pre>
+                  </details>
+                </div>
+              </section>
+
+              <section class="card mb-5">
+                <header class="card-header">
+                  <div class="card-header-title">
+                    <span class="icon is-medium kbm-icon-badge mr-2"
+                      ><span
+                        class="kbm-icon icon-package"
+                        aria-hidden="true"
+                      ></span
+                    ></span>
+                    <div>
+                      <p
+                        class="eyebrow"
+                        x-text="t('ui.report.fleet_eyebrow', 'Fleet-wide package analysis')"
+                      ></p>
+                      <span
+                        x-text="t('ui.report.node_health', 'Node and npm health')"
+                      ></span>
+                    </div>
+                  </div>
+                </header>
+                <div class="card-content">
+                  <pre
+                    class="report-detail-content"
+                    x-text="nodeFleetDetails()"
+                  ></pre>
+                  <details
+                    class="report-fleet-constrained mt-3"
+                    x-show="nodeFleetConstrained()"
+                  >
+                    <summary x-text="nodeFleetConstrainedSummary()"></summary>
+                    <pre
+                      class="report-detail-content"
+                      x-text="nodeFleetConstrained()"
+                    ></pre>
+                  </details>
+                </div>
+              </section>
+            </div>
+          </template>
+
+          <section class="card">
+            <header class="card-header">
+              <div class="card-header-title">
+                <span class="icon is-medium kbm-icon-badge mr-2"
+                  ><span
+                    class="kbm-icon icon-file-clock"
+                    aria-hidden="true"
+                  ></span
+                ></span>
+                <div>
+                  <p
+                    class="eyebrow"
+                    x-text="t('ui.report.history_eyebrow', 'Durable run log')"
+                  ></p>
+                  <span
+                    x-text="t('ui.report.recent_runs', 'Recent report runs')"
+                  ></span>
                 </div>
               </div>
-              <p x-show="job.detail" x-text="job.detail"></p>
-              <p class="report-error" x-show="job.error" x-text="job.error"></p>
-            </article>
-          </template>
+            </header>
+            <div class="card-content">
+              <p
+                class="has-text-grey mb-4"
+                x-show="reportHistory.length === 0"
+                x-text="t('ui.report.trend_empty', 'Trend points appear here once the report has run.')"
+              ></p>
+              <div
+                class="report-chart mb-4"
+                x-show="reportHistory.length > 0"
+                role="img"
+                :aria-label="t('ui.report.chart_aria', 'Report metrics over time')"
+              >
+                <canvas id="reportHistoryChart"></canvas>
+              </div>
+              <template x-if="jobs.length === 0">
+                <p
+                  class="has-text-grey"
+                  x-text="t('ui.report.no_runs', 'No report runs recorded yet.')"
+                ></p>
+              </template>
+              <template x-for="job in jobs" :key="job.id">
+                <article class="job-row py-3">
+                  <div class="level is-mobile mb-1">
+                    <div class="level-left">
+                      <div class="tags mb-0">
+                        <span
+                          class="tag"
+                          :class="jobTagClass(job.status)"
+                          x-text="job.status"
+                        ></span>
+                        <span class="tag is-light" x-text="'#' + job.id"></span>
+                      </div>
+                    </div>
+                    <div class="level-right">
+                      <time
+                        class="is-size-7 has-text-grey"
+                        x-text="formatTime(job.started)"
+                      ></time>
+                    </div>
+                  </div>
+                  <p x-show="job.detail" x-text="job.detail"></p>
+                  <p
+                    class="report-error"
+                    x-show="job.error"
+                    x-text="job.error"
+                  ></p>
+                </article>
+              </template>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+    <div
+      class="modal"
+      :class="{ 'is-active': dialog }"
+      x-cloak
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="kbm-dialog-title"
+      @keydown.escape.window="dialog && resolveDialog(false)"
+    >
+      <div class="modal-background" @click="resolveDialog(false)"></div>
+      <div class="modal-card" @keydown.tab="trapDialogFocus($event)">
+        <header class="modal-card-head">
+          <p
+            class="modal-card-title"
+            id="kbm-dialog-title"
+            x-text="dialogTitle()"
+          ></p>
+          <button
+            type="button"
+            class="delete"
+            :aria-label="t('ui.common.close', 'Close')"
+            @click="resolveDialog(false)"
+          ></button>
+        </header>
+        <section class="modal-card-body">
+          <p x-text="dialogMessage()"></p>
+          <div class="field mt-3" x-show="dialogIsPrompt()">
+            <div class="control">
+              <input
+                class="input"
+                type="text"
+                x-model="dialogInput"
+                x-ref="dialogInputEl"
+                :aria-label="dialogMessage()"
+                @keydown.enter="resolveDialog(true)"
+              />
+            </div>
+          </div>
         </section>
+        <footer class="modal-card-foot">
+          <div class="buttons">
+            <button
+              type="button"
+              class="button is-success"
+              data-dialog-confirm
+              x-ref="dialogConfirmEl"
+              x-text="dialogConfirmLabel()"
+              @click="resolveDialog(true)"
+            ></button>
+            <button
+              type="button"
+              class="button"
+              x-text="t('ui.common.cancel', 'Cancel')"
+              @click="resolveDialog(false)"
+            ></button>
+          </div>
+        </footer>
       </div>
-    </main>
+    </div>
   </body>
 </html>

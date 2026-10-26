@@ -1,36 +1,16 @@
-.report-hero-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 2rem;
-}
-
-.report-hero .title {
-  max-width: 14ch;
-}
-
-.report-hero .subtitle {
-  max-width: 66ch;
-}
-
 .report-scope {
   min-width: 10rem;
-  border-left: 1px solid rgb(255 250 240 / 36%);
+  border-left: 1px solid var(--kbm-line);
   padding: 0.25rem 0 0.25rem 1rem;
 }
 
 .report-scope-mark {
   display: block;
   margin-bottom: 0.75rem;
-  color: #f2b77f;
+  color: var(--kbm-steel);
   font-family: Georgia, "Times New Roman", serif;
   font-size: 3rem;
   line-height: 1;
-}
-
-.report-toolbar {
-  flex-wrap: wrap;
-  gap: 1rem;
 }
 
 .report-controls {
@@ -68,11 +48,11 @@
 }
 
 .report-sort-button:hover {
-  color: var(--kbm-moss);
+  color: var(--kbm-steel);
 }
 
 .report-sort-button:focus-visible {
-  outline: 2px solid var(--kbm-moss);
+  outline: 2px solid var(--kbm-steel);
   outline-offset: 3px;
   border-radius: 2px;
 }
@@ -95,21 +75,6 @@
   max-width: 22rem;
   color: var(--kbm-muted);
   overflow-wrap: anywhere;
-}
-
-.report-repo-link {
-  display: inline-block;
-  margin-top: 0.25rem;
-  color: var(--kbm-moss);
-  font-weight: 700;
-  text-decoration: underline;
-  text-decoration-color: rgb(40 84 68 / 35%);
-  text-underline-offset: 0.15em;
-}
-
-.report-repo-link:hover {
-  color: var(--kbm-orange);
-  text-decoration-color: currentcolor;
 }
 
 .report-detail-links {
@@ -153,18 +118,12 @@
   min-width: 13rem;
 }
 
-.report-table td:last-child {
-  min-width: 24rem;
-}
-
-.report-row-details summary {
-  color: var(--kbm-moss);
-  cursor: pointer;
-  font-weight: 700;
+.report-expanded-row td {
+  min-width: 0;
 }
 
 .report-fleet-constrained summary {
-  color: var(--kbm-moss);
+  color: var(--kbm-steel);
   cursor: pointer;
   font-weight: 700;
 }
@@ -183,15 +142,10 @@
 }
 
 @media (width <= 768px) {
-  .report-hero-grid {
-    grid-template-columns: 1fr;
-    gap: 0.5rem;
-  }
-
   .report-scope {
     min-width: 0;
     border-left: 0;
-    border-top: 1px solid rgb(255 250 240 / 36%);
+    border-top: 1px solid var(--kbm-line);
     padding: 0.75rem 0 0;
   }
 
@@ -219,12 +173,6 @@
 }
 
 /* Brand icons shown next to scanner/check names in the repository table. */
-.report-icon {
-  height: 1em;
-  width: auto;
-  vertical-align: -0.125em;
-}
-
 .report-scanners {
   display: flex;
   flex-wrap: wrap;
@@ -238,28 +186,24 @@
   white-space: nowrap;
 }
 
-.tag .report-icon {
-  margin-right: 0.25em;
-}
-
 /* Findings status icons (Lucide, stroke=currentColor). */
 .report-findings-status {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   font-weight: 600;
+  --kbm-icon-size: 1.25em;
 }
 
-.report-findings-status .report-icon {
-  height: 1.25em;
-}
-
+/* Findings status icons are mask silhouettes now — color: reaches them,
+   so the semantic tints are plain Bulma palette vars (kept distinct from
+   the steel accent). */
 .report-icon-ok {
-  color: var(--kbm-moss);
+  color: var(--bulma-success);
 }
 
 .report-icon-danger {
-  color: #a64035;
+  color: var(--bulma-danger);
 }
 
 /* Scanner chips and remote-check lines link to the tool's dashboard. */
@@ -271,31 +215,12 @@ a.report-scanner,
 
 a.report-scanner:hover,
 .report-path a:hover {
-  color: var(--kbm-moss);
+  color: var(--kbm-steel);
   text-decoration: underline;
 }
 
 .report-sort-icon {
-  height: 0.9em;
-}
-
-.button .report-icon {
-  margin-right: 0.3em;
-}
-
-/* flag-icons in the language picker — the hairline keeps white field edges
-   visible on light buttons. */
-.kbm-flag {
-  height: 1em;
-  width: auto;
-  vertical-align: -0.125em;
-  border-radius: 2px;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
-}
-
-.button .kbm-flag,
-.dropdown-item .kbm-flag {
-  margin-right: 0.3em;
+  --kbm-icon-size: 0.9em;
 }
 
 /* Chart.js needs an explicit-height wrapper — the canvas fills it when

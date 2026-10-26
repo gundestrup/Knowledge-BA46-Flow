@@ -432,9 +432,12 @@ func scannerProblems(repo Repository, url string, minCoverage *float64) []string
 			failureSuffix(repo.SonarFailures))
 	}
 	if findings := repo.SemgrepFindings; findings != nil {
-		if findings.Project == nil && repo.SemgrepLicense == "cloud-ci" {
+		switch {
+		case findings.Error != "":
+			problems = append(problems, "semgrep findings unavailable: "+findings.Error)
+		case findings.Project == nil && repo.SemgrepLicense == "cloud-ci":
 			problems = append(problems, "semgrep ci configured but no platform project found")
-		} else if findings.Open != nil && *findings.Open > 0 {
+		case findings.Open != nil && *findings.Open > 0:
 			problems = append(problems, semgrepProblem(*findings))
 		}
 	}

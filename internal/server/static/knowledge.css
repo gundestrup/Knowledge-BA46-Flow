@@ -1,0 +1,51 @@
+/* Knowledge workspace — suggestion cards, model lane controls, progress
+   chart. Shared tokens, shell, icons and table styles live in base.css. */
+
+.model-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.model-control {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+.model-control .label {
+  color: var(--kbm-muted);
+}
+
+.model-control select {
+  width: 100%;
+  text-overflow: ellipsis;
+}
+.suggestion-card {
+  border: 1px solid var(--kbm-line);
+  border-left: 4px solid var(--kbm-steel);
+  box-shadow: 0 5px 18px rgb(24 53 45 / 4.5%);
+}
+
+.suggestion-card.is-danger-card {
+  border-left-color: #c65d4b;
+}
+
+.suggestion-path {
+  overflow-wrap: anywhere;
+}
+
+.proposal-content {
+  max-height: 24rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #f8f6f0;
+  border: 1px solid var(--kbm-line);
+  border-radius: 6px;
+  padding: 1rem;
+}
+.kbm-chart {
+  position: relative;
+  height: 260px;
+}

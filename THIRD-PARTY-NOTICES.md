@@ -10,6 +10,8 @@ required:
 - Chart.js v4.4.9 (UMD build), from https://github.com/chartjs/Chart.js
 - flag-icons v7.6.0 (`gb.svg` and `dk.svg` language-picker flags), from
   https://github.com/lipis/flag-icons
+- bulma-tooltip v1.2.0 (`@creativebulma/bulma-tooltip` CSS-only extension),
+  from https://github.com/CreativeBulma/bulma-tooltip
 
 These components are distributed under the MIT License. The Alpine bundle
 contains Vue's bundled license notices, and the Bulma stylesheet retains its
@@ -68,6 +70,8 @@ Copyright (c) 2018-present Yuxi (Evan) You and Vue contributors
 Copyright (c) 2014-2022 Chart.js Contributors
 
 Copyright (c) 2013 Panayiotis Lipiridis
+
+Copyright (c) 2020 Gaetan (bulma-tooltip)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

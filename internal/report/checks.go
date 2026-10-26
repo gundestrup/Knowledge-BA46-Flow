@@ -81,11 +81,18 @@ func scannerConfigs(dir string) []string {
 		{name: "overcommit", path: filepath.Join(dir, ".overcommit.yml")},
 		{name: "gh-actions", path: filepath.Join(dir, ".github", "workflows"), isDir: true},
 		{name: "forgejo", path: filepath.Join(dir, ".forgejo", "workflows"), isDir: true},
+		{name: "dependabot", path: filepath.Join(dir, ".github", "dependabot.yml")},
+		{name: "dependabot", path: filepath.Join(dir, ".github", "dependabot.yaml")},
 	}
 	found := make([]string, 0, len(checks))
+	seen := make(map[string]bool, len(checks))
 	for _, check := range checks {
+		if seen[check.name] {
+			continue
+		}
 		info, err := os.Stat(check.path)
 		if err == nil && (check.isDir && info.IsDir() || !check.isDir && info.Mode().IsRegular()) {
+			seen[check.name] = true
 			found = append(found, check.name)
 		}
 	}

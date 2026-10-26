@@ -1,236 +1,378 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light" />
+    <meta name="color-scheme" content="light dark" />
     <title>KBM-flow — home</title>
     <link rel="stylesheet" href="/static/vendor/bulma.min.css" />
-    <link rel="stylesheet" href="/static/dashboard.css" />
+    <link rel="stylesheet" href="/static/base.css" />
     <link rel="stylesheet" href="/static/landing.css" />
+    <script src="/static/theme.js"></script>
+    <script defer src="/static/common.js"></script>
     <script defer src="/static/landing.js"></script>
     <script defer src="/static/clientlog.js"></script>
     <script defer src="/static/vendor/alpine.min.js"></script>
   </head>
   <body x-data="landingDashboard" x-init="init()">
-    <section class="hero kbm-hero landing-hero">
-      <div class="hero-body">
-        <div class="container dashboard">
-          <p
-            class="eyebrow mb-3"
-            x-text="t('ui.landing.eyebrow', 'Knowledge operations · home')"
-          ></p>
-          <div class="level landing-heading">
-            <div class="level-left">
-              <div>
-                <h1
-                  class="title is-1 mb-3"
-                  x-text="t('ui.landing.hero_title', 'Your repositories, at a glance.')"
-                ></h1>
-                <p
-                  class="subtitle is-5"
-                  x-text="t('ui.landing.hero_subtitle', 'Choose a workspace to inspect its current state and continue where you left off.')"
-                ></p>
-              </div>
-            </div>
-            <div class="level-right">
-              <button
-                class="button is-light"
-                :disabled="loading"
-                @click="refresh()"
-                x-text="t('ui.landing.refresh_overview', 'Refresh overview')"
-              ></button>
-              <div
-                class="dropdown is-right ml-2"
-                :class="{ 'is-active': localeOpen }"
-                @click.outside="localeOpen = false"
+    <aside class="kbm-aside" :class="{ 'is-open': navOpen }">
+      <div class="kbm-aside-brand">
+        <span class="kbm-icon icon-scan-search" aria-hidden="true"></span>
+        <span>KBM-flow</span>
+      </div>
+      <nav class="kbm-aside-menu" aria-label="Primary">
+        <p
+          class="menu-label"
+          x-text="t('ui.common.workspaces', 'Workspaces')"
+        ></p>
+        <ul class="menu-list">
+          <li>
+            <a href="/" class="is-active">
+              <span class="kbm-icon icon-house" aria-hidden="true"></span>
+              <span x-text="t('ui.common.home', 'Home')">Home</span>
+            </a>
+          </li>
+          <li>
+            <a href="/knowledge">
+              <span class="kbm-icon icon-book-open" aria-hidden="true"></span>
+              <span x-text="t('ui.common.knowledge', 'Knowledge')"
+                >Knowledge</span
               >
-                <div class="dropdown-trigger">
+            </a>
+          </li>
+          <li>
+            <a href="/report">
+              <span
+                class="kbm-icon icon-chart-column"
+                aria-hidden="true"
+              ></span>
+              <span x-text="t('ui.common.report', 'Report')">Report</span>
+            </a>
+          </li>
+        </ul>
+      </nav>
+    </aside>
+    <div
+      class="kbm-aside-overlay"
+      :class="{ 'is-open': navOpen }"
+      @click="navOpen = false"
+    ></div>
+    <div class="kbm-shell">
+      <nav class="kbm-navbar">
+        <button
+          type="button"
+          class="navbar-burger kbm-aside-burger"
+          :class="{ 'is-active': navOpen }"
+          :aria-label="t('ui.common.menu', 'Menu')"
+          :aria-expanded="navOpen"
+          @click="navOpen = !navOpen"
+          @keydown.escape.window="navOpen = false"
+        >
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+        </button>
+        <div class="kbm-navbar-end">
+          <button
+            type="button"
+            class="button is-light is-small"
+            data-theme-toggle
+            :aria-label="t('ui.common.theme_toggle', 'Toggle theme')"
+          >
+            <span
+              class="kbm-icon icon-monitor"
+              aria-hidden="true"
+              data-theme-icon
+            ></span>
+          </button>
+          <div
+            class="dropdown is-right"
+            :class="{ 'is-active': localeOpen }"
+            @click.outside="localeOpen = false"
+          >
+            <div class="dropdown-trigger">
+              <button
+                type="button"
+                class="button is-light is-small"
+                aria-haspopup="true"
+                :aria-expanded="localeOpen"
+                :aria-label="t('ui.common.language', 'Language')"
+                @click="localeOpen = !localeOpen"
+              >
+                <img
+                  class="kbm-flag"
+                  :src="localeFlag(displayLocale())"
+                  alt=""
+                />
+                <span x-text="localeLabel(displayLocale())"></span>
+                <span
+                  class="kbm-icon ml-1 icon-chevron-down"
+                  aria-hidden="true"
+                ></span>
+              </button>
+            </div>
+            <div class="dropdown-menu" role="menu">
+              <div class="dropdown-content">
+                <button
+                  type="button"
+                  class="dropdown-item"
+                  role="menuitem"
+                  :class="{ 'is-active': locale === '' }"
+                  @click="setLocale('')"
+                >
+                  <img
+                    class="kbm-flag"
+                    :src="localeFlag(resolvedLocale)"
+                    alt=""
+                  />
+                  <span
+                    x-text="t('ui.common.locale_auto', 'Automatic (browser)')"
+                    >Automatic (browser)</span
+                  >
+                </button>
+                <template x-for="l in locales" :key="l">
                   <button
                     type="button"
-                    class="button is-light is-small"
-                    aria-haspopup="true"
-                    :aria-expanded="localeOpen"
-                    :aria-label="t('ui.common.language', 'Language')"
-                    @click="localeOpen = !localeOpen"
+                    class="dropdown-item"
+                    role="menuitem"
+                    :class="{ 'is-active': locale === l }"
+                    @click="setLocale(l)"
                   >
-                    <img
-                      class="kbm-flag"
-                      :src="localeFlag(displayLocale())"
-                      alt=""
-                    />
-                    <span x-text="localeLabel(displayLocale())"></span>
-                    <img
-                      class="kbm-icon ml-1"
-                      src="/static/icons/chevron-down.svg"
-                      alt=""
-                    />
+                    <img class="kbm-flag" :src="localeFlag(l)" alt="" />
+                    <span x-text="localeLabel(l)"></span>
                   </button>
-                </div>
-                <div class="dropdown-menu" role="menu">
-                  <div class="dropdown-content">
-                    <a
-                      class="dropdown-item"
-                      role="menuitem"
-                      :class="{ 'is-active': locale === '' }"
-                      @click="setLocale('')"
-                    >
-                      <img
-                        class="kbm-flag"
-                        :src="localeFlag(resolvedLocale)"
-                        alt=""
-                      />
-                      <span
-                        x-text="
-                          t('ui.common.locale_auto', 'Automatic (browser)')
-                        "
-                      ></span>
-                    </a>
-                    <template x-for="l in locales" :key="l">
-                      <a
-                        class="dropdown-item"
-                        role="menuitem"
-                        :class="{ 'is-active': locale === l }"
-                        @click="setLocale(l)"
-                      >
-                        <img class="kbm-flag" :src="localeFlag(l)" alt="" />
-                        <span x-text="localeLabel(l)"></span>
-                      </a>
-                    </template>
-                  </div>
-                </div>
+                </template>
               </div>
             </div>
           </div>
-          <p class="is-size-7 has-text-white-ter" role="status">
-            <span
-              class="status-dot"
-              :class="loading ? 'is-warning' : ''"
-            ></span>
-            <span
-              x-text="loading ? t('ui.landing.refreshing', 'Refreshing summaries…') : t('ui.landing.local_overview', 'Local overview')"
-            ></span>
-          </p>
         </div>
-      </div>
-    </section>
-
-    <main class="section landing-main">
-      <div class="container dashboard">
-        <template x-if="error">
-          <article class="message is-danger" role="alert">
-            <div class="message-body" x-text="error"></div>
-          </article>
-        </template>
-
-        <div class="columns is-variable is-5 portal-grid">
-          <div class="column is-6-desktop">
-            <a class="card portal-card knowledge-portal" href="/knowledge">
-              <div class="card-content">
-                <div class="portal-card-heading">
-                  <div>
-                    <p
-                      class="eyebrow"
-                      x-text="t('ui.landing.kb_eyebrow', 'Markdown knowledge base')"
-                    ></p>
-                    <h2
-                      class="title is-2 section-heading mt-2 mb-3"
-                      x-text="t('ui.landing.kb_heading', 'Review and tend.')"
-                    ></h2>
-                  </div>
-                  <span class="portal-arrow" aria-hidden="true">↗</span>
-                </div>
-                <p
-                  class="portal-description"
-                  x-text="t('ui.landing.kb_description', 'Inspect changed notes, review suggestions, and apply only the changes you accept.')"
-                ></p>
-                <div class="portal-metrics">
-                  <div class="portal-metric">
-                    <strong x-text="knowledgeValue('changed_files')"></strong>
-                    <span
-                      x-text="t('ui.landing.metric_changed', 'files changed since analysis')"
-                    ></span>
-                  </div>
-                  <div class="portal-metric">
-                    <strong x-text="knowledgeValue('model_drift')"></strong>
-                    <span
-                      x-text="t('ui.landing.metric_drift', 'analyzed with another model')"
-                    ></span>
-                  </div>
-                  <div class="portal-metric">
-                    <strong x-text="cycleAge()"></strong>
-                    <span
-                      x-text="t('ui.landing.metric_cycle', 'since last full cycle')"
-                    ></span>
-                  </div>
-                </div>
-                <p class="portal-freshness" x-text="lastCycleText()"></p>
-                <div class="portal-card-footer">
-                  <span
-                    x-text="t('ui.landing.open_knowledge', 'Open knowledge dashboard')"
-                  ></span>
-                  <span aria-hidden="true">→</span>
-                </div>
-              </div>
-            </a>
+      </nav>
+      <section class="kbm-title-bar">
+        <ul>
+          <li>KBM-flow</li>
+          <li x-text="t('ui.common.home', 'Home')"></li>
+        </ul>
+      </section>
+      <section class="kbm-hero-bar">
+        <div class="level">
+          <div class="level-left">
+            <div>
+              <p
+                class="eyebrow mb-1"
+                x-text="t('ui.landing.eyebrow', 'Knowledge operations · home')"
+              ></p>
+              <h1
+                class="title is-3"
+                x-text="t('ui.landing.hero_title', 'Your repositories, at a glance.')"
+              >
+                Your repositories, at a glance.
+              </h1>
+              <p
+                class="subtitle is-6 mb-2"
+                x-text="t('ui.landing.hero_subtitle', 'Choose a workspace to inspect its current state and continue where you left off.')"
+              ></p>
+              <p class="is-size-7 has-text-grey" role="status">
+                <span
+                  class="status-dot"
+                  :class="loading ? 'is-warning' : ''"
+                ></span>
+                <span
+                  x-text="loading ? t('ui.landing.refreshing', 'Refreshing summaries…') : t('ui.landing.local_overview', 'Local overview')"
+                ></span>
+              </p>
+            </div>
           </div>
-
-          <div class="column is-6-desktop">
-            <a class="card portal-card report-portal" href="/report">
-              <div class="card-content">
-                <div class="portal-card-heading">
-                  <div>
-                    <p
-                      class="eyebrow"
-                      x-text="t('ui.landing.fleet_eyebrow', 'Repository fleet')"
-                    ></p>
-                    <h2
-                      class="title is-2 section-heading mt-2 mb-3"
-                      x-text="t('ui.landing.fleet_heading', 'See the wider picture.')"
-                    ></h2>
-                  </div>
-                  <span class="portal-arrow" aria-hidden="true">↗</span>
-                </div>
-                <p
-                  class="portal-description"
-                  x-text="t('ui.landing.fleet_description', 'Check registered repositories, live service results, and Ruby gem health across the fleet.')"
-                ></p>
-                <div class="portal-metrics portal-metrics-four">
-                  <div class="portal-metric">
-                    <strong x-text="reportValue('repositories')"></strong>
-                    <span
-                      x-text="t('ui.common.repositories', 'repositories')"
-                    ></span>
-                  </div>
-                  <div class="portal-metric">
-                    <strong x-text="reportMetric('sonar_blocked')"></strong>
-                    <span
-                      x-text="t('ui.common.sonar_gates_blocked', 'Sonar gates blocked')"
-                    ></span>
-                  </div>
-                  <div class="portal-metric">
-                    <strong x-text="reportMetric('semgrep_blocked')"></strong>
-                    <span
-                      x-text="t('ui.common.semgrep_blocked', 'repositories with Semgrep blocks')"
-                    ></span>
-                  </div>
-                  <div class="portal-metric">
-                    <strong x-text="reportMetric('open_prs')"></strong>
-                    <span x-text="t('ui.common.open_prs', 'open PRs')"></span>
-                  </div>
-                </div>
-                <p class="portal-freshness" x-text="reportFreshness()"></p>
-                <div class="portal-card-footer">
-                  <span
-                    x-text="t('ui.landing.open_report', 'Open full repository report')"
-                  ></span>
-                  <span aria-hidden="true">→</span>
-                </div>
-              </div>
-            </a>
+          <div class="level-right">
+            <button
+              type="button"
+              class="button is-light"
+              :disabled="loading"
+              @click="refresh()"
+              x-text="t('ui.landing.refresh_overview', 'Refresh overview')"
+            ></button>
           </div>
         </div>
+      </section>
+      <main class="kbm-main-section">
+        <div class="container dashboard">
+          <template x-if="error">
+            <article class="message is-danger" role="alert">
+              <div class="message-body" x-text="error"></div>
+            </article>
+          </template>
+
+          <div class="columns is-variable is-5 portal-grid">
+            <div class="column is-6-desktop">
+              <a class="card portal-card knowledge-portal" href="/knowledge">
+                <div class="card-content">
+                  <div class="portal-card-heading">
+                    <div>
+                      <p
+                        class="eyebrow"
+                        x-text="t('ui.landing.kb_eyebrow', 'Markdown knowledge base')"
+                      ></p>
+                      <h2
+                        class="title is-2 section-heading mt-2 mb-3"
+                        x-text="t('ui.landing.kb_heading', 'Review and tend.')"
+                      >
+                        Review and tend.
+                      </h2>
+                    </div>
+                    <span class="portal-arrow" aria-hidden="true">↗</span>
+                  </div>
+                  <p
+                    class="portal-description"
+                    x-text="t('ui.landing.kb_description', 'Inspect changed notes, review suggestions, and apply only the changes you accept.')"
+                  ></p>
+                  <div class="portal-metrics">
+                    <div class="portal-metric">
+                      <strong x-text="knowledgeValue('changed_files')"></strong>
+                      <span
+                        x-text="t('ui.landing.metric_changed', 'files changed since analysis')"
+                      ></span>
+                    </div>
+                    <div class="portal-metric">
+                      <strong x-text="knowledgeValue('model_drift')"></strong>
+                      <span
+                        x-text="t('ui.landing.metric_drift', 'analyzed with another model')"
+                      ></span>
+                    </div>
+                    <div class="portal-metric">
+                      <strong x-text="cycleAge()"></strong>
+                      <span
+                        x-text="t('ui.landing.metric_cycle', 'since last full cycle')"
+                      ></span>
+                    </div>
+                  </div>
+                  <p class="portal-freshness" x-text="lastCycleText()"></p>
+                  <div class="portal-card-footer">
+                    <span
+                      x-text="t('ui.landing.open_knowledge', 'Open knowledge dashboard')"
+                    ></span>
+                    <span aria-hidden="true">→</span>
+                  </div>
+                </div>
+              </a>
+            </div>
+
+            <div class="column is-6-desktop">
+              <a class="card portal-card report-portal" href="/report">
+                <div class="card-content">
+                  <div class="portal-card-heading">
+                    <div>
+                      <p
+                        class="eyebrow"
+                        x-text="t('ui.landing.fleet_eyebrow', 'Repository fleet')"
+                      ></p>
+                      <h2
+                        class="title is-2 section-heading mt-2 mb-3"
+                        x-text="t('ui.landing.fleet_heading', 'See the wider picture.')"
+                      >
+                        See the wider picture.
+                      </h2>
+                    </div>
+                    <span class="portal-arrow" aria-hidden="true">↗</span>
+                  </div>
+                  <p
+                    class="portal-description"
+                    x-text="t('ui.landing.fleet_description', 'Check registered repositories, live service results, and Ruby gem health across the fleet.')"
+                  ></p>
+                  <div class="portal-metrics portal-metrics-four">
+                    <div class="portal-metric">
+                      <strong x-text="reportValue('repositories')"></strong>
+                      <span
+                        x-text="t('ui.common.repositories', 'repositories')"
+                      ></span>
+                    </div>
+                    <div class="portal-metric">
+                      <strong x-text="reportMetric('sonar_blocked')"></strong>
+                      <span
+                        x-text="t('ui.common.sonar_gates_blocked', 'Sonar gates blocked')"
+                      ></span>
+                    </div>
+                    <div class="portal-metric">
+                      <strong x-text="reportMetric('semgrep_blocked')"></strong>
+                      <span
+                        x-text="t('ui.common.semgrep_blocked', 'repositories with Semgrep blocks')"
+                      ></span>
+                    </div>
+                    <div class="portal-metric">
+                      <strong x-text="reportMetric('open_prs')"></strong>
+                      <span x-text="t('ui.common.open_prs', 'open PRs')"></span>
+                    </div>
+                  </div>
+                  <p class="portal-freshness" x-text="reportFreshness()"></p>
+                  <div class="portal-card-footer">
+                    <span
+                      x-text="t('ui.landing.open_report', 'Open full repository report')"
+                    ></span>
+                    <span aria-hidden="true">→</span>
+                  </div>
+                </div>
+              </a>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+    <div
+      class="modal"
+      :class="{ 'is-active': dialog }"
+      x-cloak
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="kbm-dialog-title"
+      @keydown.escape.window="dialog && resolveDialog(false)"
+    >
+      <div class="modal-background" @click="resolveDialog(false)"></div>
+      <div class="modal-card" @keydown.tab="trapDialogFocus($event)">
+        <header class="modal-card-head">
+          <p
+            class="modal-card-title"
+            id="kbm-dialog-title"
+            x-text="dialogTitle()"
+          ></p>
+          <button
+            type="button"
+            class="delete"
+            :aria-label="t('ui.common.close', 'Close')"
+            @click="resolveDialog(false)"
+          ></button>
+        </header>
+        <section class="modal-card-body">
+          <p x-text="dialogMessage()"></p>
+          <div class="field mt-3" x-show="dialogIsPrompt()">
+            <div class="control">
+              <input
+                class="input"
+                type="text"
+                x-model="dialogInput"
+                x-ref="dialogInputEl"
+                :aria-label="dialogMessage()"
+                @keydown.enter="resolveDialog(true)"
+              />
+            </div>
+          </div>
+        </section>
+        <footer class="modal-card-foot">
+          <div class="buttons">
+            <button
+              type="button"
+              class="button is-success"
+              data-dialog-confirm
+              x-ref="dialogConfirmEl"
+              x-text="dialogConfirmLabel()"
+              @click="resolveDialog(true)"
+            ></button>
+            <button
+              type="button"
+              class="button"
+              x-text="t('ui.common.cancel', 'Cancel')"
+              @click="resolveDialog(false)"
+            ></button>
+          </div>
+        </footer>
       </div>
-    </main>
+    </div>
   </body>
 </html>

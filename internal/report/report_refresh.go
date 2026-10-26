@@ -84,21 +84,30 @@ func refreshRemoteRepositoryForRepo(
 }
 
 // refreshSemgrepData refreshes Semgrep findings when a token is configured;
-// without a token or on request failure existing findings are marked stale.
+// without a token or on request failure existing findings are marked stale and
+// cloud-ci repos without findings record the failure reason.
 func refreshSemgrepData(ctx context.Context, client *remoteHTTP, snapshot *Snapshot, registry map[string]repositoryEntry) {
+	reason := "semgrep token is not configured"
 	if token := semgrepToken(); token != "" {
-		if data, err := client.semgrepPlatform(ctx, token); err == nil {
+		data, err := client.semgrepPlatform(ctx, token)
+		if err == nil {
 			refreshSemgrepFindings(data, snapshot.Repos, registry)
 			return
+		} else {
+			reason = err.Error()
 		}
 	}
-	markSemgrepStale(snapshot.Repos)
+	markSemgrepStale(snapshot.Repos, reason)
 }
 
-func markSemgrepStale(repos []Repository) {
+func markSemgrepStale(repos []Repository, reason string) {
 	for i := range repos {
 		if repos[i].SemgrepFindings != nil {
 			repos[i].SemgrepFindings.Stale = true
+			continue
+		}
+		if repos[i].SemgrepLicense == "cloud-ci" {
+			repos[i].SemgrepFindings = &SemgrepFindings{Stale: true, Error: reason}
 		}
 	}
 }

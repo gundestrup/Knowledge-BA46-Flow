@@ -280,6 +280,8 @@ func devStaticFS() fs.FS {
 	if dir == "" {
 		return nil
 	}
+	// #nosec G703 -- dev-only: the operator sets KBM_DEV_STATIC to serve local
+	// UI files from disk; there is no untrusted input to traverse.
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		logging.Infof("KBM_DEV_STATIC=%q is not a directory — serving embedded UI assets", dir)
 		return nil

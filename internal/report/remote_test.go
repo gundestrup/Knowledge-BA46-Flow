@@ -463,6 +463,7 @@ func TestRefreshSemgrepDataWithoutTokenMarksStale(t *testing.T) {
 	snapshot := &Snapshot{Repos: []Repository{
 		{Name: "a", SemgrepFindings: &SemgrepFindings{}},
 		{Name: "b"},
+		{Name: "c", SemgrepLicense: "cloud-ci"},
 	}}
 	refreshSemgrepData(t.Context(), newRemoteHTTP(), snapshot, nil)
 	if !snapshot.Repos[0].SemgrepFindings.Stale {
@@ -471,6 +472,11 @@ func TestRefreshSemgrepDataWithoutTokenMarksStale(t *testing.T) {
 	// A repo without findings must not gain one.
 	if snapshot.Repos[1].SemgrepFindings != nil {
 		t.Fatal("markSemgrepStale should not fabricate findings")
+	}
+	// A cloud-ci repo records why platform findings are unavailable.
+	got := snapshot.Repos[2].SemgrepFindings
+	if got == nil || got.Error != "semgrep token is not configured" || !got.Stale {
+		t.Fatalf("cloud-ci repo should record the failure reason: %+v", got)
 	}
 }
 

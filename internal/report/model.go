@@ -44,6 +44,7 @@ type SemgrepFindings struct {
 	Severities map[string]int `json:"severities,omitempty"`
 	URL        string         `json:"url,omitempty"`
 	Stale      bool           `json:"stale,omitempty"`
+	Error      string         `json:"error,omitempty"`
 }
 
 type GemEdge struct {

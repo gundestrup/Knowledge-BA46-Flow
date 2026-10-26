@@ -128,7 +128,7 @@ func TestMergeForgejoReferenceCarries(t *testing.T) {
 
 func TestMarkStaleHelpers(t *testing.T) {
 	repos := []Repository{{SemgrepFindings: &SemgrepFindings{}}}
-	markSemgrepStale(repos)
+	markSemgrepStale(repos, "boom")
 	if !repos[0].SemgrepFindings.Stale {
 		t.Fatal("markSemgrepStale did not flag findings")
 	}
@@ -324,6 +324,37 @@ func TestReportSmallHelpers(t *testing.T) {
 	setGemChanges(&repo, nil)
 	if repo.GemChanges.Added == nil || repo.GemChanges.Removed == nil {
 		t.Fatal("nil old should produce empty (non-nil) changes")
+	}
+}
+
+func TestScannerConfigs(t *testing.T) {
+	dir := t.TempDir()
+	if got := scannerConfigs(dir); len(got) != 0 {
+		t.Fatalf("empty repo scanners=%v", got)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".github"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".github", "dependabot.yml"), []byte("version: 2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := scannerConfigs(dir); len(got) != 1 || got[0] != "dependabot" {
+		t.Fatalf("dependabot scanners=%v", got)
+	}
+	if err := os.Rename(
+		filepath.Join(dir, ".github", "dependabot.yml"),
+		filepath.Join(dir, ".github", "dependabot.yaml"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got := scannerConfigs(dir); len(got) != 1 || got[0] != "dependabot" {
+		t.Fatalf("dependabot.yaml scanners=%v", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".github", "dependabot.yml"), []byte("version: 2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := scannerConfigs(dir); len(got) != 1 || got[0] != "dependabot" {
+		t.Fatalf("dependabot dedupe scanners=%v", got)
 	}
 }
 

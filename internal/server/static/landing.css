@@ -1,23 +1,3 @@
-.landing-hero .title {
-  max-width: 20ch;
-}
-
-.landing-hero .subtitle {
-  max-width: 54ch;
-}
-
-.landing-heading {
-  align-items: end;
-}
-
-.landing-heading .level-right {
-  margin-left: 2rem;
-}
-
-.landing-main {
-  padding-top: 3rem;
-}
-
 .portal-grid {
   align-items: stretch;
 }
@@ -27,7 +7,7 @@
   height: 100%;
   overflow: hidden;
   border: 1px solid var(--kbm-line);
-  border-top: 4px solid var(--kbm-moss);
+  border-top: 4px solid var(--kbm-steel);
   border-radius: 10px;
   color: var(--kbm-ink);
   box-shadow: 0 8px 26px rgb(24 53 45 / 6%);
@@ -39,18 +19,18 @@
 
 .portal-card:hover {
   transform: translateY(-4px);
-  border-color: var(--kbm-moss);
+  border-color: var(--kbm-steel);
   box-shadow: 0 14px 34px rgb(24 53 45 / 12%);
   color: var(--kbm-ink);
 }
 
 .portal-card:focus-visible {
-  outline: 3px solid var(--kbm-orange);
+  outline: 3px solid var(--kbm-steel);
   outline-offset: 3px;
 }
 
 .report-portal {
-  border-top-color: var(--kbm-orange);
+  border-top-color: var(--kbm-steel);
 }
 
 .portal-card .card-content {
@@ -68,7 +48,7 @@
 }
 
 .portal-arrow {
-  color: var(--kbm-orange);
+  color: var(--kbm-steel);
   font-size: 2rem;
   line-height: 1;
 }
@@ -129,24 +109,12 @@
   margin-top: auto;
   border-top: 1px solid var(--kbm-line);
   padding-top: 1.25rem;
-  color: var(--kbm-moss);
+  color: var(--kbm-steel);
   font-size: 0.86rem;
   font-weight: 800;
 }
 
 @media (width <= 768px) {
-  .landing-heading {
-    align-items: stretch;
-  }
-
-  .landing-heading .level-right {
-    margin: 1rem 0 0;
-  }
-
-  .landing-heading .button {
-    width: 100%;
-  }
-
   .portal-card .card-content {
     min-height: 22rem;
   }
@@ -162,23 +130,4 @@
   }
 }
 
-/* Icons + flag-icons in the header/language picker — flags get a hairline
-   so white field edges stay visible on light buttons. */
-.kbm-icon {
-  height: 1em;
-  width: auto;
-  vertical-align: -0.125em;
-}
-
-.kbm-flag {
-  height: 1em;
-  width: auto;
-  vertical-align: -0.125em;
-  border-radius: 2px;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
-}
-
-.button .kbm-flag,
-.dropdown-item .kbm-flag {
-  margin-right: 0.3em;
-}
+/* Icon and flag rules live in dashboard.css, which every page loads. */

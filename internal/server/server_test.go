@@ -551,12 +551,16 @@ func TestUIAndEmbeddedAssetsAreServed(t *testing.T) {
 		mime string
 	}{
 		{path: "/static/vendor/bulma.min.css", mime: "text/css"},
+		{path: "/static/vendor/bulma-tooltip.min.css", mime: "text/css"},
 		{path: "/static/vendor/alpine.min.js", mime: "text/javascript"},
 		{path: "/static/vendor/chart.umd.js", mime: "text/javascript"},
 		{path: "/static/landing.css", mime: "text/css"},
 		{path: "/static/landing.js", mime: "text/javascript"},
 		{path: "/static/report.css", mime: "text/css"},
 		{path: "/static/report.js", mime: "text/javascript"},
+		{path: "/static/base.css", mime: "text/css"},
+		{path: "/static/knowledge.css", mime: "text/css"},
+		{path: "/static/common.js", mime: "text/javascript"},
 	} {
 		res, err := http.Get(srv.URL + asset.path)
 		if err != nil {

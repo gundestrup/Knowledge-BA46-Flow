@@ -1,838 +1,1160 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light" />
+    <meta name="color-scheme" content="light dark" />
     <title>KBM-flow — knowledge review</title>
     <link rel="stylesheet" href="/static/vendor/bulma.min.css" />
-    <link rel="stylesheet" href="/static/dashboard.css" />
+    <link rel="stylesheet" href="/static/base.css" />
+    <link rel="stylesheet" href="/static/knowledge.css" />
+    <script src="/static/theme.js"></script>
     <script defer src="/static/clientlog.js"></script>
     <script defer src="/static/vendor/chart.umd.js"></script>
+    <script defer src="/static/common.js"></script>
     <script defer src="/static/dashboard.js"></script>
     <script defer src="/static/vendor/alpine.min.js"></script>
   </head>
   <body x-data="knowledgeDashboard" x-init="init()">
-    <section class="hero kbm-hero">
-      <div class="hero-body">
-        <div class="container dashboard">
-          <p
-            class="eyebrow mb-3"
-            x-text="t('ui.kb.eyebrow', 'Local knowledge operations')"
-          ></p>
-          <h1
-            class="title is-1 mb-3"
-            x-text="t('ui.kb.hero_title', 'Knowledge, kept useful.')"
-          ></h1>
-          <p
-            class="subtitle is-5 mb-5"
-            x-text="t('ui.kb.hero_subtitle', 'Review LLM suggestions before they touch your repository.')"
-          ></p>
-          <div class="buttons">
-            <a class="button is-light" href="/">
-              <img class="kbm-icon" src="/static/icons/house.svg" alt="" />
-              <span x-text="t('ui.common.home', 'Home')"></span>
+    <aside class="kbm-aside" :class="{ 'is-open': navOpen }">
+      <div class="kbm-aside-brand">
+        <span class="kbm-icon icon-scan-search" aria-hidden="true"></span>
+        <span>KBM-flow</span>
+      </div>
+      <nav class="kbm-aside-menu" aria-label="Primary">
+        <p
+          class="menu-label"
+          x-text="t('ui.common.workspaces', 'Workspaces')"
+        ></p>
+        <ul class="menu-list">
+          <li>
+            <a href="/">
+              <span class="kbm-icon icon-house" aria-hidden="true"></span>
+              <span x-text="t('ui.common.home', 'Home')">Home</span>
             </a>
-            <button
-              type="button"
-              class="button is-light"
-              :disabled="busy || applying"
-              @click="startOperation('scan')"
-            >
-              <img
-                class="kbm-icon"
-                src="/static/icons/scan-search.svg"
-                alt=""
-              />
-              <span x-text="t('ui.kb.scan_repo', 'Scan repository')"></span>
-            </button>
-            <button
-              type="button"
-              class="button is-light"
-              :disabled="busy || applying"
-              :title="t('ui.kb.check_links_title', 'Probe external http(s) links in documents and record the verdict in each note\'s kbm.link_check block — no LLM involved')"
-              @click="startOperation('link-check')"
-            >
-              <img class="kbm-icon" src="/static/icons/link-2.svg" alt="" />
-              <span
-                x-text="t('ui.kb.check_links', 'Check external links')"
-              ></span>
-            </button>
-            <button
-              type="button"
-              class="button is-light"
-              :disabled="busy || applying"
-              @click="startOperation('analyze')"
-            >
-              <img
-                class="kbm-icon"
-                src="/static/icons/file-search.svg"
-                alt=""
-              />
-              <span
-                x-text="t('ui.kb.analyze_changes', 'Analyze changes')"
-              ></span>
-            </button>
-            <button
-              type="button"
-              class="button kbm-accent"
-              :disabled="busy || applying || discovering"
-              @click="startOperation('run')"
-            >
-              <img class="kbm-icon" src="/static/icons/play.svg" alt="" />
-              <span x-text="t('ui.kb.scan_analyze', 'Scan + analyze')"></span>
-            </button>
-            <button
-              type="button"
-              class="button is-warning"
-              :disabled="busy || applying || acceptedCount === 0"
-              @click="applyAccepted()"
-            >
-              <img class="kbm-icon" src="/static/icons/check.svg" alt="" />
-              <span x-text="applyLabel()"></span>
-            </button>
-            <a class="button is-light" href="/report">
-              <img
-                class="kbm-icon"
-                src="/static/icons/chart-column.svg"
-                alt=""
-              />
-              <span x-text="t('ui.kb.repo_report', 'Repository report')"></span>
+          </li>
+          <li>
+            <a href="/knowledge" class="is-active">
+              <span class="kbm-icon icon-book-open" aria-hidden="true"></span>
+              <span x-text="t('ui.common.knowledge', 'Knowledge')"
+                >Knowledge</span
+              >
             </a>
-            <button
-              type="button"
-              class="button is-danger is-light"
-              :disabled="stopping"
-              :title="t('ui.kb.stop_title', 'Gracefully stop this KBM-flow server')"
-              @click="stopServer()"
-            >
-              <img class="kbm-icon" src="/static/icons/power.svg" alt="" />
-              <span x-text="t('ui.kb.stop_server', 'Stop server')"></span>
-            </button>
-            <div
-              class="dropdown is-right"
-              :class="{ 'is-active': localeOpen }"
-              @click.outside="localeOpen = false"
-            >
-              <div class="dropdown-trigger">
+          </li>
+          <li>
+            <a href="/report">
+              <span
+                class="kbm-icon icon-chart-column"
+                aria-hidden="true"
+              ></span>
+              <span x-text="t('ui.common.report', 'Report')">Report</span>
+            </a>
+          </li>
+        </ul>
+      </nav>
+    </aside>
+    <div
+      class="kbm-aside-overlay"
+      :class="{ 'is-open': navOpen }"
+      @click="navOpen = false"
+    ></div>
+    <div class="kbm-shell">
+      <nav class="kbm-navbar">
+        <button
+          type="button"
+          class="navbar-burger kbm-aside-burger"
+          :class="{ 'is-active': navOpen }"
+          :aria-label="t('ui.common.menu', 'Menu')"
+          :aria-expanded="navOpen"
+          @click="navOpen = !navOpen"
+          @keydown.escape.window="navOpen = false"
+        >
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+        </button>
+        <div class="kbm-navbar-end">
+          <button
+            type="button"
+            class="button is-light is-small"
+            data-theme-toggle
+            :aria-label="t('ui.common.theme_toggle', 'Toggle theme')"
+          >
+            <span
+              class="kbm-icon icon-monitor"
+              aria-hidden="true"
+              data-theme-icon
+            ></span>
+          </button>
+          <div
+            class="dropdown is-right"
+            :class="{ 'is-active': localeOpen }"
+            @click.outside="localeOpen = false"
+          >
+            <div class="dropdown-trigger">
+              <button
+                type="button"
+                class="button is-light is-small"
+                aria-haspopup="true"
+                :aria-expanded="localeOpen"
+                :aria-label="t('ui.common.language', 'Language')"
+                @click="localeOpen = !localeOpen"
+              >
+                <img
+                  class="kbm-flag"
+                  :src="localeFlag(displayLocale())"
+                  alt=""
+                />
+                <span x-text="localeLabel(displayLocale())"></span>
+                <span
+                  class="kbm-icon ml-1 icon-chevron-down"
+                  aria-hidden="true"
+                ></span>
+              </button>
+            </div>
+            <div class="dropdown-menu" role="menu">
+              <div class="dropdown-content">
                 <button
                   type="button"
-                  class="button is-light is-small"
-                  aria-haspopup="true"
-                  :aria-expanded="localeOpen"
-                  :aria-label="t('ui.common.language', 'Language')"
-                  @click="localeOpen = !localeOpen"
+                  class="dropdown-item"
+                  role="menuitem"
+                  :class="{ 'is-active': locale === '' }"
+                  @click="setLocale('')"
                 >
                   <img
                     class="kbm-flag"
-                    :src="localeFlag(displayLocale())"
+                    :src="localeFlag(resolvedLocale)"
                     alt=""
                   />
-                  <span x-text="localeLabel(displayLocale())"></span>
-                  <img
-                    class="kbm-icon ml-1"
-                    src="/static/icons/chevron-down.svg"
-                    alt=""
-                  />
+                  <span
+                    x-text="t('ui.common.locale_auto', 'Automatic (browser)')"
+                    >Automatic (browser)</span
+                  >
                 </button>
-              </div>
-              <div class="dropdown-menu" role="menu">
-                <div class="dropdown-content">
-                  <a
+                <template x-for="l in locales" :key="l">
+                  <button
+                    type="button"
                     class="dropdown-item"
                     role="menuitem"
-                    :class="{ 'is-active': locale === '' }"
-                    @click="setLocale('')"
+                    :class="{ 'is-active': locale === l }"
+                    @click="setLocale(l)"
                   >
-                    <img
-                      class="kbm-flag"
-                      :src="localeFlag(resolvedLocale)"
-                      alt=""
-                    />
-                    <span
-                      x-text="t('ui.common.locale_auto', 'Automatic (browser)')"
-                    ></span>
-                  </a>
-                  <template x-for="l in locales" :key="l">
-                    <a
-                      class="dropdown-item"
-                      role="menuitem"
-                      :class="{ 'is-active': locale === l }"
-                      @click="setLocale(l)"
-                    >
-                      <img class="kbm-flag" :src="localeFlag(l)" alt="" />
-                      <span x-text="localeLabel(l)"></span>
-                    </a>
-                  </template>
-                </div>
+                    <img class="kbm-flag" :src="localeFlag(l)" alt="" />
+                    <span x-text="localeLabel(l)"></span>
+                  </button>
+                </template>
               </div>
             </div>
           </div>
-          <div class="model-controls mb-3">
-            <div class="model-control">
-              <label
-                class="label is-small"
-                for="generation-model"
-                x-text="t('ui.kb.generation_model', 'Generation model')"
-              ></label>
-              <div class="select is-small is-fullwidth">
-                <select
-                  id="generation-model"
-                  x-model="model"
-                  @change="estimate = null"
-                  :disabled="busy || applying || discovering"
-                  :title="t('ui.kb.generation_model_title', 'Per-run generation override; never used for embeddings')"
-                >
-                  <option
-                    value=""
-                    x-text="t('ui.kb.generation_default', 'Configured generation/task defaults')"
-                  ></option>
-                  <template x-for="m in generationChoices()" :key="m.name">
-                    <option
-                      :value="m.name"
-                      :disabled="modelUnavailable(m, discovered)"
-                      x-text="generationLabel(m)"
-                    ></option>
-                  </template>
-                </select>
-              </div>
+        </div>
+      </nav>
+      <section class="kbm-title-bar">
+        <ul>
+          <li>KBM-flow</li>
+          <li x-text="t('ui.common.knowledge', 'Knowledge')"></li>
+        </ul>
+      </section>
+      <section class="kbm-hero-bar">
+        <div class="level">
+          <div class="level-left">
+            <div>
               <p
-                class="is-size-7 mt-1"
-                :class="generationMismatch() ? 'has-text-warning' : 'has-text-white-ter'"
-                x-show="generationStampLine()"
-                x-text="generationStampLine()"
+                class="eyebrow mb-1"
+                x-text="t('ui.kb.eyebrow', 'Local knowledge operations')"
               ></p>
-              <p
-                class="is-size-7 has-text-warning"
-                x-show="generationMismatch()"
-                x-text="t('ui.kb.generation_mismatch', 'Differs from the model behind most existing analyses.')"
-              ></p>
-            </div>
-            <div class="model-control">
-              <label
-                class="label is-small"
-                for="embedding-model"
-                x-text="t('ui.kb.embedding_model', 'Embedding model')"
-              ></label>
-              <div class="select is-small is-fullwidth">
-                <select
-                  id="embedding-model"
-                  x-model="embedModel"
-                  @change="estimate = null"
-                  :disabled="busy || applying || discovering"
-                  :title="t('ui.kb.embedding_model_title', 'Independent per-run embedding override; changing models refreshes incompatible vectors')"
-                >
-                  <option value="" x-text="embeddingDefaultLabel()"></option>
-                  <template x-for="m in embeddingChoices()" :key="m.name">
-                    <option
-                      :value="m.name"
-                      :disabled="modelUnavailable(m, discovered)"
-                      x-text="embedLabel(m)"
-                    ></option>
-                  </template>
-                </select>
-              </div>
-              <p
-                class="is-size-7 mt-1"
-                :class="embedMismatch() ? 'has-text-warning' : 'has-text-white-ter'"
-                x-show="embedStampLine()"
-                x-text="embedStampLine()"
-              ></p>
-              <p
-                class="is-size-7 has-text-warning"
-                x-show="embedMismatch()"
-                x-text="t('ui.kb.embed_mismatch', 'A different embedding model re-vectorizes every document and can expand dependent analysis.')"
-              ></p>
-            </div>
-            <button
-              type="button"
-              class="button is-small is-light"
-              :disabled="busy || applying || discovering"
-              @click="loadModels(true)"
-            >
-              <img class="kbm-icon" src="/static/icons/refresh-cw.svg" alt="" />
-              <span
-                x-text="discovering ? t('ui.kb.querying_ollama', 'Querying Ollama...') : t('ui.kb.refresh_ollama', 'Refresh from Ollama')"
-              ></span>
-            </button>
-          </div>
-          <p
-            class="is-size-7 has-text-white-ter mb-2"
-            x-text="t('ui.kb.choices_note', 'Choices affect this run only. Refresh lists installed/registered models, not the online catalog; it never downloads models.')"
-          ></p>
-          <p
-            class="is-size-7 has-text-white-ter mb-2"
-            role="status"
-            x-text="modelNotice"
-          ></p>
-          <div class="model-controls mb-3">
-            <div class="select is-small">
-              <select
-                :aria-label="t('ui.kb.task_aria', 'Optional task')"
-                x-model="task"
-                @change="estimate = null"
-                :title="t('ui.kb.task_title', 'Single-purpose pass: enrichment, embedding backfill, stub expansion, or freshness review')"
+              <h1
+                class="title is-3"
+                x-text="t('ui.kb.hero_title', 'Knowledge, kept useful.')"
               >
-                <option
-                  value="all"
-                  x-text="t('ui.kb.task_all', 'all LLM tasks')"
-                ></option>
-                <option
-                  value="expand"
-                  x-text="t('ui.kb.task_expand', 'expand stubs')"
-                ></option>
-                <option
-                  value="freshness"
-                  x-text="t('ui.kb.task_freshness', 'freshness check')"
-                ></option>
-                <option
-                  value="enrich"
-                  x-text="t('ui.kb.task_enrich', 'enrich only')"
-                ></option>
-                <option
-                  value="embed"
-                  x-text="t('ui.kb.task_embed', 'embed backfill')"
-                ></option>
-              </select>
-            </div>
-            <button
-              type="button"
-              class="button is-small is-light"
-              :disabled="busy || applying || discovering"
-              @click="startOperation(task)"
-            >
-              <img class="kbm-icon" src="/static/icons/play.svg" alt="" />
-              <span x-text="t('ui.kb.run_task', 'Run task')"></span>
-            </button>
-            <button
-              type="button"
-              class="button is-small is-light"
-              :disabled="busy || applying || discovering || estimating"
-              :title="t('ui.kb.estimate_title', 'Estimate how many documents this selection would queue — no models run, nothing changes')"
-              @click="previewWork()"
-            >
-              <img
-                class="kbm-icon"
-                src="/static/icons/scan-search.svg"
-                alt=""
-              />
-              <span
-                x-text="estimating ? t('ui.kb.estimating', 'Estimating...') : t('ui.kb.estimate_work', 'Estimate work')"
-              ></span>
-            </button>
-          </div>
-          <div class="is-size-7 has-text-white-ter mb-2" x-show="estimate">
-            <template x-for="line in estimateLines()" :key="line">
-              <p x-text="line"></p>
-            </template>
-            <template x-for="w in estimateWarnings()" :key="w">
-              <p class="has-text-warning" x-text="w"></p>
-            </template>
-          </div>
-          <label
-            class="checkbox is-size-7 has-text-white-ter mb-2"
-            :title="t('ui.kb.reanalyze_title', 'Also re-analyze documents whose last analysis used a different model than configured')"
-          >
-            <input
-              type="checkbox"
-              x-model="reanalyze"
-              @change="estimate = null"
-            />
-            <span
-              x-text="t('ui.kb.reanalyze_label', 'Re-analyze documents processed by a different model')"
-            ></span>
-          </label>
-          <label
-            class="checkbox is-size-7 has-text-white-ter mb-2"
-            :title="t('ui.kb.external_title', 'Run analysis with ollama_model_external (enhanced lane, e.g. a cloud model). Results stamp the external_* markers and leave the local lineage untouched; document content is sent to that model.')"
-          >
-            <input
-              type="checkbox"
-              x-model="external"
-              @change="estimate = null"
-            />
-            <span
-              x-text="t('ui.kb.external_label', 'External generation lane (document content leaves this machine)')"
-            ></span>
-          </label>
-          <label
-            class="checkbox is-size-7 has-text-white-ter mb-2"
-            :title="t('ui.kb.allow_cloud_title', 'Separate consent for off-machine embedding/enrichment; does not change the generation lane')"
-          >
-            <input
-              type="checkbox"
-              x-model="allowCloud"
-              @change="estimate = null"
-            />
-            <span
-              x-text="t('ui.kb.allow_cloud_label', 'Allow cloud/remote embeddings and enrichment for this run')"
-            ></span>
-          </label>
-          <label
-            class="checkbox is-size-7 has-text-white-ter mb-2"
-            :title="t('ui.kb.web_verify_title', 'Verify freshness flags against Ollama\'s hosted web search — flagged claim text (never the whole document) is sent to ollama.com; requires OLLAMA_API_KEY')"
-          >
-            <input
-              type="checkbox"
-              x-model="webVerify"
-              @change="estimate = null"
-            />
-            <span
-              x-text="t('ui.kb.web_verify_label', 'Verify freshness flags via web search (claim text leaves this machine)')"
-            ></span>
-          </label>
-          <p class="is-size-7 has-text-white-ter">
-            <span class="status-dot" :class="busy ? 'is-warning' : ''"></span>
-            <span
-              x-text="busy ? t('ui.kb.status_busy', 'A background operation is running') : t('ui.kb.status_idle', 'Nothing runs until you start it')"
-            ></span>
-          </p>
-        </div>
-      </div>
-    </section>
-
-    <main class="section pt-5">
-      <div class="container dashboard">
-        <template x-if="error">
-          <article class="message is-danger" role="alert">
-            <div class="message-body" x-text="error"></div>
-          </article>
-        </template>
-        <template x-if="notice">
-          <div
-            class="notification is-light"
-            role="status"
-            x-text="notice"
-          ></div>
-        </template>
-
-        <div class="columns is-variable is-4 mb-2">
-          <div class="column">
-            <div class="box kbm-box stat-box">
-              <p class="stat-number" x-text="documents.length"></p>
+                Knowledge, kept useful.
+              </h1>
               <p
-                class="stat-label mt-2"
-                x-text="t('ui.kb.stat_documents', 'Tracked documents')"
-              ></p>
-            </div>
-          </div>
-          <div class="column">
-            <div class="box kbm-box stat-box">
-              <p class="stat-number" x-text="pendingCount"></p>
-              <p
-                class="stat-label mt-2"
-                x-text="t('ui.kb.stat_review', 'Suggestions to review')"
-              ></p>
-              <p
-                class="is-size-7 has-text-grey mt-1"
-                x-show="progressDays.length > 0"
-                x-text="reviewTotalsText()"
-              ></p>
-            </div>
-          </div>
-          <div class="column">
-            <div class="box kbm-box stat-box">
-              <p class="stat-number" x-text="acceptedCount"></p>
-              <p
-                class="stat-label mt-2"
-                x-text="t('ui.kb.stat_accepted', 'Accepted, not applied')"
+                class="subtitle is-6 mb-0"
+                x-text="t('ui.kb.hero_subtitle', 'Review LLM suggestions before they touch your repository.')"
               ></p>
             </div>
           </div>
         </div>
-
-        <section class="box kbm-box mb-5">
-          <div class="level is-mobile mb-4">
-            <div class="level-left">
-              <div>
-                <p
-                  class="eyebrow"
-                  x-text="t('ui.kb.progress_eyebrow', 'Pipeline progress')"
-                ></p>
-                <h2
-                  class="title is-4 section-heading mb-0"
-                  x-text="t('ui.kb.progress_heading', 'Notes and suggestions over time')"
-                ></h2>
-              </div>
-            </div>
-          </div>
-          <p
-            class="has-text-grey"
-            x-show="progressDays.length === 0"
-            x-text="t('ui.kb.progress_empty', 'No activity recorded yet — run a scan to start the trend.')"
-          ></p>
-          <div class="kbm-chart" x-show="progressDays.length > 0">
-            <canvas
-              id="knowledgeProgressChart"
-              role="img"
-              :aria-label="t('ui.kb.chart_aria', 'Cumulative notes, analyses, applied suggestions and review backlog over time')"
-            ></canvas>
-          </div>
-        </section>
-
-        <section class="box kbm-box mb-5">
-          <div class="level is-mobile mb-4">
-            <div class="level-left">
-              <div>
-                <p
-                  class="eyebrow"
-                  x-text="t('ui.kb.review_eyebrow', 'Human review')"
-                ></p>
-                <h2
-                  class="title is-3 section-heading mb-0"
-                  x-text="t('ui.kb.suggestions_heading', 'Suggestions')"
-                ></h2>
-              </div>
-            </div>
-            <div class="level-right">
-              <div class="select mr-2">
-                <select
-                  :aria-label="t('ui.kb.origin_filter_aria', 'Filter by origin')"
-                  x-model="originFilter"
+      </section>
+      <main class="kbm-main-section">
+        <div class="container dashboard">
+          <section class="card mb-5">
+            <header class="card-header">
+              <p class="card-header-title">
+                <span class="icon is-medium kbm-icon-badge mr-2"
+                  ><span class="kbm-icon icon-zap" aria-hidden="true"></span
+                ></span>
+                <span
+                  x-text="t('ui.kb.operations_heading', 'Operations')"
+                ></span>
+              </p>
+            </header>
+            <div class="card-content">
+              <div class="buttons">
+                <button
+                  type="button"
+                  class="button is-light"
+                  :disabled="busy || applying"
+                  @click="startOperation('scan')"
                 >
-                  <option
-                    value="all"
-                    x-text="t('ui.kb.origin_all', 'All origins')"
-                  ></option>
-                  <option
-                    value="analysis"
-                    x-text="t('ui.kb.origin_analysis', 'Analysis')"
-                  ></option>
-                  <option
-                    value="enrich"
-                    x-text="t('ui.kb.origin_enrich', 'Enrichment')"
-                  ></option>
-                  <option
-                    value="deterministic"
-                    x-text="t('ui.kb.origin_deterministic', 'Deterministic')"
-                  ></option>
-                  <option
-                    value="expand"
-                    x-text="t('ui.kb.origin_expand', 'Expand')"
-                  ></option>
-                  <option
-                    value="freshness"
-                    x-text="t('ui.kb.origin_freshness', 'Freshness')"
-                  ></option>
-                </select>
-              </div>
-              <div class="select">
-                <select
-                  :aria-label="t('ui.kb.status_filter_aria', 'Filter suggestions')"
-                  x-model="statusFilter"
-                  @change="loadSuggestions()"
+                  <span
+                    class="kbm-icon icon-scan-search"
+                    aria-hidden="true"
+                  ></span>
+                  <span x-text="t('ui.kb.scan_repo', 'Scan repository')"></span>
+                </button>
+                <button
+                  type="button"
+                  class="button is-light"
+                  :disabled="busy || applying"
+                  :title="t('ui.kb.check_links_title', 'Probe external http(s) links in documents and record the verdict in each note\'s kbm.link_check block — no LLM involved')"
+                  @click="startOperation('link-check')"
                 >
-                  <option
-                    value="pending"
-                    x-text="t('ui.kb.status_pending', 'Pending')"
-                  ></option>
-                  <option
-                    value="accepted"
-                    x-text="t('ui.kb.status_accepted', 'Accepted')"
-                  ></option>
-                  <option
-                    value="rejected"
-                    x-text="t('ui.kb.status_rejected', 'Rejected')"
-                  ></option>
-                  <option
-                    value="applied"
-                    x-text="t('ui.kb.status_applied', 'Applied')"
-                  ></option>
-                  <option
-                    value="failed"
-                    x-text="t('ui.kb.status_failed', 'Failed')"
-                  ></option>
-                  <option
-                    value="superseded"
-                    x-text="t('ui.kb.status_superseded', 'Superseded')"
-                  ></option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          <template x-if="filteredSuggestions().length === 0">
-            <div class="notification is-light">
-              <span
-                x-text="t('ui.kb.no_suggestions', 'No {{.Status}} suggestions.', { Status: statusFilter })"
-              ></span>
-            </div>
-          </template>
-
-          <template
-            x-for="suggestion in filteredSuggestions()"
-            :key="suggestion.id"
-          >
-            <article
-              class="card suggestion-card mb-4"
-              :class="suggestion.status === 'failed' ? 'is-danger-card' : ''"
-            >
-              <div class="card-content">
-                <div class="level is-mobile mb-3">
-                  <div class="level-left">
-                    <div class="tags">
-                      <span class="tag is-success is-light">
-                        <img
-                          class="kbm-icon"
-                          :src="actionIcon(suggestion.action)"
-                          alt=""
-                          aria-hidden="true"
-                        />
-                        <span x-text="suggestion.action"></span>
-                      </span>
-                      <span
-                        class="tag is-light"
-                        x-text="confidenceLabel(suggestion)"
-                      ></span>
-                      <span
-                        class="tag is-info is-light"
-                        x-show="suggestion.origin && suggestion.origin !== 'analysis'"
-                        x-text="suggestion.origin"
-                      ></span>
-                      <span
-                        class="tag is-light"
-                        x-text="suggestion.status"
-                      ></span>
-                    </div>
-                  </div>
-                  <div class="level-right">
-                    <span
-                      class="is-mono has-text-grey"
-                      x-text="'#' + suggestion.id"
-                    ></span>
-                  </div>
-                </div>
-                <p class="mb-2 suggestion-path">
-                  <strong x-text="t('ui.kb.file_label', 'File')"></strong>
-                  <code class="ml-2" x-text="suggestion.document_path"></code>
-                </p>
-                <p class="mb-2 suggestion-path" x-show="suggestion.target_path">
-                  <strong x-text="t('ui.kb.target_label', 'Target')"></strong>
-                  <code class="ml-2" x-text="suggestion.target_path"></code>
-                </p>
-                <p class="mb-4">
-                  <strong x-text="t('ui.kb.reason_label', 'Reason')"></strong>
-                  <span x-text="suggestion.reason"></span>
-                </p>
-
-                <template
-                  x-if="suggestion.action === 'merge' || suggestion.action === 'expand'"
+                  <span class="kbm-icon icon-link-2" aria-hidden="true"></span>
+                  <span
+                    x-text="t('ui.kb.check_links', 'Check external links')"
+                  ></span>
+                </button>
+                <button
+                  type="button"
+                  class="button is-light"
+                  :disabled="busy || applying"
+                  @click="startOperation('analyze')"
                 >
-                  <div class="mb-4">
+                  <span
+                    class="kbm-icon icon-file-search"
+                    aria-hidden="true"
+                  ></span>
+                  <span
+                    x-text="t('ui.kb.analyze_changes', 'Analyze changes')"
+                  ></span>
+                </button>
+                <button
+                  type="button"
+                  class="button is-primary"
+                  :disabled="busy || applying || discovering"
+                  @click="startOperation('run')"
+                >
+                  <span class="kbm-icon icon-play" aria-hidden="true"></span>
+                  <span
+                    x-text="t('ui.kb.scan_analyze', 'Scan + analyze')"
+                  ></span>
+                </button>
+                <button
+                  type="button"
+                  class="button is-warning"
+                  :disabled="busy || applying || acceptedCount === 0"
+                  @click="applyAccepted()"
+                >
+                  <span class="kbm-icon icon-check" aria-hidden="true"></span>
+                  <span x-text="applyLabel()"></span>
+                </button>
+                <button
+                  type="button"
+                  class="button is-danger is-light"
+                  :disabled="stopping"
+                  :title="t('ui.kb.stop_title', 'Gracefully stop this KBM-flow server')"
+                  @click="stopServer()"
+                >
+                  <span class="kbm-icon icon-power" aria-hidden="true"></span>
+                  <span x-text="t('ui.kb.stop_server', 'Stop server')"></span>
+                </button>
+                <button
+                  type="button"
+                  class="button is-light is-small"
+                  data-theme-toggle
+                  :aria-label="t('ui.common.theme_toggle', 'Toggle theme')"
+                >
+                  <span
+                    class="kbm-icon icon-monitor"
+                    aria-hidden="true"
+                    data-theme-icon
+                  ></span>
+                </button>
+                <div
+                  class="dropdown is-right"
+                  :class="{ 'is-active': localeOpen }"
+                  @click.outside="localeOpen = false"
+                >
+                  <div class="dropdown-trigger">
                     <button
                       type="button"
-                      class="button is-small is-light"
-                      @click="toggleProposal(suggestion.id)"
+                      class="button is-light is-small"
+                      aria-haspopup="true"
+                      :aria-expanded="localeOpen"
+                      :aria-label="t('ui.common.language', 'Language')"
+                      @click="localeOpen = !localeOpen"
                     >
                       <img
-                        class="kbm-icon"
-                        src="/static/icons/eye.svg"
+                        class="kbm-flag"
+                        :src="localeFlag(displayLocale())"
                         alt=""
                       />
+                      <span x-text="localeLabel(displayLocale())"></span>
                       <span
-                        x-text="proposalOpen[suggestion.id] ? t('ui.kb.hide_proposal', 'Hide proposed content') : t('ui.kb.inspect_proposal', 'Inspect proposed content')"
+                        class="kbm-icon ml-1 icon-chevron-down"
+                        aria-hidden="true"
                       ></span>
                     </button>
-                    <pre
-                      class="proposal-content mt-3"
-                      x-show="proposalOpen[suggestion.id]"
-                      x-text="proposalText(proposals[suggestion.id])"
-                      x-cloak
-                    ></pre>
                   </div>
-                </template>
-
-                <div
-                  class="buttons mb-0"
-                  x-show="suggestion.status === 'pending'"
+                  <div class="dropdown-menu" role="menu">
+                    <div class="dropdown-content">
+                      <button
+                        type="button"
+                        class="dropdown-item"
+                        role="menuitem"
+                        :class="{ 'is-active': locale === '' }"
+                        @click="setLocale('')"
+                      >
+                        <img
+                          class="kbm-flag"
+                          :src="localeFlag(resolvedLocale)"
+                          alt=""
+                        />
+                        <span
+                          x-text="t('ui.common.locale_auto', 'Automatic (browser)')"
+                          >Automatic (browser)</span
+                        >
+                      </button>
+                      <template x-for="l in locales" :key="l">
+                        <button
+                          type="button"
+                          class="dropdown-item"
+                          role="menuitem"
+                          :class="{ 'is-active': locale === l }"
+                          @click="setLocale(l)"
+                        >
+                          <img class="kbm-flag" :src="localeFlag(l)" alt="" />
+                          <span x-text="localeLabel(l)"></span>
+                        </button>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="model-controls mb-3">
+                <div class="model-control">
+                  <label
+                    class="label is-small"
+                    for="generation-model"
+                    x-text="t('ui.kb.generation_model', 'Generation model')"
+                    >Generation model</label
+                  >
+                  <div class="select is-small is-fullwidth">
+                    <select
+                      id="generation-model"
+                      x-model="model"
+                      @change="estimate = null"
+                      :disabled="busy || applying || discovering"
+                      :title="t('ui.kb.generation_model_title', 'Per-run generation override; never used for embeddings')"
+                    >
+                      <option
+                        value=""
+                        x-text="t('ui.kb.generation_default', 'Configured generation/task defaults')"
+                      ></option>
+                      <template x-for="m in generationChoices()" :key="m.name">
+                        <option
+                          :value="m.name"
+                          :disabled="modelUnavailable(m, discovered)"
+                          x-text="generationLabel(m)"
+                        ></option>
+                      </template>
+                    </select>
+                  </div>
+                  <p
+                    class="is-size-7 mt-1"
+                    :class="generationMismatch() ? 'has-text-warning' : 'has-text-grey'"
+                    x-show="generationStampLine()"
+                    x-text="generationStampLine()"
+                  ></p>
+                  <p
+                    class="is-size-7 has-text-warning"
+                    x-show="generationMismatch()"
+                    x-text="t('ui.kb.generation_mismatch', 'Differs from the model behind most existing analyses.')"
+                  ></p>
+                </div>
+                <div class="model-control">
+                  <label
+                    class="label is-small"
+                    for="embedding-model"
+                    x-text="t('ui.kb.embedding_model', 'Embedding model')"
+                    >Embedding model</label
+                  >
+                  <div class="select is-small is-fullwidth">
+                    <select
+                      id="embedding-model"
+                      x-model="embedModel"
+                      @change="estimate = null"
+                      :disabled="busy || applying || discovering"
+                      :title="t('ui.kb.embedding_model_title', 'Independent per-run embedding override; changing models refreshes incompatible vectors')"
+                    >
+                      <option
+                        value=""
+                        x-text="embeddingDefaultLabel()"
+                      ></option>
+                      <template x-for="m in embeddingChoices()" :key="m.name">
+                        <option
+                          :value="m.name"
+                          :disabled="modelUnavailable(m, discovered)"
+                          x-text="embedLabel(m)"
+                        ></option>
+                      </template>
+                    </select>
+                  </div>
+                  <p
+                    class="is-size-7 mt-1"
+                    :class="embedMismatch() ? 'has-text-warning' : 'has-text-grey'"
+                    x-show="embedStampLine()"
+                    x-text="embedStampLine()"
+                  ></p>
+                  <p
+                    class="is-size-7 has-text-warning"
+                    x-show="embedMismatch()"
+                    x-text="t('ui.kb.embed_mismatch', 'A different embedding model re-vectorizes every document and can expand dependent analysis.')"
+                  ></p>
+                </div>
+                <button
+                  type="button"
+                  class="button is-small is-light"
+                  :disabled="busy || applying || discovering"
+                  @click="loadModels(true)"
                 >
-                  <button
-                    type="button"
-                    class="button is-success is-light"
-                    :disabled="busy || applying"
-                    @click="decide(suggestion.id, 'accepted')"
-                  >
-                    <img
-                      class="kbm-icon"
-                      src="/static/icons/check.svg"
-                      alt=""
-                    />
-                    <span
-                      x-text="t('ui.kb.accept_suggestion', 'Accept suggestion')"
-                    ></span>
-                  </button>
-                  <button
-                    type="button"
-                    class="button is-danger is-light"
-                    :disabled="busy || applying"
-                    @click="decide(suggestion.id, 'rejected')"
-                  >
-                    <img class="kbm-icon" src="/static/icons/x.svg" alt="" />
-                    <span x-text="t('ui.kb.reject', 'Reject')"></span>
-                  </button>
-                </div>
-              </div>
-            </article>
-          </template>
-        </section>
-
-        <section class="box kbm-box mb-5">
-          <div class="level is-mobile mb-3">
-            <div class="level-left">
-              <div>
-                <p
-                  class="eyebrow"
-                  x-text="t('ui.kb.jobs_eyebrow', 'Background work')"
-                ></p>
-                <h2
-                  class="title is-3 section-heading mb-0"
-                  x-text="t('ui.kb.jobs_heading', 'Recent operations')"
-                ></h2>
-              </div>
-            </div>
-            <div class="level-right">
-              <button
-                type="button"
-                class="button is-small is-light"
-                :disabled="busy"
-                @click="refreshJobs()"
-              >
-                <img
-                  class="kbm-icon"
-                  src="/static/icons/refresh-cw.svg"
-                  alt=""
-                />
-                <span x-text="t('ui.common.refresh', 'Refresh')"></span>
-              </button>
-            </div>
-          </div>
-          <template x-if="jobs.length === 0">
-            <p
-              class="has-text-grey"
-              x-text="t('ui.kb.no_jobs', 'No operations recorded yet.')"
-            ></p>
-          </template>
-          <template x-for="job in jobs.slice(0, 6)" :key="job.id">
-            <div class="job-row py-3">
-              <div class="level is-mobile mb-1">
-                <div class="level-left">
                   <span
-                    class="tag"
-                    :class="jobTagClass(job.status)"
-                    x-text="job.status"
+                    class="kbm-icon icon-refresh-cw"
+                    aria-hidden="true"
                   ></span>
-                  <strong class="ml-2" x-text="job.op"></strong>
                   <span
-                    class="is-mono has-text-grey ml-2"
-                    x-text="'#' + job.id"
+                    x-text="discovering ? t('ui.kb.querying_ollama', 'Querying Ollama...') : t('ui.kb.refresh_ollama', 'Refresh from Ollama')"
                   ></span>
-                </div>
-                <div
-                  class="level-right is-size-7 has-text-grey"
-                  x-text="job.started"
-                ></div>
+                </button>
               </div>
               <p
-                class="is-size-7"
-                x-text="job.error || job.detail || t('ui.kb.in_progress', 'In progress…')"
+                class="is-size-7 has-text-grey mb-2"
+                x-text="t('ui.kb.choices_note', 'Choices affect this run only. Refresh lists installed/registered models, not the online catalog; it never downloads models.')"
+              ></p>
+              <p
+                class="is-size-7 has-text-grey mb-2"
+                role="status"
+                x-text="modelNotice"
+              ></p>
+              <div class="model-controls mb-3">
+                <div class="select is-small">
+                  <select
+                    :aria-label="t('ui.kb.task_aria', 'Optional task')"
+                    x-model="task"
+                    @change="estimate = null"
+                    :title="t('ui.kb.task_title', 'Single-purpose pass: enrichment, embedding backfill, stub expansion, or freshness review')"
+                  >
+                    <option
+                      value="all"
+                      x-text="t('ui.kb.task_all', 'all LLM tasks')"
+                    ></option>
+                    <option
+                      value="expand"
+                      x-text="t('ui.kb.task_expand', 'expand stubs')"
+                    ></option>
+                    <option
+                      value="freshness"
+                      x-text="t('ui.kb.task_freshness', 'freshness check')"
+                    ></option>
+                    <option
+                      value="enrich"
+                      x-text="t('ui.kb.task_enrich', 'enrich only')"
+                    ></option>
+                    <option
+                      value="embed"
+                      x-text="t('ui.kb.task_embed', 'embed backfill')"
+                    ></option>
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  class="button is-small is-light"
+                  :disabled="busy || applying || discovering"
+                  @click="startOperation(task)"
+                >
+                  <span class="kbm-icon icon-play" aria-hidden="true"></span>
+                  <span x-text="t('ui.kb.run_task', 'Run task')"></span>
+                </button>
+                <button
+                  type="button"
+                  class="button is-small is-light"
+                  :disabled="busy || applying || discovering || estimating"
+                  :title="t('ui.kb.estimate_title', 'Estimate how many documents this selection would queue — no models run, nothing changes')"
+                  @click="previewWork()"
+                >
+                  <span
+                    class="kbm-icon icon-scan-search"
+                    aria-hidden="true"
+                  ></span>
+                  <span
+                    x-text="estimating ? t('ui.kb.estimating', 'Estimating...') : t('ui.kb.estimate_work', 'Estimate work')"
+                  ></span>
+                </button>
+              </div>
+              <div class="is-size-7 has-text-grey mb-2" x-show="estimate">
+                <template x-for="line in estimateLines()" :key="line">
+                  <p x-text="line"></p>
+                </template>
+                <template x-for="w in estimateWarnings()" :key="w">
+                  <p class="has-text-warning" x-text="w"></p>
+                </template>
+              </div>
+              <label
+                class="checkbox is-size-7 has-text-grey mb-2"
+                :title="t('ui.kb.reanalyze_title', 'Also re-analyze documents whose last analysis used a different model than configured')"
+              >
+                <input
+                  type="checkbox"
+                  x-model="reanalyze"
+                  @change="estimate = null"
+                />
+                <span
+                  x-text="t('ui.kb.reanalyze_label', 'Re-analyze documents processed by a different model')"
+                  >Re-analyze documents processed by a different model</span
+                >
+              </label>
+              <label
+                class="checkbox is-size-7 has-text-grey mb-2"
+                :title="t('ui.kb.external_title', 'Run analysis with ollama_model_external (enhanced lane, e.g. a cloud model). Results stamp the external_* markers and leave the local lineage untouched; document content is sent to that model.')"
+              >
+                <input
+                  type="checkbox"
+                  x-model="external"
+                  @change="estimate = null"
+                />
+                <span
+                  x-text="t('ui.kb.external_label', 'External generation lane (document content leaves this machine)')"
+                  >External generation lane (document content leaves this
+                  machine)</span
+                >
+              </label>
+              <label
+                class="checkbox is-size-7 has-text-grey mb-2"
+                :title="t('ui.kb.allow_cloud_title', 'Separate consent for off-machine embedding/enrichment; does not change the generation lane')"
+              >
+                <input
+                  type="checkbox"
+                  x-model="allowCloud"
+                  @change="estimate = null"
+                />
+                <span
+                  x-text="t('ui.kb.allow_cloud_label', 'Allow cloud/remote embeddings and enrichment for this run')"
+                  >Allow cloud/remote embeddings and enrichment for this
+                  run</span
+                >
+              </label>
+              <label
+                class="checkbox is-size-7 has-text-grey mb-2"
+                :title="t('ui.kb.web_verify_title', 'Verify freshness flags against Ollama\'s hosted web search — flagged claim text (never the whole document) is sent to ollama.com; requires OLLAMA_API_KEY')"
+              >
+                <input
+                  type="checkbox"
+                  x-model="webVerify"
+                  @change="estimate = null"
+                />
+                <span
+                  x-text="t('ui.kb.web_verify_label', 'Verify freshness flags via web search (claim text leaves this machine)')"
+                  >Verify freshness flags via web search (claim text leaves this
+                  machine)</span
+                >
+              </label>
+              <p class="is-size-7 has-text-grey">
+                <span
+                  class="status-dot"
+                  :class="busy ? 'is-warning' : ''"
+                ></span>
+                <span
+                  x-text="busy ? t('ui.kb.status_busy', 'A background operation is running') : t('ui.kb.status_idle', 'Nothing runs until you start it')"
+                ></span>
+              </p>
+            </div>
+          </section>
+
+          <template x-if="error">
+            <article class="message is-danger" role="alert">
+              <div class="message-body" x-text="error"></div>
+            </article>
+          </template>
+          <template x-if="notice">
+            <div
+              class="notification is-light"
+              role="status"
+              x-text="notice"
+            ></div>
+          </template>
+
+          <div class="columns is-variable is-4 mb-2">
+            <div class="column">
+              <div class="card kbm-tile">
+                <div class="card-content">
+                  <div class="kbm-tile-row">
+                    <span class="icon is-large kbm-icon-badge"
+                      ><span
+                        class="kbm-icon icon-file-text"
+                        aria-hidden="true"
+                      ></span
+                    ></span>
+                    <div>
+                      <p
+                        class="stat-label"
+                        x-text="t('ui.kb.stat_documents', 'Tracked documents')"
+                      ></p>
+                      <p class="stat-number" x-text="documents.length"></p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="column">
+              <div class="card kbm-tile">
+                <div class="card-content">
+                  <div class="kbm-tile-row">
+                    <span class="icon is-large kbm-icon-badge"
+                      ><span
+                        class="kbm-icon icon-file-search"
+                        aria-hidden="true"
+                      ></span
+                    ></span>
+                    <div>
+                      <p
+                        class="stat-label"
+                        x-text="t('ui.kb.stat_review', 'Suggestions to review')"
+                      ></p>
+                      <p class="stat-number" x-text="pendingCount"></p>
+                    </div>
+                  </div>
+                  <p
+                    class="is-size-7 has-text-grey mt-1"
+                    x-show="progressDays.length > 0"
+                    x-text="reviewTotalsText()"
+                  ></p>
+                </div>
+              </div>
+            </div>
+            <div class="column">
+              <div class="card kbm-tile">
+                <div class="card-content">
+                  <div class="kbm-tile-row">
+                    <span class="icon is-large kbm-icon-badge"
+                      ><span
+                        class="kbm-icon icon-check"
+                        aria-hidden="true"
+                      ></span
+                    ></span>
+                    <div>
+                      <p
+                        class="stat-label"
+                        x-text="t('ui.kb.stat_accepted', 'Accepted, not applied')"
+                      ></p>
+                      <p class="stat-number" x-text="acceptedCount"></p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <section class="card mb-5">
+            <header class="card-header">
+              <div class="card-header-title">
+                <span class="icon is-medium kbm-icon-badge mr-2"
+                  ><span
+                    class="kbm-icon icon-chart-column"
+                    aria-hidden="true"
+                  ></span
+                ></span>
+                <div>
+                  <p
+                    class="eyebrow"
+                    x-text="t('ui.kb.progress_eyebrow', 'Pipeline progress')"
+                  ></p>
+                  <span
+                    x-text="t('ui.kb.progress_heading', 'Notes and suggestions over time')"
+                  ></span>
+                </div>
+              </div>
+            </header>
+            <div class="card-content">
+              <p
+                class="has-text-grey"
+                x-show="progressDays.length === 0"
+                x-text="t('ui.kb.progress_empty', 'No activity recorded yet — run a scan to start the trend.')"
+              ></p>
+              <div
+                class="kbm-chart"
+                x-show="progressDays.length > 0"
+                role="img"
+                :aria-label="t('ui.kb.chart_aria', 'Cumulative notes, analyses, applied suggestions and review backlog over time')"
+              >
+                <canvas id="knowledgeProgressChart"></canvas>
+              </div>
+            </div>
+          </section>
+
+          <section class="card mb-5">
+            <header class="card-header">
+              <div class="card-header-title">
+                <span class="icon is-medium kbm-icon-badge mr-2"
+                  ><span
+                    class="kbm-icon icon-square-check-big"
+                    aria-hidden="true"
+                  ></span
+                ></span>
+                <div>
+                  <p
+                    class="eyebrow"
+                    x-text="t('ui.kb.review_eyebrow', 'Human review')"
+                  ></p>
+                  <span
+                    x-text="t('ui.kb.suggestions_heading', 'Suggestions')"
+                  ></span>
+                </div>
+              </div>
+              <div class="kbm-card-header-actions">
+                <div class="select mr-2">
+                  <select
+                    :aria-label="t('ui.kb.origin_filter_aria', 'Filter by origin')"
+                    x-model="originFilter"
+                  >
+                    <option
+                      value="all"
+                      x-text="t('ui.kb.origin_all', 'All origins')"
+                    ></option>
+                    <option
+                      value="analysis"
+                      x-text="t('ui.kb.origin_analysis', 'Analysis')"
+                    ></option>
+                    <option
+                      value="enrich"
+                      x-text="t('ui.kb.origin_enrich', 'Enrichment')"
+                    ></option>
+                    <option
+                      value="deterministic"
+                      x-text="t('ui.kb.origin_deterministic', 'Deterministic')"
+                    ></option>
+                    <option
+                      value="expand"
+                      x-text="t('ui.kb.origin_expand', 'Expand')"
+                    ></option>
+                    <option
+                      value="freshness"
+                      x-text="t('ui.kb.origin_freshness', 'Freshness')"
+                    ></option>
+                  </select>
+                </div>
+                <div class="select">
+                  <select
+                    :aria-label="t('ui.kb.status_filter_aria', 'Filter suggestions')"
+                    x-model="statusFilter"
+                    @change="loadSuggestions()"
+                  >
+                    <option
+                      value="pending"
+                      x-text="t('ui.kb.status_pending', 'Pending')"
+                    ></option>
+                    <option
+                      value="accepted"
+                      x-text="t('ui.kb.status_accepted', 'Accepted')"
+                    ></option>
+                    <option
+                      value="rejected"
+                      x-text="t('ui.kb.status_rejected', 'Rejected')"
+                    ></option>
+                    <option
+                      value="applied"
+                      x-text="t('ui.kb.status_applied', 'Applied')"
+                    ></option>
+                    <option
+                      value="failed"
+                      x-text="t('ui.kb.status_failed', 'Failed')"
+                    ></option>
+                    <option
+                      value="superseded"
+                      x-text="t('ui.kb.status_superseded', 'Superseded')"
+                    ></option>
+                  </select>
+                </div>
+              </div>
+            </header>
+            <div class="card-content">
+              <template x-if="filteredSuggestions().length === 0">
+                <div class="notification is-light">
+                  <span
+                    x-text="t('ui.kb.no_suggestions', 'No {{.Status}} suggestions.', { Status: statusFilter })"
+                  ></span>
+                </div>
+              </template>
+
+              <template
+                x-for="suggestion in filteredSuggestions()"
+                :key="suggestion.id"
+              >
+                <article
+                  class="card suggestion-card mb-4"
+                  :class="suggestion.status === 'failed' ? 'is-danger-card' : ''"
+                >
+                  <div class="card-content">
+                    <div class="level is-mobile mb-3">
+                      <div class="level-left">
+                        <div class="tags">
+                          <span class="tag is-success is-light">
+                            <span
+                              class="kbm-icon"
+                              :class="actionIcon(suggestion.action)"
+                              aria-hidden="true"
+                            ></span>
+                            <span x-text="suggestion.action"></span>
+                          </span>
+                          <span
+                            class="tag is-light"
+                            x-text="confidenceLabel(suggestion)"
+                          ></span>
+                          <span
+                            class="tag is-info is-light"
+                            x-show="suggestion.origin && suggestion.origin !== 'analysis'"
+                            x-text="suggestion.origin"
+                          ></span>
+                          <span
+                            class="tag is-light"
+                            x-text="suggestion.status"
+                          ></span>
+                        </div>
+                      </div>
+                      <div class="level-right">
+                        <span
+                          class="is-mono has-text-grey"
+                          x-text="'#' + suggestion.id"
+                        ></span>
+                      </div>
+                    </div>
+                    <p class="mb-2 suggestion-path">
+                      <strong x-text="t('ui.kb.file_label', 'File')"></strong>
+                      <code
+                        class="ml-2"
+                        x-text="suggestion.document_path"
+                      ></code>
+                    </p>
+                    <p
+                      class="mb-2 suggestion-path"
+                      x-show="suggestion.target_path"
+                    >
+                      <strong
+                        x-text="t('ui.kb.target_label', 'Target')"
+                      ></strong>
+                      <code class="ml-2" x-text="suggestion.target_path"></code>
+                    </p>
+                    <p class="mb-4">
+                      <strong
+                        x-text="t('ui.kb.reason_label', 'Reason')"
+                      ></strong>
+                      <span x-text="suggestion.reason"></span>
+                    </p>
+
+                    <template
+                      x-if="suggestion.action === 'merge' || suggestion.action === 'expand'"
+                    >
+                      <div class="mb-4">
+                        <button
+                          type="button"
+                          class="button is-small is-light"
+                          @click="toggleProposal(suggestion.id)"
+                        >
+                          <span
+                            class="kbm-icon icon-eye"
+                            aria-hidden="true"
+                          ></span>
+                          <span
+                            x-text="proposalOpen[suggestion.id] ? t('ui.kb.hide_proposal', 'Hide proposed content') : t('ui.kb.inspect_proposal', 'Inspect proposed content')"
+                          ></span>
+                        </button>
+                        <pre
+                          class="proposal-content mt-3"
+                          x-show="proposalOpen[suggestion.id]"
+                          x-text="proposalText(proposals[suggestion.id])"
+                          x-cloak
+                        ></pre>
+                      </div>
+                    </template>
+
+                    <div
+                      class="buttons mb-0"
+                      x-show="suggestion.status === 'pending'"
+                    >
+                      <button
+                        type="button"
+                        class="button is-success is-light"
+                        :disabled="busy || applying"
+                        @click="decide(suggestion.id, 'accepted')"
+                      >
+                        <span
+                          class="kbm-icon icon-check"
+                          aria-hidden="true"
+                        ></span>
+                        <span
+                          x-text="t('ui.kb.accept_suggestion', 'Accept suggestion')"
+                        ></span>
+                      </button>
+                      <button
+                        type="button"
+                        class="button is-danger is-light"
+                        :disabled="busy || applying"
+                        @click="decide(suggestion.id, 'rejected')"
+                      >
+                        <span class="kbm-icon icon-x" aria-hidden="true"></span>
+                        <span x-text="t('ui.kb.reject', 'Reject')"></span>
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              </template>
+            </div>
+          </section>
+
+          <section class="card mb-5">
+            <header class="card-header">
+              <div class="card-header-title">
+                <span class="icon is-medium kbm-icon-badge mr-2"
+                  ><span
+                    class="kbm-icon icon-refresh-cw"
+                    aria-hidden="true"
+                  ></span
+                ></span>
+                <div>
+                  <p
+                    class="eyebrow"
+                    x-text="t('ui.kb.jobs_eyebrow', 'Background work')"
+                  ></p>
+                  <span
+                    x-text="t('ui.kb.jobs_heading', 'Recent operations')"
+                  ></span>
+                </div>
+              </div>
+              <div class="kbm-card-header-actions">
+                <button
+                  type="button"
+                  class="button is-small is-light"
+                  :disabled="busy"
+                  @click="refreshJobs()"
+                >
+                  <span
+                    class="kbm-icon icon-refresh-cw"
+                    aria-hidden="true"
+                  ></span>
+                  <span x-text="t('ui.common.refresh', 'Refresh')"></span>
+                </button>
+              </div>
+            </header>
+            <div class="card-content">
+              <template x-if="jobs.length === 0">
+                <p
+                  class="has-text-grey"
+                  x-text="t('ui.kb.no_jobs', 'No operations recorded yet.')"
+                ></p>
+              </template>
+              <template x-for="job in jobs.slice(0, 6)" :key="job.id">
+                <div class="job-row py-3">
+                  <div class="level is-mobile mb-1">
+                    <div class="level-left">
+                      <span
+                        class="tag"
+                        :class="jobTagClass(job.status)"
+                        x-text="job.status"
+                      ></span>
+                      <strong class="ml-2" x-text="job.op"></strong>
+                      <span
+                        class="is-mono has-text-grey ml-2"
+                        x-text="'#' + job.id"
+                      ></span>
+                    </div>
+                    <div
+                      class="level-right is-size-7 has-text-grey"
+                      x-text="job.started"
+                    ></div>
+                  </div>
+                  <p
+                    class="is-size-7"
+                    x-text="job.error || job.detail || t('ui.kb.in_progress', 'In progress…')"
+                  ></p>
+                </div>
+              </template>
+            </div>
+          </section>
+
+          <section class="card">
+            <header class="card-header">
+              <div class="card-header-title">
+                <span class="icon is-medium kbm-icon-badge mr-2"
+                  ><span
+                    class="kbm-icon icon-book-open"
+                    aria-hidden="true"
+                  ></span
+                ></span>
+                <div>
+                  <p
+                    class="eyebrow"
+                    x-text="t('ui.kb.index_eyebrow', 'Repository index')"
+                  ></p>
+                  <span
+                    x-text="t('ui.kb.documents_heading', 'Documents')"
+                  ></span>
+                </div>
+              </div>
+            </header>
+            <div class="card-content">
+              <div class="table-container">
+                <table class="table is-fullwidth is-hoverable">
+                  <thead>
+                    <tr>
+                      <th x-text="t('ui.kb.th_path', 'Path')"></th>
+                      <th x-text="t('ui.kb.th_title', 'Title')"></th>
+                      <th x-text="t('ui.kb.th_status', 'Status')"></th>
+                      <th x-text="t('ui.common.checks', 'Checks')"></th>
+                      <th x-text="t('ui.kb.th_tags', 'Tags')"></th>
+                      <th
+                        x-text="t('ui.kb.th_frontmatter', 'Frontmatter')"
+                      ></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template
+                      x-for="document in documents"
+                      :key="document.path"
+                    >
+                      <tr>
+                        <td
+                          class="is-mono suggestion-path"
+                          x-text="document.path"
+                        ></td>
+                        <td x-text="document.title || '—'"></td>
+                        <td>
+                          <span
+                            class="tag is-light"
+                            x-text="document.status"
+                          ></span>
+                          <span
+                            class="tag is-warning is-light"
+                            x-show="changeKind(document)"
+                            :title="t('ui.kb.change_title', 'Detected via split frontmatter/body hashes')"
+                            x-text="changeKind(document)"
+                          ></span>
+                          <div
+                            class="has-text-grey is-size-7"
+                            x-show="document.analyzed_model"
+                            x-text="document.analyzed_model"
+                          ></div>
+                        </td>
+                        <td>
+                          <span
+                            class="tag is-size-7"
+                            :class="linkCheckBadge(document) === 'links ok' ? 'is-light' : 'is-danger is-light'"
+                            x-show="linkCheckBadge(document)"
+                            :title="linkCheckTooltip(document)"
+                            x-text="linkCheckBadge(document)"
+                          ></span>
+                          <span
+                            class="tag is-size-7"
+                            :class="freshnessBadge(document) === 'freshness: current' ? 'is-light' : 'is-warning is-light'"
+                            x-show="freshnessBadge(document)"
+                            :title="freshnessTooltip(document)"
+                            x-text="freshnessBadge(document)"
+                          ></span>
+                        </td>
+                        <td
+                          class="is-size-7"
+                          x-text="documentTags(document)"
+                        ></td>
+                        <td>
+                          <span
+                            class="tag is-warning is-light"
+                            x-show="frontmatterIssues(document).length > 0"
+                            :title="frontmatterIssues(document).join('\n')"
+                            x-text="t('ui.kb.fm_issues', '{{.Count}} issue(s)', { Count: frontmatterIssues(document).length })"
+                          ></span>
+                          <span
+                            class="has-text-grey is-size-7"
+                            x-show="frontmatterIssues(document).length === 0"
+                            x-text="document.frontmatter_json ? 'ok' : '—'"
+                          ></span>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+              <p
+                class="has-text-grey is-size-7 mt-3"
+                x-show="documents.length === 0"
+                x-text="t('ui.kb.no_documents', 'No documents indexed. Start with Scan or Scan + analyze.')"
               ></p>
             </div>
-          </template>
-        </section>
-
-        <section class="box kbm-box">
+          </section>
+          <footer class="has-text-centered has-text-grey is-size-7 mt-5">
+            <p
+              x-text="t('ui.kb.footer', 'Files change only after explicit acceptance and Apply.')"
+            ></p>
+          </footer>
+        </div>
+      </main>
+    </div>
+    <div
+      class="modal"
+      :class="{ 'is-active': dialog }"
+      x-cloak
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="kbm-dialog-title"
+      @keydown.escape.window="dialog && resolveDialog(false)"
+    >
+      <div class="modal-background" @click="resolveDialog(false)"></div>
+      <div class="modal-card" @keydown.tab="trapDialogFocus($event)">
+        <header class="modal-card-head">
           <p
-            class="eyebrow"
-            x-text="t('ui.kb.index_eyebrow', 'Repository index')"
+            class="modal-card-title"
+            id="kbm-dialog-title"
+            x-text="dialogTitle()"
           ></p>
-          <h2
-            class="title is-3 section-heading"
-            x-text="t('ui.kb.documents_heading', 'Documents')"
-          ></h2>
-          <div class="table-container">
-            <table class="table is-fullwidth is-hoverable">
-              <thead>
-                <tr>
-                  <th x-text="t('ui.kb.th_path', 'Path')"></th>
-                  <th x-text="t('ui.kb.th_title', 'Title')"></th>
-                  <th x-text="t('ui.kb.th_status', 'Status')"></th>
-                  <th x-text="t('ui.common.checks', 'Checks')"></th>
-                  <th x-text="t('ui.kb.th_tags', 'Tags')"></th>
-                  <th x-text="t('ui.kb.th_frontmatter', 'Frontmatter')"></th>
-                </tr>
-              </thead>
-              <tbody>
-                <template x-for="document in documents" :key="document.path">
-                  <tr>
-                    <td
-                      class="is-mono suggestion-path"
-                      x-text="document.path"
-                    ></td>
-                    <td x-text="document.title || '—'"></td>
-                    <td>
-                      <span
-                        class="tag is-light"
-                        x-text="document.status"
-                      ></span>
-                      <span
-                        class="tag is-warning is-light"
-                        x-show="changeKind(document)"
-                        :title="t('ui.kb.change_title', 'Detected via split frontmatter/body hashes')"
-                        x-text="changeKind(document)"
-                      ></span>
-                      <div
-                        class="has-text-grey is-size-7"
-                        x-show="document.analyzed_model"
-                        x-text="document.analyzed_model"
-                      ></div>
-                    </td>
-                    <td>
-                      <span
-                        class="tag is-size-7"
-                        :class="linkCheckBadge(document) === 'links ok' ? 'is-light' : 'is-danger is-light'"
-                        x-show="linkCheckBadge(document)"
-                        :title="linkCheckTooltip(document)"
-                        x-text="linkCheckBadge(document)"
-                      ></span>
-                      <span
-                        class="tag is-size-7"
-                        :class="freshnessBadge(document) === 'freshness: current' ? 'is-light' : 'is-warning is-light'"
-                        x-show="freshnessBadge(document)"
-                        :title="freshnessTooltip(document)"
-                        x-text="freshnessBadge(document)"
-                      ></span>
-                    </td>
-                    <td class="is-size-7" x-text="documentTags(document)"></td>
-                    <td>
-                      <span
-                        class="tag is-warning is-light"
-                        x-show="frontmatterIssues(document).length > 0"
-                        :title="frontmatterIssues(document).join('\n')"
-                        x-text="t('ui.kb.fm_issues', '{{.Count}} issue(s)', { Count: frontmatterIssues(document).length })"
-                      ></span>
-                      <span
-                        class="has-text-grey is-size-7"
-                        x-show="frontmatterIssues(document).length === 0"
-                        x-text="document.frontmatter_json ? 'ok' : '—'"
-                      ></span>
-                    </td>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
+          <button
+            type="button"
+            class="delete"
+            :aria-label="t('ui.common.close', 'Close')"
+            @click="resolveDialog(false)"
+          ></button>
+        </header>
+        <section class="modal-card-body">
+          <p x-text="dialogMessage()"></p>
+          <div class="field mt-3" x-show="dialogIsPrompt()">
+            <div class="control">
+              <input
+                class="input"
+                type="text"
+                x-model="dialogInput"
+                x-ref="dialogInputEl"
+                :aria-label="dialogMessage()"
+                @keydown.enter="resolveDialog(true)"
+              />
+            </div>
           </div>
-          <p
-            class="has-text-grey is-size-7 mt-3"
-            x-show="documents.length === 0"
-            x-text="t('ui.kb.no_documents', 'No documents indexed. Start with Scan or Scan + analyze.')"
-          ></p>
         </section>
-        <footer class="has-text-centered has-text-grey is-size-7 mt-5">
-          <p
-            x-text="t('ui.kb.footer', 'Files change only after explicit acceptance and Apply.')"
-          ></p>
+        <footer class="modal-card-foot">
+          <div class="buttons">
+            <button
+              type="button"
+              class="button is-success"
+              data-dialog-confirm
+              x-ref="dialogConfirmEl"
+              x-text="dialogConfirmLabel()"
+              @click="resolveDialog(true)"
+            ></button>
+            <button
+              type="button"
+              class="button"
+              x-text="t('ui.common.cancel', 'Cancel')"
+              @click="resolveDialog(false)"
+            ></button>
+          </div>
         </footer>
       </div>
-    </main>
+    </div>
   </body>
 </html>

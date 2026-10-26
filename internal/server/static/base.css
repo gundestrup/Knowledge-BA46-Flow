@@ -1,0 +1,632 @@
+:root {
+  --bulma-family-primary: "Avenir Next", "Trebuchet MS", sans-serif;
+  --bulma-family-secondary: Georgia, "Times New Roman", serif;
+  --bulma-family-code: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --kbm-paper: #f4f1e8;
+  --kbm-ink: #18352d;
+  --kbm-line: #d9d4c6;
+  --kbm-muted: #68756e;
+  /* ONE accent, Spacelab steel blue (#446e9b = hsl 210/39%/44%). The
+     channels are the single source of truth: --kbm-steel serves our custom
+     accents (links, hovers, badges, borders) and the --bulma-primary/-link
+     channel overrides re-theme Bulma's is-primary buttons and default
+     anchor color from the same values. -rgb feeds Bulma's alpha-composited
+     focus shadows and must mirror the hsl numbers. */
+  --kbm-steel-h: 210deg;
+  --kbm-steel-s: 39%;
+  --kbm-steel-l: 44%;
+  --kbm-steel: hsl(var(--kbm-steel-h), var(--kbm-steel-s), var(--kbm-steel-l));
+  --bulma-primary-h: var(--kbm-steel-h);
+  --bulma-primary-s: var(--kbm-steel-s);
+  --bulma-primary-l: var(--kbm-steel-l);
+  --bulma-primary-rgb: 68, 110, 155;
+  --bulma-primary-invert-l: 96%;
+  --bulma-link-h: var(--kbm-steel-h);
+  --bulma-link-s: var(--kbm-steel-s);
+  --bulma-link-l: var(--kbm-steel-l);
+  --bulma-link-rgb: 68, 110, 155;
+}
+
+/* Dark palette for the custom --kbm-* tokens; Bulma's own variables are
+   re-tuned by its built-in html[data-theme="dark"] rules. Accent colors are
+   lifted so they keep contrast on the dark paper. */
+html[data-theme="dark"] {
+  --kbm-paper: #141a16;
+  --kbm-ink: #e6ece8;
+  --kbm-line: #303933;
+  --kbm-muted: #98a69d;
+  --kbm-steel-l: 62%;
+  --bulma-primary-l: 62%;
+  --bulma-primary-rgb: 136, 171, 208;
+  --bulma-primary-invert-l: 8%;
+  --bulma-link-l: 62%;
+  --bulma-link-rgb: 136, 171, 208;
+}
+
+[x-cloak] {
+  display: none !important;
+}
+
+body {
+  min-height: 100vh;
+  background: var(--kbm-paper);
+  color: var(--kbm-ink);
+  font-family: var(--bulma-family-primary);
+}
+
+.eyebrow {
+  color: var(--kbm-steel);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+}
+
+.dashboard {
+  max-width: 1120px;
+}
+
+.stat-number {
+  color: var(--kbm-ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 2.1rem;
+  line-height: 1;
+}
+
+.stat-label {
+  color: var(--kbm-muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.section-heading {
+  color: var(--kbm-ink);
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+.job-row + .job-row {
+  border-top: 1px solid var(--kbm-line);
+}
+
+.table-container {
+  border: 1px solid var(--kbm-line);
+  border-radius: 8px;
+}
+
+.table {
+  background: transparent;
+}
+
+.table thead th {
+  color: var(--kbm-muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.table td {
+  vertical-align: middle;
+}
+
+.is-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.84rem;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-right: 0.4rem;
+  border-radius: 50%;
+  background: var(--kbm-steel);
+}
+
+/* Shared inline icons (Lucide strokes and brand SVGs alike): mask-image
+   renders every icon as a currentColor silhouette, so the CSS color
+   property — and all theme vars — apply exactly like a font glyph.
+   One square, font-relative box; contexts tune --kbm-icon-size and
+   color, never the markup. The .icon-* registry below only carries the
+   mask URL for each file under icons/, so JS helpers can switch icons
+   by class name. */
+.kbm-icon {
+  display: inline-block;
+  height: var(--kbm-icon-size, 1em);
+  width: var(--kbm-icon-size, 1em);
+  flex-shrink: 0;
+  vertical-align: -0.125em;
+  background-color: currentColor;
+  -webkit-mask-image: var(--kbm-icon-url);
+  mask-image: var(--kbm-icon-url);
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+.icon-alpinedotjs {
+  --kbm-icon-url: url("icons/alpinedotjs.svg");
+}
+
+.icon-arrow-up-right {
+  --kbm-icon-url: url("icons/arrow-up-right.svg");
+}
+
+.icon-arrow-down {
+  --kbm-icon-url: url("icons/arrow-down.svg");
+}
+
+.icon-arrow-up {
+  --kbm-icon-url: url("icons/arrow-up.svg");
+}
+
+.icon-book-open {
+  --kbm-icon-url: url("icons/book-open.svg");
+}
+
+.icon-bulma {
+  --kbm-icon-url: url("icons/bulma.svg");
+}
+
+.icon-chart-column {
+  --kbm-icon-url: url("icons/chart-column.svg");
+}
+
+.icon-check {
+  --kbm-icon-url: url("icons/check.svg");
+}
+
+.icon-chevron-down {
+  --kbm-icon-url: url("icons/chevron-down.svg");
+}
+
+.icon-chevron-up {
+  --kbm-icon-url: url("icons/chevron-up.svg");
+}
+
+.icon-chevrons-up-down {
+  --kbm-icon-url: url("icons/chevrons-up-down.svg");
+}
+
+.icon-codecov {
+  --kbm-icon-url: url("icons/codecov.svg");
+}
+
+.icon-codefactor {
+  --kbm-icon-url: url("icons/codefactor.svg");
+}
+
+.icon-dependabot {
+  --kbm-icon-url: url("icons/dependabot.svg");
+}
+
+.icon-eye {
+  --kbm-icon-url: url("icons/eye.svg");
+}
+
+.icon-file-clock {
+  --kbm-icon-url: url("icons/file-clock.svg");
+}
+
+.icon-file-plus {
+  --kbm-icon-url: url("icons/file-plus.svg");
+}
+
+.icon-file-search {
+  --kbm-icon-url: url("icons/file-search.svg");
+}
+
+.icon-file-text {
+  --kbm-icon-url: url("icons/file-text.svg");
+}
+
+.icon-folder-git-2 {
+  --kbm-icon-url: url("icons/folder-git-2.svg");
+}
+
+.icon-forgejo {
+  --kbm-icon-url: url("icons/forgejo.svg");
+}
+
+.icon-gem {
+  --kbm-icon-url: url("icons/gem.svg");
+}
+
+.icon-git {
+  --kbm-icon-url: url("icons/git.svg");
+}
+
+.icon-git-branch {
+  --kbm-icon-url: url("icons/git-branch.svg");
+}
+
+.icon-github {
+  --kbm-icon-url: url("icons/github.svg");
+}
+
+.icon-githubactions {
+  --kbm-icon-url: url("icons/githubactions.svg");
+}
+
+.icon-go {
+  --kbm-icon-url: url("icons/go.svg");
+}
+
+.icon-hard-drive {
+  --kbm-icon-url: url("icons/hard-drive.svg");
+}
+
+.icon-house {
+  --kbm-icon-url: url("icons/house.svg");
+}
+
+.icon-lefthook {
+  --kbm-icon-url: url("icons/lefthook.svg");
+}
+
+.icon-link-2 {
+  --kbm-icon-url: url("icons/link-2.svg");
+}
+
+.icon-merge {
+  --kbm-icon-url: url("icons/merge.svg");
+}
+
+.icon-monitor {
+  --kbm-icon-url: url("icons/monitor.svg");
+}
+
+.icon-moon {
+  --kbm-icon-url: url("icons/moon.svg");
+}
+
+.icon-move {
+  --kbm-icon-url: url("icons/move.svg");
+}
+
+.icon-nodedotjs {
+  --kbm-icon-url: url("icons/nodedotjs.svg");
+}
+
+.icon-ollama {
+  --kbm-icon-url: url("icons/ollama.svg");
+}
+
+.icon-package {
+  --kbm-icon-url: url("icons/package.svg");
+}
+
+.icon-play {
+  --kbm-icon-url: url("icons/play.svg");
+}
+
+.icon-power {
+  --kbm-icon-url: url("icons/power.svg");
+}
+
+.icon-refresh-cw {
+  --kbm-icon-url: url("icons/refresh-cw.svg");
+}
+
+.icon-ruby {
+  --kbm-icon-url: url("icons/ruby.svg");
+}
+
+.icon-rubygems {
+  --kbm-icon-url: url("icons/rubygems.svg");
+}
+
+.icon-rubyonrails {
+  --kbm-icon-url: url("icons/rubyonrails.svg");
+}
+
+.icon-scan-search {
+  --kbm-icon-url: url("icons/scan-search.svg");
+}
+
+.icon-semgrep {
+  --kbm-icon-url: url("icons/semgrep.svg");
+}
+
+.icon-sonarqubecloud {
+  --kbm-icon-url: url("icons/sonarqubecloud.svg");
+}
+
+.icon-square-check-big {
+  --kbm-icon-url: url("icons/square-check-big.svg");
+}
+
+.icon-square-x {
+  --kbm-icon-url: url("icons/square-x.svg");
+}
+
+.icon-sun {
+  --kbm-icon-url: url("icons/sun.svg");
+}
+
+.icon-trash-2 {
+  --kbm-icon-url: url("icons/trash-2.svg");
+}
+
+.icon-x {
+  --kbm-icon-url: url("icons/x.svg");
+}
+
+.icon-zap {
+  --kbm-icon-url: url("icons/zap.svg");
+}
+
+.button .kbm-icon:not(:last-child) {
+  margin-right: 0.3em;
+}
+
+.button .kbm-icon:last-child:not(:first-child) {
+  margin-left: 0.3em;
+}
+
+.tag .kbm-icon {
+  margin-right: 0.25em;
+}
+
+/* flag-icons in the language picker — the hairline keeps white field edges
+   visible on light buttons. */
+.kbm-flag {
+  height: 1em;
+  width: auto;
+  vertical-align: -0.125em;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
+}
+
+.button .kbm-flag,
+.dropdown-item .kbm-flag {
+  margin-right: 0.3em;
+}
+
+/* ===== Admin-One-inspired application shell =====
+   Fixed dark aside + slim navbar + breadcrumb title-bar + flat hero-bar +
+   main section. Flat surfaces and hairline borders do the ordering work;
+   all colors come from the --kbm- and --bulma- vars so both themes follow. */
+
+.kbm-aside {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 14rem;
+  background: #3f3f3f;
+  color: #e6ece8;
+  display: flex;
+  flex-direction: column;
+  z-index: 40;
+  transition: transform 0.2s ease;
+}
+
+.kbm-aside-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 1.1rem 1.5rem;
+  font-family: var(--bulma-family-secondary);
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #ffffff;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.kbm-aside-menu {
+  flex: 1;
+  padding: 1rem 0;
+}
+
+.kbm-aside-menu .menu-label {
+  padding: 0 1.5rem;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  color: rgba(230, 236, 232, 0.45);
+}
+
+.kbm-aside-menu .menu-list a {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 1.5rem;
+  border-radius: 0;
+  font-size: 1.1rem;
+  color: rgba(230, 236, 232, 0.78);
+}
+
+.kbm-aside-menu .menu-list a:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.kbm-aside-menu .menu-list a.is-active {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.kbm-aside-overlay {
+  display: none;
+}
+
+.kbm-shell {
+  margin-left: 14rem;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.kbm-navbar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 14rem;
+  height: 3.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0 1.5rem;
+  background: var(--bulma-scheme-main-bis);
+  border-bottom: 1px solid var(--kbm-line);
+  z-index: 30;
+}
+
+/* Bulma's navbar-burger draws the hamburger/X icon itself and hides above
+   1024px — we only set its ink colour and pull it against the bar edge. */
+.kbm-aside-burger {
+  color: var(--kbm-ink);
+  margin-left: -0.75rem;
+}
+
+.kbm-navbar-end {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.kbm-title-bar {
+  margin-top: 3.25rem;
+  padding: 1.1rem 1.5rem;
+  border-bottom: 1px solid var(--kbm-line);
+}
+
+.kbm-title-bar li {
+  display: inline;
+  font-size: 1rem;
+  color: var(--kbm-muted);
+}
+
+.kbm-title-bar li:not(:last-child)::after {
+  content: "/";
+  padding: 0 0.5rem;
+}
+
+.kbm-title-bar li:last-child {
+  font-weight: 700;
+  color: var(--kbm-ink);
+}
+
+.kbm-hero-bar {
+  padding: 1.5rem;
+  background: var(--bulma-scheme-main-bis);
+  border-bottom: 1px solid var(--kbm-line);
+}
+
+.kbm-hero-bar .title {
+  margin-bottom: 0.25rem;
+}
+
+.kbm-hero-bar .level-right {
+  flex-shrink: 0;
+}
+
+.kbm-main-section {
+  flex: 1;
+  padding: 1.5rem;
+}
+
+/* Flat ordered cards: Bulma 1.x still ships a default card shadow — remove
+   it in favour of the shared hairline so panels read as one surface. */
+.card {
+  box-shadow: none;
+  border: 1px solid var(--kbm-line);
+}
+
+/* Cards inside Bulma columns fill the stretched column so every card on
+   the same row shares a height (Bulma columns stretch; the card must
+   claim the height). Same recipe the landing portal cards already use. */
+.column > .card {
+  height: 100%;
+}
+
+.card .card-header {
+  border-bottom: 1px solid var(--kbm-line);
+}
+
+.card .card-header .card-header-title {
+  font-weight: 600;
+}
+
+.card .card-header .eyebrow {
+  margin-bottom: 0.15rem;
+}
+
+.kbm-card-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-right: 1rem;
+}
+
+/* Stat tiles — icon badge left, label + big number stacked right. The badge
+   is a fixed square so brand SVGs of any aspect stay contained. */
+.kbm-tile .card-content {
+  padding: 1.25rem;
+}
+
+.kbm-tile-row {
+  display: flex;
+  align-items: stretch;
+  gap: 1rem;
+}
+
+.kbm-tile .stat-number {
+  font-size: 1.9rem;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--kbm-ink);
+}
+
+/* Inverted-icon badge: Bulma's own .icon element supplies the square
+   flex box (is-medium for card headers, is-large for stat tiles) —
+   this class only paints it. The badge must be a WRAPPER: mask-image
+   clips the whole element including background, so a masked span
+   cannot carry its own badge. The glyph inherits the invert color
+   via currentColor and sizes proportionally to the badge. */
+.kbm-icon-badge {
+  background: var(--kbm-steel);
+  border-radius: 25%;
+  color: var(--bulma-primary-invert);
+}
+
+.kbm-icon-badge .kbm-icon {
+  --kbm-icon-size: 55%;
+}
+
+@media (max-width: 1023px) {
+  .kbm-aside {
+    transform: translateX(-100%);
+  }
+
+  .kbm-aside.is-open {
+    transform: none;
+  }
+
+  .kbm-aside-overlay.is-open {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 35;
+  }
+
+  .kbm-shell {
+    margin-left: 0;
+  }
+
+  .kbm-navbar {
+    left: 0;
+  }
+}
+
+/* Mask icons inherit the current text color, so dark mode needs no
+   filter overrides — status and accent colors use the same var()s as
+   every other element. Placed last so biome's noDescendingSpecificity
+   stays satisfied. */

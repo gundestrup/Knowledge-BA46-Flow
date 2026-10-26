@@ -1,7 +1,9 @@
 // Chart instances live in module scope, not on the reactive component — a
 // reactive proxy around a Chart (which holds circular refs and a DOM canvas)
 // is a known "Maximum call stack size exceeded" trigger.
-const charts = new Map();
+// Chart.getChart(canvas) is Chart.js's own instance registry — used below
+// instead of a hand-rolled map so update-vs-recreate follows the library's
+// documented lifecycle. Theme-aware chart options come from common.js.
 
 // Compact counts pin the "en" locale so the suffix stays K/M regardless of
 // browser language — the rest of the UI is English-only.
@@ -45,15 +47,6 @@ window.knowledgeDashboard = () => ({
   externalDefault: "",
   estimate: null,
   estimating: false,
-  messages: {},
-  locale:
-    typeof localStorage !== "undefined"
-      ? localStorage.getItem("kbm.locale") || ""
-      : "",
-  locales: ["en"],
-  localeOpen: false,
-  resolvedLocale: "en",
-
   async init() {
     await Promise.all([
       this.loadI18n(),
@@ -66,68 +59,7 @@ window.knowledgeDashboard = () => ({
     ]);
   },
 
-  async loadI18n() {
-    try {
-      const query = this.locale
-        ? `?lang=${encodeURIComponent(this.locale)}`
-        : "";
-      const data = await this.requestJSON(`/api/i18n${query}`);
-      this.messages = data.messages || {};
-      this.resolvedLocale = data.locale || "en";
-      if (data.locales?.length) this.locales = data.locales;
-    } catch {
-      this.messages = {};
-    }
-  },
-
-  // setLocale persists the UI locale choice across pages; "" negotiates the
-  // browser's Accept-Language again.
-  async setLocale(value) {
-    this.localeOpen = false;
-    this.locale = value;
-    try {
-      if (value) localStorage.setItem("kbm.locale", value);
-      else localStorage.removeItem("kbm.locale");
-    } catch {
-      /* storage may be unavailable; choice just won't persist */
-    }
-    await this.loadI18n();
-  },
-
-  localeLabel(tag) {
-    return { en: "English", da: "Dansk" }[tag] || tag;
-  },
-
-  // The flag shown on the picker: the explicit choice, else the negotiated
-  // one — "" (automatic) resolves to whatever /api/i18n last served.
-  displayLocale() {
-    return this.locale || this.resolvedLocale;
-  },
-
-  // localeFlag maps a locale tag to a vendored flag-icons country code:
-  // "en" shows the Union Jack; other tags use their region suffix or the
-  // tag itself ("da-DK" -> "dk", "da" -> "dk").
-  localeFlag(tag) {
-    const code = { en: "gb" }[tag] || (tag.split("-")[1] || tag).toLowerCase();
-    return `/static/vendor/flags/${code}.svg`;
-  },
-
-  // t resolves a catalog id from /api/i18n. The English fallback keeps the
-  // page readable before the fetch lands and if the endpoint ever fails;
-  // {{.Field}} placeholders interpolate from params, and a params.Count
-  // picks the one/other plural form like go-i18n.
-  t(id, fallback, params) {
-    let msg = this.messages[id];
-    if (msg != null && typeof msg === "object") {
-      msg = msg[params?.Count === 1 ? "one" : "other"] ?? msg.other;
-    }
-    const out = typeof msg === "string" ? msg : fallback;
-    if (out == null) return id;
-    return out.replace(
-      /\{\{\.(\w+)\}\}/g,
-      (_, name) => params?.[name] ?? `{{.${name}}}`,
-    );
-  },
+  ...window.kbm,
 
   async loadModels(discover = false) {
     this.discovering = discover;
@@ -323,21 +255,17 @@ window.knowledgeDashboard = () => ({
     const extOps = ["analyze", "run", "expand", "freshness", "all"];
     try {
       this.checkModelSelection(op);
-      this.estimate = await this.requestJSON("/api/ops", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          op,
-          reanalyze: this.reanalyze,
-          external: extOps.includes(op) && this.external,
-          model: op !== "embed" ? this.model : "",
-          embed_model: ["analyze", "run", "all", "embed"].includes(op)
-            ? this.embedModel
-            : "",
-          allow_cloud: this.allowCloud,
-          web_verify: ["freshness", "all"].includes(op) && this.webVerify,
-          dry_run: true,
-        }),
+      this.estimate = await this.postJSON("/api/ops", {
+        op,
+        reanalyze: this.reanalyze,
+        external: extOps.includes(op) && this.external,
+        model: op !== "embed" ? this.model : "",
+        embed_model: ["analyze", "run", "all", "embed"].includes(op)
+          ? this.embedModel
+          : "",
+        allow_cloud: this.allowCloud,
+        web_verify: ["freshness", "all"].includes(op) && this.webVerify,
+        dry_run: true,
       });
     } catch (error) {
       this.error = error.message;
@@ -434,20 +362,6 @@ window.knowledgeDashboard = () => ({
     }
   },
 
-  async requestJSON(url, options = {}) {
-    const response = await fetch(url, options);
-    let body;
-    try {
-      body = await response.json();
-    } catch {
-      body = {};
-    }
-    if (!response.ok) {
-      throw new Error(body.error || `Request failed (HTTP ${response.status})`);
-    }
-    return body;
-  },
-
   async refreshData() {
     await Promise.all([
       this.loadDocuments(),
@@ -513,12 +427,9 @@ window.knowledgeDashboard = () => ({
     const canvas = document.getElementById("knowledgeProgressChart");
     if (!canvas) return;
     const series = this.progressSeries();
-    const existing = charts.get("knowledgeProgressChart");
+    const existing = window.Chart.getChart(canvas);
     if (series.labels.length === 0) {
-      if (existing) {
-        existing.destroy();
-        charts.delete("knowledgeProgressChart");
-      }
+      existing?.destroy();
       return;
     }
     if (existing) {
@@ -529,36 +440,21 @@ window.knowledgeDashboard = () => ({
       existing.update();
       return;
     }
-    const dataset = (label, key, color) => ({
-      label,
-      seriesKey: key,
-      data: series[key],
-      borderColor: color,
-      backgroundColor: color,
-      tension: 0.2,
+    const dataset = (label, key, color) =>
+      this.lineDataset(label, series[key], color, { seriesKey: key });
+    new window.Chart(canvas.getContext("2d"), {
+      type: "line",
+      data: {
+        labels: series.labels,
+        datasets: [
+          dataset("Notes", "notes", "#285444"),
+          dataset("Analyzed", "analyzed", "#18352d"),
+          dataset("Applied", "applied", "#5b7f95"),
+          dataset("Review backlog", "backlog", "#a64035"),
+        ],
+      },
+      options: this.lineChartOptions(),
     });
-    charts.set(
-      "knowledgeProgressChart",
-      new window.Chart(canvas.getContext("2d"), {
-        type: "line",
-        data: {
-          labels: series.labels,
-          datasets: [
-            dataset("Notes", "notes", "#285444"),
-            dataset("Analyzed", "analyzed", "#18352d"),
-            dataset("Applied", "applied", "#5b7f95"),
-            dataset("Review backlog", "backlog", "#a64035"),
-          ],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          interaction: { mode: "index", intersect: false },
-          scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
-          plugins: { legend: { position: "bottom" } },
-        },
-      }),
-    );
   },
 
   // reviewTotalsText renders the all-time suggestion counters as text: they
@@ -643,20 +539,16 @@ window.knowledgeDashboard = () => ({
           );
         this.checkModelSelection(op);
       }
-      await this.requestJSON("/api/ops", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          op,
-          reanalyze: reanalyzeOps.includes(op) && this.reanalyze,
-          external: extOps.includes(op) && this.external,
-          model: llmOps.includes(op) && op !== "embed" ? this.model : "",
-          embed_model: ["analyze", "run", "all", "embed"].includes(op)
-            ? this.embedModel
-            : "",
-          allow_cloud: llmOps.includes(op) && this.allowCloud,
-          web_verify: ["freshness", "all"].includes(op) && this.webVerify,
-        }),
+      await this.postJSON("/api/ops", {
+        op,
+        reanalyze: reanalyzeOps.includes(op) && this.reanalyze,
+        external: extOps.includes(op) && this.external,
+        model: llmOps.includes(op) && op !== "embed" ? this.model : "",
+        embed_model: ["analyze", "run", "all", "embed"].includes(op)
+          ? this.embedModel
+          : "",
+        allow_cloud: llmOps.includes(op) && this.allowCloud,
+        web_verify: ["freshness", "all"].includes(op) && this.webVerify,
       });
       this.busy = true;
       this.notice = this.t(
@@ -672,19 +564,17 @@ window.knowledgeDashboard = () => ({
 
   async stopServer() {
     this.error = "";
-    const forced = this.busy
-      ? window.confirm(
-          this.t(
+    const forced = await this.confirmDialog(
+      this.busy
+        ? this.t(
             "ui.kb.stop_busy_confirm",
             "An operation is running — stop the server anyway? Its job will be marked failed.",
-          ),
-        )
-      : window.confirm(
-          this.t(
+          )
+        : this.t(
             "ui.kb.stop_confirm",
             "Stop the KBM-flow server? This page will go offline.",
           ),
-        );
+    );
     if (!forced) return;
     try {
       await this.requestJSON(`/api/shutdown${this.busy ? "?force=1" : ""}`, {
@@ -762,22 +652,18 @@ window.knowledgeDashboard = () => ({
     // back to the model on later runs — the feedback channel for stale facts.
     let note = "";
     if (status === "rejected") {
-      const answer = window.prompt(
+      const answer = await this.promptDialog(
         this.t(
           "ui.kb.reject_prompt",
           "Optional: why is this wrong? (shown to the model on future runs)",
         ),
-        "",
+        this.t("ui.kb.reject", "Reject"),
       );
       if (answer === null) return; // Cancel aborts the rejection, not just the note
       note = answer;
     }
     try {
-      await this.requestJSON(`/api/suggestions/${id}/decide`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status, note }),
-      });
+      await this.postJSON(`/api/suggestions/${id}/decide`, { status, note });
       this.notice = this.t(
         "ui.kb.suggestion_decided",
         "Suggestion #{{.Id}} {{.Status}}.",
@@ -792,13 +678,13 @@ window.knowledgeDashboard = () => ({
   async applyAccepted() {
     if (this.acceptedCount === 0 || this.applying) return;
     if (
-      !window.confirm(
+      !(await this.confirmDialog(
         this.t(
           "ui.kb.apply_confirm",
           "Apply {{.Count}} accepted suggestion(s) to the repository?",
           { Count: this.acceptedCount },
         ),
-      )
+      ))
     ) {
       return;
     }
@@ -893,17 +779,18 @@ window.knowledgeDashboard = () => ({
     });
   },
 
-  // actionIcon maps a suggestion action to its Lucide mark so the tag reads
-  // at a glance. Unknown/future actions fall back to the generic file mark.
+  // actionIcon maps a suggestion action to its icon-* registry class so the
+  // tag reads at a glance. Unknown/future actions fall back to the generic
+  // file mark.
   actionIcon(action) {
     const icons = {
-      move: "move.svg",
-      merge: "merge.svg",
-      expand: "file-plus.svg",
-      delete: "trash-2.svg",
-      none: "file-text.svg",
+      move: "icon-move",
+      merge: "icon-merge",
+      expand: "icon-file-plus",
+      delete: "icon-trash-2",
+      none: "icon-file-text",
     };
-    return `/static/icons/${icons[action] || "file-text.svg"}`;
+    return icons[action] || "icon-file-text";
   },
 
   // Tooltip helpers — Alpine expressions cannot reach globals like JSON,
@@ -932,12 +819,6 @@ window.knowledgeDashboard = () => ({
     )
       return this.t("ui.kb.change_metadata", "metadata changed");
     return this.t("ui.kb.change_generic", "changed");
-  },
-
-  jobTagClass(status) {
-    if (status === "done") return "is-success is-light";
-    if (status === "failed") return "is-danger is-light";
-    return "is-warning is-light";
   },
 });
 
