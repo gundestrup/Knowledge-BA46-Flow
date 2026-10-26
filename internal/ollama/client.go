@@ -46,6 +46,7 @@ type Client struct {
 	err                error
 	ctxOnce            sync.Once
 	ctxLen             int
+	limitMu            sync.Mutex
 	requiredCapability string
 	allowRemote        bool
 	checkOnce          sync.Once
@@ -66,6 +67,14 @@ const (
 	// replyHeadroom covers the JSON envelope and non-content fields on top of
 	// the document-sized reply expansion.
 	replyHeadroom = 1024
+	// outputLimitRetryFactor grows a bounded num_predict on a length-truncated
+	// reply — verbose/cloud models can exceed conservative metadata caps even
+	// with think off. One retry per call; the proven cap is kept for later
+	// requests so the client learns its model's real reply size.
+	outputLimitRetryFactor = 4
+	// learnedOutputLimitMax bounds the cap the client may learn on its own;
+	// beyond it a truncated reply errors instead of silently ballooning cost.
+	learnedOutputLimitMax = 8192
 )
 
 // New builds a client. timeout is the per-request HTTP timeout in seconds;
@@ -198,16 +207,67 @@ func (c *Client) Generate(ctx context.Context, prompt string, format json.RawMes
 	if err := c.checkModel(ctx, CapabilityCompletion); err != nil {
 		return "", err
 	}
+	out, doneReason, err := c.generate(ctx, prompt, format, c.outputLimit())
+	if err != nil {
+		return "", err
+	}
+	if doneReason != "length" {
+		return out, nil
+	}
+	retry, ok := c.grownLimit()
+	if !ok {
+		return "", errors.New("ollama response was truncated by the context or generation limit")
+	}
+	out, doneReason, err = c.generate(ctx, prompt, format, retry)
+	if err != nil {
+		return "", err
+	}
+	if doneReason == "length" {
+		return "", errors.New("ollama response was truncated by the context or generation limit")
+	}
+	c.commitLimit(retry)
+	return out, nil
+}
+
+// outputLimit reports the current num_predict cap, including learned growth.
+func (c *Client) outputLimit() int {
+	c.limitMu.Lock()
+	defer c.limitMu.Unlock()
+	return c.maxOutputTokens
+}
+
+// grownLimit proposes the cap for a single retry after a truncated reply;
+// ok=false when the client has no bounded cap or is already at the ceiling.
+func (c *Client) grownLimit() (int, bool) {
+	c.limitMu.Lock()
+	defer c.limitMu.Unlock()
+	if c.maxOutputTokens <= 0 || c.maxOutputTokens >= learnedOutputLimitMax {
+		return 0, false
+	}
+	return min(c.maxOutputTokens*outputLimitRetryFactor, learnedOutputLimitMax), true
+}
+
+// commitLimit adopts a cap that proved sufficient — subsequent requests skip
+// the truncated first attempt. max() guards concurrent growth.
+func (c *Client) commitLimit(tokens int) {
+	c.limitMu.Lock()
+	c.maxOutputTokens = max(c.maxOutputTokens, tokens)
+	c.limitMu.Unlock()
+}
+
+// generate performs one request/response round and reports the reply's final
+// done_reason; "length" means context or num_predict cut the reply short.
+func (c *Client) generate(ctx context.Context, prompt string, format json.RawMessage, numPredict int) (string, string, error) {
 	numCtx := c.numCtx
 	if numCtx <= 0 {
-		numCtx = c.autoNumCtx(ctx, prompt)
+		numCtx = c.autoNumCtx(ctx, prompt, numPredict)
 	}
 	options := map[string]any{"num_ctx": numCtx}
 	if len(format) > 0 {
 		options["temperature"] = 0
 	}
-	if c.maxOutputTokens > 0 {
-		options["num_predict"] = c.maxOutputTokens
+	if numPredict > 0 {
+		options["num_predict"] = numPredict
 	}
 	payload := generateRequest{
 		Model:     c.model,
@@ -220,16 +280,16 @@ func (c *Client) Generate(ctx context.Context, prompt string, format json.RawMes
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("encode request: %w", err)
+		return "", "", fmt.Errorf("encode request: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/api/generate", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
+		return "", "", fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("ollama request: %w", err)
+		return "", "", fmt.Errorf("ollama request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
@@ -238,9 +298,10 @@ func (c *Client) Generate(ctx context.Context, prompt string, format json.RawMes
 		}
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		_ = json.Unmarshal(data, &er)
-		return "", StatusError{StatusCode: resp.StatusCode, Status: resp.Status, Message: strings.TrimSpace(er.Error)}
+		return "", "", StatusError{StatusCode: resp.StatusCode, Status: resp.Status, Message: strings.TrimSpace(er.Error)}
 	}
 	var out strings.Builder
+	var doneReason string
 	dec := json.NewDecoder(resp.Body)
 	for {
 		var chunk generateResponse
@@ -248,26 +309,25 @@ func (c *Client) Generate(ctx context.Context, prompt string, format json.RawMes
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return "", fmt.Errorf("decode ollama response: %w", err)
+			return "", "", fmt.Errorf("decode ollama response: %w", err)
 		}
 		if chunk.Error != "" {
-			return "", errors.New(chunk.Error)
+			return "", "", errors.New(chunk.Error)
 		}
-		if chunk.DoneReason == "length" {
-			return "", errors.New("ollama response was truncated by the context or generation limit")
-		}
+		doneReason = chunk.DoneReason
 		out.WriteString(chunk.Response)
 	}
-	return strings.TrimSpace(out.String()), nil
+	return strings.TrimSpace(out.String()), doneReason, nil
 }
 
 // autoNumCtx sizes the window for one prompt: twice the estimated prompt
 // tokens (the reply may contain the whole rewritten document) plus headroom,
-// floored and capped by the model's real context_length.
-func (c *Client) autoNumCtx(ctx context.Context, prompt string) int {
+// floored and capped by the model's real context_length. A bounded reply
+// (numPredict > 0) needs only the smaller metadata-sized allowance.
+func (c *Client) autoNumCtx(ctx context.Context, prompt string, numPredict int) int {
 	want := len(prompt)/bytesPerToken*2 + replyHeadroom
-	if c.maxOutputTokens > 0 {
-		want = len(prompt)/bytesPerToken + c.maxOutputTokens + replyHeadroom
+	if numPredict > 0 {
+		want = len(prompt)/bytesPerToken + numPredict + replyHeadroom
 	}
 	if want < minAutoNumCtx {
 		want = minAutoNumCtx

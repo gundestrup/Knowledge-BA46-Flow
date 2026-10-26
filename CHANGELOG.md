@@ -117,6 +117,11 @@ tag is prepared.
 
 ### Changed
 
+- Bounded generation clients now self-adapt their output cap: a reply
+  truncated at `enrichment_max_tokens` is retried once with a 4× cap (learned
+  ceiling 8192), and a cap that proves sufficient is reused for subsequent
+  calls — verbose/cloud models no longer require a manual config bump for
+  occasional oversized replies.
 - Frontend asset structure: the shared stylesheet is now `base.css` (design
   tokens, icons, shell, cards, tiles) with page rules split into
   `landing.css`, `knowledge.css`, and `report.css` — zero selectors appear in

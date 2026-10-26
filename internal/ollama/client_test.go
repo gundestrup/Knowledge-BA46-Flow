@@ -13,15 +13,16 @@ import (
 // wire mirrors the fields of the /api/generate request and response that the
 // client sends and reads.
 type wire struct {
-	Model     string          `json:"model"`
-	Prompt    string          `json:"prompt"`
-	Stream    bool            `json:"stream"`
-	Format    json.RawMessage `json:"format"`
-	Think     *bool           `json:"think"`
-	KeepAlive string          `json:"keep_alive"`
-	Options   map[string]any  `json:"options"`
-	Response  string          `json:"response"`
-	Error     string          `json:"error"`
+	Model      string          `json:"model"`
+	Prompt     string          `json:"prompt"`
+	Stream     bool            `json:"stream"`
+	Format     json.RawMessage `json:"format"`
+	Think      *bool           `json:"think"`
+	KeepAlive  string          `json:"keep_alive"`
+	Options    map[string]any  `json:"options"`
+	Response   string          `json:"response"`
+	DoneReason string          `json:"done_reason"`
+	Error      string          `json:"error"`
 }
 
 func TestGenerate(t *testing.T) {
@@ -276,5 +277,80 @@ func TestGenerateHonoursRequestTimeout(t *testing.T) {
 	_, err := New(srv.URL, "x", 1, 0, false, "").Generate(context.Background(), "x", nil)
 	if err == nil {
 		t.Fatal("expected a timeout error")
+	}
+}
+
+// A length-truncated reply retries once with a grown num_predict; the grown
+// cap is learned so later calls skip the doomed first attempt.
+func TestGenerateRetriesTruncatedReplyWithGrownLimit(t *testing.T) {
+	var predicts []float64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/show" {
+			w.Write([]byte(`{"model_info":{}}`))
+			return
+		}
+		var req wire
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		predicts = append(predicts, req.Options["num_predict"].(float64))
+		if len(predicts) == 1 {
+			json.NewEncoder(w).Encode(wire{Response: `{"title":"cut`, DoneReason: "length"})
+			return
+		}
+		json.NewEncoder(w).Encode(wire{Response: `{"title":"ok"}`})
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "m", 5, 0, false, "").WithOutputLimit(512)
+
+	got, err := c.Generate(context.Background(), "x", nil)
+	if err != nil || got != `{"title":"ok"}` {
+		t.Fatalf("expected recovered response, got %q (err %v)", got, err)
+	}
+	if len(predicts) != 2 || predicts[0] != 512 || predicts[1] != 2048 {
+		t.Fatalf("expected 512 then grown 2048 num_predict, got %v", predicts)
+	}
+	// The learned cap persists: a subsequent call starts at 2048 directly.
+	got, err = c.Generate(context.Background(), "x", nil)
+	if err != nil || got != `{"title":"ok"}` {
+		t.Fatalf("unexpected follow-up failure: %q (err %v)", got, err)
+	}
+	if len(predicts) != 3 || predicts[2] != 2048 {
+		t.Fatalf("expected learned 2048 cap on the next call, got %v", predicts)
+	}
+}
+
+// Without a bounded output cap there is nothing to grow — truncation errors.
+func TestGenerateTruncationWithoutLimitDoesNotRetry(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		json.NewEncoder(w).Encode(wire{Response: "cut", DoneReason: "length"})
+	}))
+	defer srv.Close()
+	_, err := New(srv.URL, "m", 5, 8192, false, "").Generate(context.Background(), "x", nil)
+	if err == nil {
+		t.Fatal("expected a truncation error")
+	}
+	if calls != 1 {
+		t.Fatalf("expected a single attempt, got %d", calls)
+	}
+}
+
+// A second truncation at the grown cap still errors — the learned ceiling
+// bounds automatic growth instead of masking a runaway reply.
+func TestGenerateTruncationAtGrownLimitErrors(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		json.NewEncoder(w).Encode(wire{Response: "cut", DoneReason: "length"})
+	}))
+	defer srv.Close()
+	_, err := New(srv.URL, "m", 5, 8192, false, "").WithOutputLimit(512).Generate(context.Background(), "x", nil)
+	if err == nil {
+		t.Fatal("expected a truncation error after the grown retry")
+	}
+	if calls != 2 {
+		t.Fatalf("expected exactly one retry, got %d calls", calls)
 	}
 }

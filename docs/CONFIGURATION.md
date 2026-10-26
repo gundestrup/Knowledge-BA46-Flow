@@ -54,14 +54,14 @@ Optional-stage limits are independent of the full-analysis request timeout:
 | Field                        | Type   | Default       | Purpose                                                                                                                                                                                                                                                                                                |
 | ---------------------------- | ------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `enrichment_timeout_seconds` | int    | `120`         | Deadline for one enrichment call, including context lookup; 0 selects the default, negative values are rejected.                                                                                                                                                                                       |
-| `enrichment_max_tokens`      | int    | `512`         | Maximum enrichment output tokens (`options.num_predict`); 0 selects the default, negative values are rejected. Reasoning/cloud models may need a larger cap when replies are truncated.                                                                                                                |
+| `enrichment_max_tokens`      | int    | `512`         | Maximum enrichment output tokens (`options.num_predict`); 0 selects the default, negative values are rejected. A reply truncated at this cap is retried once with a 4× cap (up to a learned ceiling of 8192), and a cap that proves sufficient is reused for later calls — raising it manually is only needed beyond that.                                                                                                                |
 | `enrichment_mode`            | string | `local-first` | `local-first` fills only missing title/tags from clear H1/path evidence and skips fast generation when fields are already valid; `always` calls a distinct fast model for every eligible document.                                                                                                     |
 | `stub_max_body_lines`        | int    | `5`           | Documents with at most this many non-empty body lines (under the frontmatter) are placeholder stubs: scanned, embedded and valid link targets, but skipped by every generation stage. `0`/unset selects the default; a negative value disables size detection so only the explicit `stub` tag applies. |
 
-These are corpus- and model-sensitive limits. If a model reports output
-truncation (rather than a timeout), raise `enrichment_max_tokens` for that
-configuration (for example, try `2048` for a reasoning/cloud model) and retry
-the failed documents. For `stub_max_body_lines`, inspect short notes before
+These are corpus- and model-sensitive limits. When a bounded enrichment reply
+is truncated, the client automatically retries once with a 4× output cap (up
+to 8192) and reuses a cap that works — persistent failures beyond that ceiling
+still warrant raising `enrichment_max_tokens` for that configuration. For `stub_max_body_lines`, inspect short notes before
 choosing a threshold: concise catalog entries can be valid knowledge rather
 than placeholders. The explicit `stub` tag always takes precedence.
 
