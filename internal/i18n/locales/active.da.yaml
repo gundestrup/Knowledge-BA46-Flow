@@ -56,6 +56,7 @@ ui.kb.estimate_docs_queued:
 ui.kb.estimate_empty: "Intet er sat i queue for dette valg."
 ui.kb.estimate_title: "Anslå, hvor mange dokumenter dette valg vil sætte i queue — ingen models køres, og intet ændres"
 ui.kb.jobs_running: "Baggrundsarbejde"
+ui.kb.jobs_idle: "Inaktiv — ingen jobs kører"
 ui.kb.nav_operations: "Operationer"
 ui.kb.nav_graph: "Graf"
 ui.kb.nav_suggestions: "Forslag"
