@@ -491,15 +491,15 @@
                     type="button"
                     class="button is-ghost is-small kbm-help-btn"
                     :title="t('ui.kb.help_title', 'Show explanation')"
-                    @click.prevent.stop="toggleHelp('SLUG')"
+                    @click.prevent.stop="toggleHelp('reanalyze')"
                     aria-hidden="true"
                     tabindex="-1"
                   >
                     ?
                   </button>
                 </label>
-                <div class="kbm-help-card" x-show="helpOpen==='SLUG'">
-                  <template x-for="b in helpBlocks('SLUG')" :key="b.s">
+                <div class="kbm-help-card" x-show="helpOpen==='reanalyze'">
+                  <template x-for="b in helpBlocks('reanalyze')" :key="b.s">
                     <p x-show="b.t==='p'" class="mb-1" x-text="b.s"></p>
                     <li x-show="b.t==='li'" x-text="b.s"></li>
                   </template>
@@ -524,15 +524,15 @@
                     type="button"
                     class="button is-ghost is-small kbm-help-btn"
                     :title="t('ui.kb.help_title', 'Show explanation')"
-                    @click.prevent.stop="toggleHelp('SLUG')"
+                    @click.prevent.stop="toggleHelp('external')"
                     aria-hidden="true"
                     tabindex="-1"
                   >
                     ?
                   </button>
                 </label>
-                <div class="kbm-help-card" x-show="helpOpen==='SLUG'">
-                  <template x-for="b in helpBlocks('SLUG')" :key="b.s">
+                <div class="kbm-help-card" x-show="helpOpen==='external'">
+                  <template x-for="b in helpBlocks('external')" :key="b.s">
                     <p x-show="b.t==='p'" class="mb-1" x-text="b.s"></p>
                     <li x-show="b.t==='li'" x-text="b.s"></li>
                   </template>
@@ -557,15 +557,15 @@
                     type="button"
                     class="button is-ghost is-small kbm-help-btn"
                     :title="t('ui.kb.help_title', 'Show explanation')"
-                    @click.prevent.stop="toggleHelp('SLUG')"
+                    @click.prevent.stop="toggleHelp('allow-cloud')"
                     aria-hidden="true"
                     tabindex="-1"
                   >
                     ?
                   </button>
                 </label>
-                <div class="kbm-help-card" x-show="helpOpen==='SLUG'">
-                  <template x-for="b in helpBlocks('SLUG')" :key="b.s">
+                <div class="kbm-help-card" x-show="helpOpen==='allow-cloud'">
+                  <template x-for="b in helpBlocks('allow-cloud')" :key="b.s">
                     <p x-show="b.t==='p'" class="mb-1" x-text="b.s"></p>
                     <li x-show="b.t==='li'" x-text="b.s"></li>
                   </template>
@@ -590,15 +590,15 @@
                     type="button"
                     class="button is-ghost is-small kbm-help-btn"
                     :title="t('ui.kb.help_title', 'Show explanation')"
-                    @click.prevent.stop="toggleHelp('SLUG')"
+                    @click.prevent.stop="toggleHelp('web-verify')"
                     aria-hidden="true"
                     tabindex="-1"
                   >
                     ?
                   </button>
                 </label>
-                <div class="kbm-help-card" x-show="helpOpen==='SLUG'">
-                  <template x-for="b in helpBlocks('SLUG')" :key="b.s">
+                <div class="kbm-help-card" x-show="helpOpen==='web-verify'">
+                  <template x-for="b in helpBlocks('web-verify')" :key="b.s">
                     <p x-show="b.t==='p'" class="mb-1" x-text="b.s"></p>
                     <li x-show="b.t==='li'" x-text="b.s"></li>
                   </template>

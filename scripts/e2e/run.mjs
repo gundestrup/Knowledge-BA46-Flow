@@ -489,6 +489,41 @@ async function main() {
       "accept fires decide API",
       page.requestsMatching("/decide").length > 0,
     );
+
+    // In-context option help: one fragment open at a time, with real
+    // content from usage.md — guards the slug wiring, not just the JS.
+    await page.eval(`document.querySelector(".kbm-help-btn").click()`);
+    await page.waitFor(
+      `[...document.querySelectorAll(".kbm-help-card")].some(
+        (c) => c.offsetParent !== null && c.textContent.trim().length > 10)`,
+      5000,
+      "help card opens with content",
+    );
+    check(
+      "one help card visible",
+      (await page.eval(
+        `[...document.querySelectorAll(".kbm-help-card")].filter(
+          (c) => c.offsetParent !== null).length`,
+      )) === 1,
+    );
+    const otherBtn = await page.eval(
+      `[...document.querySelectorAll(".kbm-help-btn")][1].click(); "ok"`,
+    );
+    await page.waitFor(
+      `[...document.querySelectorAll(".kbm-help-card")].filter(
+        (c) => c.offsetParent !== null).length === 1`,
+      5000,
+      "second help opens, first closes",
+    );
+    await page.eval(
+      `[...document.querySelectorAll(".kbm-help-btn")][1].click()`,
+    );
+    await page.waitFor(
+      `[...document.querySelectorAll(".kbm-help-card")].filter(
+        (c) => c.offsetParent !== null).length === 0`,
+      5000,
+      "help toggles closed",
+    );
     // applyLabel() reads this.acceptedCount at component scope — the button
     // must re-render to "Apply accepted (1)".
     await page.waitFor(
