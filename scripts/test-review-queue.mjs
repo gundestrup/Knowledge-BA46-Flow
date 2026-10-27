@@ -174,3 +174,33 @@ assert.match(dashboard.error, /source changed/);
 console.log(
   "Note grouping, facets, queue confirmation and optimistic decide passed.",
 );
+
+// In-context help: usage.md splits into "### slug" fragments rendered as
+// blocks; the help toggle keeps a single fragment open at a time.
+import { readFileSync } from "node:fs";
+const usageMd = readFileSync(
+  new URL("../internal/server/static/usage.md", import.meta.url),
+  "utf8",
+);
+const frags = dashboard.parseUsage(usageMd);
+for (const key of [
+  "expand",
+  "reanalyze",
+  "external",
+  "allow-cloud",
+  "web-verify",
+  "estimate",
+  "lanes",
+  "write-scope",
+  "document-id",
+]) {
+  assert.ok(frags[key]?.length > 0, `missing usage fragment ${key}`);
+}
+assert.ok(frags.reanalyze.some((b) => b.t === "p"));
+assert.ok(frags.reanalyze.some((b) => b.t === "li"));
+dashboard.toggleHelp("external");
+assert.equal(dashboard.helpOpen, "external");
+dashboard.toggleHelp("reanalyze");
+assert.equal(dashboard.helpOpen, "reanalyze", "only one help open");
+dashboard.toggleHelp("reanalyze");
+assert.equal(dashboard.helpOpen, null);

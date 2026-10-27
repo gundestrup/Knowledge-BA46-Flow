@@ -487,7 +487,24 @@
                     x-text="t('ui.kb.reanalyse_label', 'Re-analyse documents processed by a different model')"
                     >Re-analyse documents processed by a different model</span
                   >
+                  <button
+                    type="button"
+                    class="button is-ghost is-small kbm-help-btn"
+                    :title="t('ui.kb.help_title', 'Show explanation')"
+                    @click.prevent.stop="toggleHelp('SLUG')"
+                    aria-hidden="true"
+                    tabindex="-1"
+                  >
+                    ?
+                  </button>
                 </label>
+                <div class="kbm-help-card" x-show="helpOpen==='SLUG'">
+                  <template x-for="b in helpBlocks('SLUG')" :key="b.s">
+                    <p x-show="b.t==='p'" class="mb-1" x-text="b.s"></p>
+                    <li x-show="b.t==='li'" x-text="b.s"></li>
+                  </template>
+                </div>
+
                 <label
                   class="checkbox is-size-7 has-text-grey mb-2"
                   :title="t('ui.kb.external_title', 'Run analysis with ollama_model_external (enhanced lane, e.g. a cloud model). Results stamp the external_* markers and leave the local lineage untouched; document content is sent to that model.')"
@@ -503,7 +520,24 @@
                     >External generation lane (document content leaves this
                     machine)</span
                   >
+                  <button
+                    type="button"
+                    class="button is-ghost is-small kbm-help-btn"
+                    :title="t('ui.kb.help_title', 'Show explanation')"
+                    @click.prevent.stop="toggleHelp('SLUG')"
+                    aria-hidden="true"
+                    tabindex="-1"
+                  >
+                    ?
+                  </button>
                 </label>
+                <div class="kbm-help-card" x-show="helpOpen==='SLUG'">
+                  <template x-for="b in helpBlocks('SLUG')" :key="b.s">
+                    <p x-show="b.t==='p'" class="mb-1" x-text="b.s"></p>
+                    <li x-show="b.t==='li'" x-text="b.s"></li>
+                  </template>
+                </div>
+
                 <label
                   class="checkbox is-size-7 has-text-grey mb-2"
                   :title="t('ui.kb.allow_cloud_title', 'Separate consent for off-machine embedding/enrichment; does not change the generation lane')"
@@ -519,7 +553,24 @@
                     >Allow cloud/remote embeddings and enrichment for this
                     run</span
                   >
+                  <button
+                    type="button"
+                    class="button is-ghost is-small kbm-help-btn"
+                    :title="t('ui.kb.help_title', 'Show explanation')"
+                    @click.prevent.stop="toggleHelp('SLUG')"
+                    aria-hidden="true"
+                    tabindex="-1"
+                  >
+                    ?
+                  </button>
                 </label>
+                <div class="kbm-help-card" x-show="helpOpen==='SLUG'">
+                  <template x-for="b in helpBlocks('SLUG')" :key="b.s">
+                    <p x-show="b.t==='p'" class="mb-1" x-text="b.s"></p>
+                    <li x-show="b.t==='li'" x-text="b.s"></li>
+                  </template>
+                </div>
+
                 <label
                   class="checkbox is-size-7 has-text-grey mb-2"
                   :title="t('ui.kb.web_verify_title', 'Verify freshness flags against Ollama\'s hosted web search — flagged claim text (never the whole document) is sent to ollama.com; requires OLLAMA_API_KEY')"
@@ -535,7 +586,23 @@
                     >Verify freshness flags via web search (claim text leaves
                     this machine)</span
                   >
+                  <button
+                    type="button"
+                    class="button is-ghost is-small kbm-help-btn"
+                    :title="t('ui.kb.help_title', 'Show explanation')"
+                    @click.prevent.stop="toggleHelp('SLUG')"
+                    aria-hidden="true"
+                    tabindex="-1"
+                  >
+                    ?
+                  </button>
                 </label>
+                <div class="kbm-help-card" x-show="helpOpen==='SLUG'">
+                  <template x-for="b in helpBlocks('SLUG')" :key="b.s">
+                    <p x-show="b.t==='p'" class="mb-1" x-text="b.s"></p>
+                    <li x-show="b.t==='li'" x-text="b.s"></li>
+                  </template>
+                </div>
               </div>
               <p class="is-size-7 has-text-grey">
                 <span

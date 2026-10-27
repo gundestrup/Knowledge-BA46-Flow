@@ -55,6 +55,7 @@ ui.kb.estimate_docs_queued:
   other: "{{.Stage}}: {{.Count}} dokumenter sat i queue"
 ui.kb.estimate_empty: "Intet er sat i queue for dette valg."
 ui.kb.estimate_title: "Anslå, hvor mange dokumenter dette valg vil sætte i queue — ingen models køres, og intet ændres"
+ui.kb.help_title: "Vis forklaring"
 ui.kb.estimate_work: "Anslå arbejde"
 ui.kb.estimating: "Beregner..."
 ui.kb.external_label: "External generation lane (dokumentindhold forlader denne maskine)"

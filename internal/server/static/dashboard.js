@@ -475,6 +475,63 @@ window.knowledgeDashboard = () => ({
     await Promise.all([this.loadSuggestions(), this.loadAcceptedCount()]);
   },
 
+  // usage.md is split by "### slug" headings into help fragments; each
+  // fragment is a list of blocks rendered by x-for/x-text (no x-html, so
+  // nothing needs sanitizing). helpOpen holds one slug at a time.
+  helpOpen: null,
+  usageFrags: null,
+
+  async loadUsage() {
+    if (this.usageFrags) return;
+    try {
+      const res = await fetch("/static/usage.md");
+      if (!res.ok) return;
+      this.usageFrags = this.parseUsage(await res.text());
+    } catch {
+      /* help stays unavailable */
+    }
+  },
+
+  parseUsage(md) {
+    const frags = {};
+    let slug = null;
+    for (const line of md.split("\n")) {
+      const h = line.match(/^###\s+(\S+)/);
+      if (h) {
+        slug = h[1];
+        frags[slug] = [];
+        continue;
+      }
+      if (/^#{1,2}\s/.test(line)) slug = null;
+      if (slug) frags[slug].push(line);
+    }
+    for (const k of Object.keys(frags)) {
+      const blocks = [];
+      for (const line of frags[k].join("\n").split(/\n\n+/)) {
+        const t = line.trim();
+        if (!t) continue;
+        if (t.startsWith("- ")) {
+          for (const item of t.split(/\n- /)) {
+            blocks.push({ t: "li", s: item.replace(/^- /, "") });
+          }
+        } else {
+          blocks.push({ t: "p", s: t });
+        }
+      }
+      frags[k] = blocks;
+    }
+    return frags;
+  },
+
+  toggleHelp(id) {
+    this.helpOpen = this.helpOpen === id ? null : id;
+    this.loadUsage();
+  },
+
+  helpBlocks(id) {
+    return (this.usageFrags && this.usageFrags[id]) || [];
+  },
+
   async loadProgress() {
     try {
       const data = await this.requestJSON("/api/progress");

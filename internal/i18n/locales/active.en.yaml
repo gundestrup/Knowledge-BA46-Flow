@@ -44,6 +44,7 @@ ui.kb.estimate_docs_queued:
   other: "{{.Stage}}: {{.Count}} documents queued"
 ui.kb.estimate_empty: "Nothing queued for this selection."
 ui.kb.estimate_title: "Estimate how many documents this selection would queue — no models run, nothing changes"
+ui.kb.help_title: "Show explanation"
 ui.kb.estimate_work: "Estimate work"
 ui.kb.estimating: "Estimating..."
 ui.kb.external_label: "External generation lane (document content leaves this machine)"
