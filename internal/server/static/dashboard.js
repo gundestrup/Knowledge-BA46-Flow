@@ -857,6 +857,15 @@ window.knowledgeDashboard = () => ({
     }
   },
 
+  runningJobs() {
+    return (this.jobs || []).filter((j) => j.status === "running");
+  },
+
+  jobPercent(job) {
+    const m = /(\d+)\/(\d+)/.exec(job?.detail || "");
+    return m ? Math.round((+m[1] / +m[2]) * 100) : null;
+  },
+
   async refreshJobs() {
     try {
       this.jobs = await this.requestJSON("/api/ops");

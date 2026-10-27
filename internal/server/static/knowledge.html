@@ -40,6 +40,27 @@
                 >Knowledge</span
               >
             </a>
+            <ul>
+              <li>
+                <a
+                  href="#operations"
+                  x-text="t('ui.kb.nav_operations', 'Operations')"
+                ></a>
+              </li>
+              <li>
+                <a href="#graph" x-text="t('ui.kb.nav_graph', 'Graph')"></a>
+              </li>
+              <li>
+                <a
+                  href="#suggestions"
+                  x-text="t('ui.kb.nav_suggestions', 'Suggestions')"
+                ></a>
+              </li>
+              <li><a href="#jobs" x-text="t('ui.kb.nav_jobs', 'Jobs')"></a></li>
+              <li>
+                <a href="#index" x-text="t('ui.kb.nav_index', 'Index')"></a>
+              </li>
+            </ul>
           </li>
           <li>
             <a href="/report">
@@ -190,7 +211,7 @@
       </section>
       <main class="kbm-main-section">
         <div class="container dashboard">
-          <section class="card mb-5">
+          <section id="operations" class="card mb-5">
             <header class="card-header">
               <div class="card-header-title">
                 <span class="icon is-medium kbm-icon-badge mr-2"
@@ -729,10 +750,41 @@
                   </div>
                 </div>
               </div>
+              <div class="card kbm-tile" x-show="runningJobs().length">
+                <div class="card-content">
+                  <div class="kbm-tile-row">
+                    <span class="icon is-large kbm-icon-badge"
+                      ><span
+                        class="kbm-icon icon-scan-search"
+                        aria-hidden="true"
+                      ></span
+                    ></span>
+                    <div class="is-flex-grow-1">
+                      <p
+                        class="stat-label"
+                        x-text="t('ui.kb.jobs_running', 'Background work')"
+                      ></p>
+                      <template x-for="job in runningJobs()" :key="job.id">
+                        <div class="mb-1">
+                          <p
+                            class="is-size-7"
+                            x-text="job.op + ': ' + (job.detail || job.status)"
+                          ></p>
+                          <progress
+                            class="progress is-small is-info mb-0"
+                            :value="jobPercent(job)"
+                            :max="100"
+                          ></progress>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
-          <section class="card mb-5">
+          <section id="graph" class="card mb-5">
             <header class="card-header">
               <div class="card-header-title">
                 <span class="icon is-medium kbm-icon-badge mr-2"
@@ -769,7 +821,7 @@
             </div>
           </section>
 
-          <section class="card mb-5">
+          <section id="suggestions" class="card mb-5">
             <header class="card-header">
               <div class="card-header-title">
                 <span class="icon is-medium kbm-icon-badge mr-2"
@@ -1201,7 +1253,7 @@
             </div>
           </section>
 
-          <section class="card mb-5">
+          <section id="jobs" class="card mb-5">
             <header class="card-header">
               <div class="card-header-title">
                 <span class="icon is-medium kbm-icon-badge mr-2"
@@ -1271,7 +1323,7 @@
             </div>
           </section>
 
-          <section class="card">
+          <section id="index" class="card">
             <header class="card-header">
               <div class="card-header-title">
                 <span class="icon is-medium kbm-icon-badge mr-2"
