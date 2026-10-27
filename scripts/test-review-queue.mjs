@@ -191,6 +191,7 @@ for (const key of [
   "web-verify",
   "estimate",
   "lanes",
+  "revalidate",
   "write-scope",
   "document-id",
 ]) {

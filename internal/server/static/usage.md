@@ -66,6 +66,16 @@ never silently credits one lane with the other's work.
 
 ## Review
 
+### revalidate
+Revalidate queue classifies every pending suggestion against the live
+files — a read-only preview, nothing is retired until you confirm.
+
+- `valid` rows are untouched; `invalid`/`stale`/`missing` rows can be
+  retired with machine-readable audit reasons.
+- Scope-blocked rows (e.g. body changes under `metadata-links`) stay
+  parked, never force-retired.
+- Run it after scans or bulk analysis to keep the review queue honest.
+
 ### write-scope
 The `write_scope` config limits what an accepted suggestion may change
 even after a human accepts it. `metadata-links` (default) allows

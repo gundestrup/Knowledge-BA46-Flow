@@ -200,17 +200,6 @@
                   x-text="t('ui.kb.operations_heading', 'Operations')"
                 ></span>
               </div>
-              <div class="kbm-card-header-actions">
-                <button
-                  type="button"
-                  class="button is-warning is-small"
-                  :disabled="busy || applying || acceptedCount === 0"
-                  @click="applyAccepted()"
-                >
-                  <span class="kbm-icon icon-check" aria-hidden="true"></span>
-                  <span x-text="applyLabel()"></span>
-                </button>
-              </div>
             </header>
             <div class="card-content">
               <div class="buttons">
@@ -816,6 +805,22 @@
                   @click="previewReconciliation()"
                   x-text="t('ui.kb.reconcile_preview', 'Revalidate queue')"
                 ></button>
+                <button
+                  type="button"
+                  class="button is-ghost is-small kbm-help-btn"
+                  :title="t('ui.kb.help_title', 'Show explanation')"
+                  @click.prevent.stop="toggleHelp('revalidate')"
+                  aria-hidden="true"
+                  tabindex="-1"
+                >
+                  ?
+                </button>
+                <div class="kbm-help-card" x-show="helpOpen==='revalidate'">
+                  <template x-for="b in helpBlocks('revalidate')" :key="b.s">
+                    <p x-show="b.t==='p'" class="mb-1" x-text="b.s"></p>
+                    <li x-show="b.t==='li'" x-text="b.s"></li>
+                  </template>
+                </div>
                 <div class="select mr-2">
                   <select
                     :aria-label="t('ui.kb.type_filter', 'Filter notes by change type')"
