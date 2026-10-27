@@ -1,8 +1,9 @@
-# Knowledge
+# Usage
 
 ## Run options
 
 ### expand
+
 Stub expansion grows placeholder notes — `stub`-tagged notes or notes
 with at most `stub_max_body_lines` non-empty body lines (default 5) —
 against the `STUB.md` template found in their category directory.
@@ -11,6 +12,7 @@ against the `STUB.md` template found in their category directory.
 - Proposals land in the review queue like any other suggestion.
 
 ### reanalyze
+
 Re-analyse documents whose *stamped* model differs from the selected
 one. This is not a force-all: documents already evaluated by the same
 model with the same inputs stay skipped.
@@ -20,6 +22,7 @@ model with the same inputs stay skipped.
   content/prompt drift.
 
 ### external
+
 External generation lane. Document content leaves this machine — the
 model runs at its provider (e.g. `gpt-oss:120b-cloud` via Ollama).
 
@@ -30,6 +33,7 @@ model runs at its provider (e.g. `gpt-oss:120b-cloud` via Ollama).
 - `no_llm_context` notes are never sent.
 
 ### allow-cloud
+
 Separate consent for off-machine embeddings and enrichment. It does
 not switch the generation lane — it only permits `embed`/`enrich`
 stages to use remote models for this run.
@@ -38,6 +42,7 @@ stages to use remote models for this run.
 - Remote embedding of a corpus is itself a privacy decision.
 
 ### web-verify
+
 Verifies freshness flags against Ollama's hosted web search. Flagged
 claim text — never the whole document — is sent to `ollama.com`.
 
@@ -47,6 +52,7 @@ claim text — never the whole document — is sent to `ollama.com`.
 - The `verify` lane is separately routable in `ollama_task_models`.
 
 ### estimate
+
 Dry-run the current selection before spending model calls.
 
 - Counts are computed from the latest scan snapshot; the task scans
@@ -56,6 +62,7 @@ Dry-run the current selection before spending model calls.
   in by changed evidence.
 
 ### lanes
+
 Two independent ledgers track which model evaluated what, so a run
 never silently credits one lane with the other's work.
 
@@ -67,6 +74,7 @@ never silently credits one lane with the other's work.
 ## Review
 
 ### revalidate
+
 Revalidate queue classifies every pending suggestion against the live
 files — a read-only preview, nothing is retired until you confirm.
 
@@ -77,14 +85,17 @@ files — a read-only preview, nothing is retired until you confirm.
 - Run it after scans or bulk analysis to keep the review queue honest.
 
 ### write-scope
+
 The `write_scope` config limits what an accepted suggestion may change
 even after a human accepts it. `metadata-links` (default) allows
 frontmatter and verified link repairs only; `content`/`all` unlock body
 and file operations.
 
 ### document-id
+
 `document_id` is a stable UUID assigned in place during scanning when a
 note lacks one. It is excluded from the content hash — assignment never
 invalidates proposals — and proposals can never change it.
 
-# Report
+
+## Report
