@@ -1,0 +1,51 @@
+# taxonomy.yaml — controlled tag vocabulary (place at the corpus root)
+#
+# Only values listed here may appear in frontmatter `tags:`.
+# Add new tags here first, then use them.
+version: 1
+
+kind:
+  - programming-language
+  - framework
+  - library
+  - database
+  - tool
+  # topical note families — exempt from requires-language
+  - pattern
+  - lesson
+  - repo
+  - workflow
+  - prompt
+
+kind-major:
+  - programming-language
+  - database
+
+kind-dependent:
+  - framework
+  - library
+
+requires-language:
+  - framework
+  - library
+
+subject:
+  languages:
+    - go
+    - python
+    - ruby
+    - typescript
+  platforms:
+    - jekyll
+    - ollama
+  database-categories:
+    - relational
+    - document
+    - embedded
+
+function:
+  - testing
+  - documentation
+  - security
+  - ai
+  - state-management

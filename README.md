@@ -21,6 +21,62 @@ command-line tool is called KBM-flow.
 > published. The `0.x` version indicates the API is not stable. Back up the
 > repository before applying suggestions.
 
+## Quick start
+
+```bash
+go build -o KBM-flow ./cmd/KBM-flow          # or: make build
+cp config.json config.local.json           # edit repository_path + ollama_model
+./KBM-flow serve --config config.local.json
+```
+
+Dashboard at `http://127.0.0.1:8080`. The operating loop is
+**scan → run tasks → review → apply → reindex** — every LLM op scans
+first, so just press _Run all tasks_ on the knowledge page, review the
+pending queue, accept what looks right, and apply. Minimal config:
+
+```json
+{
+  "repository_path": "/path/to/your/notes",
+  "database_path": "/path/to/your/notes/.kbm/state.db",
+  "ollama_model": "gemma3:12b"
+}
+```
+
+For a zero-risk first run, use `example-configs/config.example-data.json`
+against the bundled `example-knowledge/` shelf instead.
+
+### Recommended corpus layout (e.g. an engineering-memory repo)
+
+```text
+your-notes-repo/
+  taxonomy.yaml          # optional: approved tag vocabulary (constrains model tags)
+  .kb-policy.json        # optional: {"mutations": "deny"} blocks writes here
+  .kbm/
+    config.json          # this tool's config for the corpus
+    state.db             # SQLite state — gitignore it (see below)
+  docs/, notes/, …        # Markdown shelves
+```
+
+The MCP server either reads the corpus directly
+(`KNOWLEDGE_BASES_ROOT_DIR=<repo>` or a subdirectory) or through a
+**symbolic link** inside its knowledge-bases directory pointing at the
+shelf — both work; keep `repository_path` aimed at the same shelf.
+After `apply`, touch `<shelf>/.reindex-trigger` (automatic in Docker
+compose) or run `kb reindex` so retrieval sees the changes.
+
+Corpus `.gitignore` should keep tool state out of git:
+
+```gitignore
+.kbm/state.db*
+.kbm/*.log
+.kbm-trash/
+.reindex-trigger
+```
+
+Policy and taxonomy examples: `example-knowledge/*/.kb-policy.json`
+(`{"mutations": "deny"}`) and `example-configs/taxonomy.example.yaml`;
+the schema is documented in `docs/FUNCTIONS.md`.
+
 ## Documentation
 
 - `docs/INSTALLATION.md`: local installation and Docker installation

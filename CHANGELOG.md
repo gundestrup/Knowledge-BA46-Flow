@@ -9,38 +9,6 @@ tag is prepared.
 
 ## [Unreleased]
 
-### Fixed
-
-- Deterministic link repair no longer treats an unchanged live document as a
-  rename or rewrites valid relative links into incorrect repository paths.
-  Genuine repairs retain document-relative Markdown destinations and are
-  validated against rename evidence before review and again before apply.
-- Apply preserves the latest tool-owned `kbm` metadata instead of rejecting
-  otherwise valid proposals after link-check/freshness updates.
-- CLI/HTTP acceptance checks current sources, invalid expansion content and
-  already-accepted alternatives. Successful applies immediately supersede
-  other old source snapshots with an inspectable reason.
-- Apply outcomes persist batch IDs and attempt timestamps, expose per-document
-  errors, and report reindex-trigger failures separately instead of counting
-  the trigger touch as another applied suggestion.
-- Generation operations now scan before selecting work and refuse to send a
-  live file that changed after the scan with a stale database snapshot. This
-  prevents analysis from reading one version while stamping another.
-- Managed writes and identity insertion no longer assume top-level
-  frontmatter keys sit at column 0. `SetManaged`/`Canonical` excise the
-  `kbm`/`document_id` block at the mapping's actual indent — an indented
-  file previously kept its old block while a duplicate was appended,
-  corrupting the document; `document_id` insertion now matches the file's
-  own indent instead of producing mixed-indent YAML.
-- Task selection separates strict proposal/source hashes from semantic work
-  fingerprints. `related`/`contradicted_by` and relative Markdown link targets
-  no longer re-run LLM evaluation or fan out dependent analysis; visible text,
-  meaningful metadata, model changes and prompt/policy changes still do.
-- Proposal frontmatter now uses a stable authoring order (`document_id`,
-  `title`, `summary`, graph/retrieval fields, remaining metadata, `kbm` last),
-  preventing YAML map sorting from moving unchanged fields on every rewrite.
-  Existing notes are not bulk-reformatted.
-
 ### Added
 
 - Restrictive `write_scope` policy (`metadata-links` by default; explicit
@@ -185,73 +153,6 @@ tag is prepared.
   `scripts/check-i18n.mjs` (wired into `npm run check:js`) fails on ids with
   no catalog entry, dead catalog keys, secondary-catalog keys unknown to
   English, and plural/string shape mismatches.
-
-### Changed
-
-- Review-queue decisions now update the UI optimistically: accepting,
-  rejecting or withdrawing a suggestion removes the card immediately and
-  adjusts the pending/accepted counts locally, while a queue-only refresh
-  reconciles server state in the background — the ~2 MB documents payload
-  and the progress chart are no longer refetched per click. Reconciliation
-  confirms use the same queue-scoped refresh.
-- Bounded generation clients now self-adapt their output cap: a reply
-  truncated at `enrichment_max_tokens` is retried once with a 4× cap (learned
-  ceiling 8192), and a cap that proves sufficient is reused for subsequent
-  calls — verbose/cloud models no longer require a manual config bump for
-  occasional oversized replies.
-- Frontend asset structure: the shared stylesheet is now `base.css` (design
-  tokens, icons, shell, cards, tiles) with page rules split into
-  `landing.css`, `knowledge.css`, and `report.css` — zero selectors appear in
-  two files; `.report-icon` folded into the shared `.kbm-icon` normalizer
-  with `.kbm-icon-colored` marking status icons that keep their tint in dark
-  mode. Shared JavaScript moved into `common.js` loaded before each page
-  script: i18n helpers, `requestJSON`, `formatTime`, the dialog modal, the
-  theme-aware Chart.js options block, `jobTagClass`, and the common UI state
-  fields — removing the copy-pasted boilerplate from `dashboard.js`,
-  `landing.js`, and `report.js`. Chart instances are tracked through
-  Chart.js's own `Chart.getChart` registry instead of a hand-rolled map.
-  The burger control uses Bulma's built-in `navbar-burger` instead of
-  custom markup/CSS.
-- Frontend tooling file lists are now globs (`static/*.js`, `scripts/**/*.mjs`)
-  instead of per-script enumerations — the filesystem is the single source of
-  truth, so new frontend files are linted/formatted/checked automatically.
-  `node --check` coverage moved into `scripts/check-static-js.mjs` (globs the
-  directory), and the component-test VM boilerplate is shared via
-  `scripts/eval-component.mjs`.
-- The `/knowledge` progress chart no longer plots the cumulative
-  `suggestions`/`handled` counters — monotone totals that never return to
-  zero duplicated each other's climb and obscured the trend. They now render
-  as compact totals (e.g. "7.6K suggestions · 7.6K handled") beneath the
-  "Suggestions to review" stat; the chart keeps notes, analyses, applied
-  suggestions and the review-backlog line (`suggestions − handled`).
-- Pending and accepted suggestions for `missing` documents — files the
-  scanner no longer sees, like a deleted or moved-away directory — no longer
-  appear in the review list or the apply queue; they resurface if the file
-  returns. A source file that vanished before apply now ends `superseded`
-  rather than `failed`, and a missing document that reappears unchanged has
-  its `analyzed` status restored instead of staying `missing`.
-- The review-backlog line on `/knowledge` no longer stays inflated by
-  superseded suggestions: leaving the pending queue (supersede, apply
-  failure) now stamps `decided_at`, and existing superseded/failed rows are
-  backfilled to their creation day so historical backlog approximates what
-  was actually open.
-- Scan recognizes renames by canonical hash: a moved file keeps its analysis
-  lineage, embeddings and pending suggestions instead of being treated as a
-  deletion plus a brand-new document (only for an unambiguous single match —
-  moved-and-edited files, duplicated content and vanished same-hash pairs
-  stay separate documents).
-- `ModelStamps` (the dashboard's "last used" lineage) ignores missing
-  documents so a deleted directory can no longer dominate the dominant-model
-  answer.
-- Detected renames are recorded (`renames` table, schema v10) and the next
-  pipeline run deterministically proposes retargeting `related`/
-  `contradicted_by` entries and body links that still point at the old path —
-  following move chains to the live file, spending no model calls — rather
-  than dropping the links as unresolved. Pending and accepted `merge`
-  suggestions follow the renamed target in the same transaction; `move`
-  destinations intentionally stay, since the vacated slot is still valid.
-
-### Added
 
 - Reviewer feedback loop: rejecting a suggestion may carry a short reason —
   `reject ID --note "why"`, `POST /api/suggestions/{id}/decide` `{"note": ...}`,
@@ -576,64 +477,135 @@ check-links`, `{"op":"link-check"}` in `/api/ops`, or the dashboard's
   incremental rescan). Discovered crashers live in `testdata/fuzz/` as a
   permanent regression corpus.
 
-### Fixed
+- Per-document analysis progress: the `analyze`/`run` CLI commands print a
+  `[i/N] path` line plus the per-document outcome, and HTTP analyze/run jobs
+  update their `detail` while running so the dashboard shows the document in
+  flight instead of a silent "In progress…".
+- Live dashboard updates: `/knowledge` keeps polling `/api/ops` while idle
+  (10s cadence) so CLI-started runs appear without a manual refresh, and
+  refreshes documents/suggestions during a running op.
+- Cross-process operation guard: `scan`/`analyze`/`run` now record durable
+  jobs with a heartbeat; starting any op while a live job runs — from CLI or
+  HTTP — is refused (`job #N (op) is already running`, HTTP 409). Jobs whose
+  heartbeat freezes for 90s (e.g. a killed process) are swept to `failed`
+  instead of blocking future runs. `/api/apply` is also refused while a
+  background job is live.
+- Graceful shutdown from the UI: `POST /api/shutdown` (loopback only) and a
+  Stop server button on the knowledge dashboard. Refuses with `409` while an
+  operation runs in this process unless `?force=1` is sent.
+- Job-history retention: the `jobs` table (which also holds report run
+  history) is bounded automatically — every new job prunes finished rows
+  beyond the newest 200 — and `KBM-flow prune --keep N` applies a manual bound
+  and sweeps stale `running` rows to `failed`. Running jobs are never pruned.
+- Analysis provenance: each document records `analyzed_model` — the model that
+  produced its last analysis — shown in the dashboard and in job summaries.
+  `analyze --reanalyze` / `run --reanalyze` (or `reanalyze: true` in the
+  `/api/ops` body / dashboard checkbox) redoes documents analyzed under a
+  different model; re-analysis supersedes the document's still-pending
+  suggestions while keeping accepted/rejected decisions. The landing page
+  reports how many documents were analyzed with another model.
 
-- Evidence-dependents sweep no longer collapses under a dense embedding
-  model: the absolute cosine threshold (0.72) is replaced by a per-run
-  calibrated gate — each changed note contributes at most its 16 nearest
-  neighbors, and only pairs above the 95th percentile of the corpus's own
-  sampled cosine distribution. Cosine scores are model-specific, so a fixed
-  bar tuned on one model re-analyzed nearly the whole repository after a
-  denser model was selected.
-- Dashboard "Inspect proposed content" stayed on "Loading…" forever, from
-  two distinct CSP-build issues in `knowledge.html`. First, expressions
-  calling `JSON.stringify`/`Math.round` threw "Undefined variable" — the
-  `@alpinejs/csp` evaluator resolves no host globals. Second and deeper:
-  `x-text="proposalText(suggestion.id)"` never updated because the CSP
-  evaluator calls template-invoked methods with `this` bound to a scope
-  object rather than the reactive component proxy, so `this.proposals[id]`
-  reads inside the method were never tracked and the binding went stale.
-  Expressions now read reactive state directly
-  (`proposalText(proposals[suggestion.id])`, with `proposalText` a pure
-  formatter), global access moved into `linkCheckTooltip`,
-  `freshnessTooltip`, and `confidenceLabel` component methods, and
-  `TestTemplatesAvoidForbiddenGlobals` lints Alpine attribute expressions
-  against a full host-global denylist. Verified end-to-end in a real
-  browser via Chrome DevTools Protocol.
-- Same class audited across every template: two more `x-for`-scoped methods
-  read mutable `this.*` state — `:disabled="modelUnavailable(m)"` read
-  `this.discovered` and `repoDetails(repo)` read `this.snapshot` — both
-  could go stale the same way. Both now receive the reactive value as an
-  explicit argument (`modelUnavailable(m, discovered)`,
-  `repoDetails(repo, snapshot)`). Argument-pure helpers, component-scope
-  calls (like `filteredSuggestions()`), and event handlers were verified
-  unaffected — handlers get the reactive `this`, writes propagate.
-- `frontmatter.SetManaged` could emit a `kbm` block the parser silently
-  drops: when the frontmatter's top-level mapping is indented (valid but
-  unusual YAML), the column-0 `kbm:` insertion landed outside the mapping.
-  The write is now self-verifying — the result must re-parse with `kbm`
-  reachable and the canonical hash unchanged — and frontmatter shapes that
-  cannot host a block fail closed instead of losing the write.
-- `frontmatter.CanonicalParts` kept an empty `---\n---\n` block as literal
-  bytes while `Parse` consumed it as an empty mapping, so a managed write
-  into an empty block changed the canonical hash. Empty blocks now collapse
-  like `kbm`-only ones, keeping managed writes hash-neutral.
-- `links.ExternalURLs` treated any scheme starting with `http` (e.g.
-  `http0://`) as an external URL in link targets; only `http://`/`https://`
-  qualify now — matching the bare-URL pass.
-- `tasks`/`all --model` applied the override to the embed lane too, so a
-  chat model was sent to `/api/embed` and the batch aborted. The override
-  now covers generation lanes only; embed uses its configured lane or an
-  independent `--embed-model` override (standalone `embed --model` remains a
-  backward-compatible alias).
-- Freshness structured output now constrains `target_path` to the empty
-  string, matching the in-place-only correction contract. The local proposal
-  validator remains authoritative for non-additive body edits and code changes.
-- CLI task model selection now uses the same capability/privacy preflight as
-  analyze/run and the HTTP API; cloud generation requires `--external`, while
-  remote enrichment/embedding requires `--allow-cloud`.
+- A landing page at `/` with Bulma summary cards for the knowledge workflow and
+  repository fleet; the full knowledge dashboard now lives at `/knowledge`,
+  and the repository report remains at `/report`.
+- A Go repository report with local checks, GitHub/Forgejo/CodeFactor/Sonar/
+  Semgrep collectors, Ruby gem-fleet analysis, and Node/npm lockfile,
+  runtime-version, drift, and outdated-package checks. It is configured
+  through `report.registry_path` and optional `report.policy_path`; it remains
+  read-only toward registered repos and does not run `kb-sync`.
+- Report CLI controls for local-only refresh, one-repository refresh, forced
+  remote/cache refresh, and full JSON output.
+- Sortable repository columns and report-signal filters for open pull requests,
+  Semgrep findings, Sonar gate failures, any selected signal, or repositories
+  matching all three signals.
+- Safe browser links from report rows to HTTP(S) repository remotes.
+- Optional timestamped reference totals and seed cache from the original Ruby
+  report's `data.json` (`report.comparison_path`) for migration validation.
+- A dashboard summary API for changed documents, days since the last
+  successful `run` cycle, repository count, scanner totals, and available
+  comparison metrics.
+- Frontmatter curation: `scan` parses and validates a document's YAML
+  frontmatter against the knowledge-base-mcp-server field whitelist, stores
+  the parsed fields and local issues per document, feeds them to the analyzer,
+  and applies LLM-proposed corrections through the normal `expand`/`merge`
+  review flow with a strict re-check at apply time.
+- `mcp_server` config option selects the target-server prompt file
+  (`prompts/<mcp_server>.md`); it defaults to `knowledge-base-mcp-server` and
+  rejects unknown values until more servers are supported.
+- The analyzer prompt now runs ordered review passes (freshness, similarity,
+  linking/backlinks, location, completeness/frontmatter, deletion) with
+  deterministic context: inbound `related` links, unreferenced sibling files,
+  file modification date, and ranked merge candidates (same directory and
+  already-linked documents first).
+- Versioned CLI builds from the root `VERSION` file, with version/tag/changelog
+  consistency checks before release tags.
+- Monthly Dependabot updates for Go modules, npm frontend assets, Docker base
+  images, and GitHub Actions.
 
 ### Changed
+
+- Review-queue decisions now update the UI optimistically: accepting,
+  rejecting or withdrawing a suggestion removes the card immediately and
+  adjusts the pending/accepted counts locally, while a queue-only refresh
+  reconciles server state in the background — the ~2 MB documents payload
+  and the progress chart are no longer refetched per click. Reconciliation
+  confirms use the same queue-scoped refresh.
+- Bounded generation clients now self-adapt their output cap: a reply
+  truncated at `enrichment_max_tokens` is retried once with a 4× cap (learned
+  ceiling 8192), and a cap that proves sufficient is reused for subsequent
+  calls — verbose/cloud models no longer require a manual config bump for
+  occasional oversized replies.
+- Frontend asset structure: the shared stylesheet is now `base.css` (design
+  tokens, icons, shell, cards, tiles) with page rules split into
+  `landing.css`, `knowledge.css`, and `report.css` — zero selectors appear in
+  two files; `.report-icon` folded into the shared `.kbm-icon` normalizer
+  with `.kbm-icon-colored` marking status icons that keep their tint in dark
+  mode. Shared JavaScript moved into `common.js` loaded before each page
+  script: i18n helpers, `requestJSON`, `formatTime`, the dialog modal, the
+  theme-aware Chart.js options block, `jobTagClass`, and the common UI state
+  fields — removing the copy-pasted boilerplate from `dashboard.js`,
+  `landing.js`, and `report.js`. Chart instances are tracked through
+  Chart.js's own `Chart.getChart` registry instead of a hand-rolled map.
+  The burger control uses Bulma's built-in `navbar-burger` instead of
+  custom markup/CSS.
+- Frontend tooling file lists are now globs (`static/*.js`, `scripts/**/*.mjs`)
+  instead of per-script enumerations — the filesystem is the single source of
+  truth, so new frontend files are linted/formatted/checked automatically.
+  `node --check` coverage moved into `scripts/check-static-js.mjs` (globs the
+  directory), and the component-test VM boilerplate is shared via
+  `scripts/eval-component.mjs`.
+- The `/knowledge` progress chart no longer plots the cumulative
+  `suggestions`/`handled` counters — monotone totals that never return to
+  zero duplicated each other's climb and obscured the trend. They now render
+  as compact totals (e.g. "7.6K suggestions · 7.6K handled") beneath the
+  "Suggestions to review" stat; the chart keeps notes, analyses, applied
+  suggestions and the review-backlog line (`suggestions − handled`).
+- Pending and accepted suggestions for `missing` documents — files the
+  scanner no longer sees, like a deleted or moved-away directory — no longer
+  appear in the review list or the apply queue; they resurface if the file
+  returns. A source file that vanished before apply now ends `superseded`
+  rather than `failed`, and a missing document that reappears unchanged has
+  its `analyzed` status restored instead of staying `missing`.
+- The review-backlog line on `/knowledge` no longer stays inflated by
+  superseded suggestions: leaving the pending queue (supersede, apply
+  failure) now stamps `decided_at`, and existing superseded/failed rows are
+  backfilled to their creation day so historical backlog approximates what
+  was actually open.
+- Scan recognizes renames by canonical hash: a moved file keeps its analysis
+  lineage, embeddings and pending suggestions instead of being treated as a
+  deletion plus a brand-new document (only for an unambiguous single match —
+  moved-and-edited files, duplicated content and vanished same-hash pairs
+  stay separate documents).
+- `ModelStamps` (the dashboard's "last used" lineage) ignores missing
+  documents so a deleted directory can no longer dominate the dominant-model
+  answer.
+- Detected renames are recorded (`renames` table, schema v10) and the next
+  pipeline run deterministically proposes retargeting `related`/
+  `contradicted_by` entries and body links that still point at the old path —
+  following move chains to the live file, spending no model calls — rather
+  than dropping the links as unresolved. Pending and accepted `merge`
+  suggestions follow the renamed target in the same transaction; `move`
+  destinations intentionally stay, since the vacated slot is still valid.
 
 - The report's combined "Node and gem health" section is now two sections —
   **Gem health** and **Node and npm health** — rendered by `gemFleetDetails()`
@@ -803,75 +775,6 @@ check-links`, `{"op":"link-check"}` in `/api/ops`, or the dashboard's
 - `containsString` and the identical `githubPull`/`forgejoPull` structs
   replaced by `slices.Contains` and a shared `pull`/`pullFields` pair.
 
-### Added
-
-- Per-document analysis progress: the `analyze`/`run` CLI commands print a
-  `[i/N] path` line plus the per-document outcome, and HTTP analyze/run jobs
-  update their `detail` while running so the dashboard shows the document in
-  flight instead of a silent "In progress…".
-- Live dashboard updates: `/knowledge` keeps polling `/api/ops` while idle
-  (10s cadence) so CLI-started runs appear without a manual refresh, and
-  refreshes documents/suggestions during a running op.
-- Cross-process operation guard: `scan`/`analyze`/`run` now record durable
-  jobs with a heartbeat; starting any op while a live job runs — from CLI or
-  HTTP — is refused (`job #N (op) is already running`, HTTP 409). Jobs whose
-  heartbeat freezes for 90s (e.g. a killed process) are swept to `failed`
-  instead of blocking future runs. `/api/apply` is also refused while a
-  background job is live.
-- Graceful shutdown from the UI: `POST /api/shutdown` (loopback only) and a
-  Stop server button on the knowledge dashboard. Refuses with `409` while an
-  operation runs in this process unless `?force=1` is sent.
-- Job-history retention: the `jobs` table (which also holds report run
-  history) is bounded automatically — every new job prunes finished rows
-  beyond the newest 200 — and `KBM-flow prune --keep N` applies a manual bound
-  and sweeps stale `running` rows to `failed`. Running jobs are never pruned.
-- Analysis provenance: each document records `analyzed_model` — the model that
-  produced its last analysis — shown in the dashboard and in job summaries.
-  `analyze --reanalyze` / `run --reanalyze` (or `reanalyze: true` in the
-  `/api/ops` body / dashboard checkbox) redoes documents analyzed under a
-  different model; re-analysis supersedes the document's still-pending
-  suggestions while keeping accepted/rejected decisions. The landing page
-  reports how many documents were analyzed with another model.
-
-- A landing page at `/` with Bulma summary cards for the knowledge workflow and
-  repository fleet; the full knowledge dashboard now lives at `/knowledge`,
-  and the repository report remains at `/report`.
-- A Go repository report with local checks, GitHub/Forgejo/CodeFactor/Sonar/
-  Semgrep collectors, Ruby gem-fleet analysis, and Node/npm lockfile,
-  runtime-version, drift, and outdated-package checks. It is configured
-  through `report.registry_path` and optional `report.policy_path`; it remains
-  read-only toward registered repos and does not run `kb-sync`.
-- Report CLI controls for local-only refresh, one-repository refresh, forced
-  remote/cache refresh, and full JSON output.
-- Sortable repository columns and report-signal filters for open pull requests,
-  Semgrep findings, Sonar gate failures, any selected signal, or repositories
-  matching all three signals.
-- Safe browser links from report rows to HTTP(S) repository remotes.
-- Optional timestamped reference totals and seed cache from the original Ruby
-  report's `data.json` (`report.comparison_path`) for migration validation.
-- A dashboard summary API for changed documents, days since the last
-  successful `run` cycle, repository count, scanner totals, and available
-  comparison metrics.
-- Frontmatter curation: `scan` parses and validates a document's YAML
-  frontmatter against the knowledge-base-mcp-server field whitelist, stores
-  the parsed fields and local issues per document, feeds them to the analyzer,
-  and applies LLM-proposed corrections through the normal `expand`/`merge`
-  review flow with a strict re-check at apply time.
-- `mcp_server` config option selects the target-server prompt file
-  (`prompts/<mcp_server>.md`); it defaults to `knowledge-base-mcp-server` and
-  rejects unknown values until more servers are supported.
-- The analyzer prompt now runs ordered review passes (freshness, similarity,
-  linking/backlinks, location, completeness/frontmatter, deletion) with
-  deterministic context: inbound `related` links, unreferenced sibling files,
-  file modification date, and ranked merge candidates (same directory and
-  already-linked documents first).
-- Versioned CLI builds from the root `VERSION` file, with version/tag/changelog
-  consistency checks before release tags.
-- Monthly Dependabot updates for Go modules, npm frontend assets, Docker base
-  images, and GitHub Actions.
-
-### Changed
-
 - CLI `run` cycles are persisted in SQLite so the landing page reports the
   last successful cycle consistently for CLI and web runs.
 - MCP-targeted scanning skips dot-prefixed entries, the server's built-in
@@ -886,6 +789,93 @@ check-links`, `{"op":"link-check"}` in `/api/ops`, or the dashboard's
 - The browser dashboard uses pinned, locally embedded Bulma and Alpine.js
   assets with CI checks for asset consistency, JavaScript, CSS, and formatting.
 - Docker builder and runtime images use pinned Debian Trixie-based images.
+
+### Fixed
+
+- Deterministic link repair no longer treats an unchanged live document as a
+  rename or rewrites valid relative links into incorrect repository paths.
+  Genuine repairs retain document-relative Markdown destinations and are
+  validated against rename evidence before review and again before apply.
+- Apply preserves the latest tool-owned `kbm` metadata instead of rejecting
+  otherwise valid proposals after link-check/freshness updates.
+- CLI/HTTP acceptance checks current sources, invalid expansion content and
+  already-accepted alternatives. Successful applies immediately supersede
+  other old source snapshots with an inspectable reason.
+- Apply outcomes persist batch IDs and attempt timestamps, expose per-document
+  errors, and report reindex-trigger failures separately instead of counting
+  the trigger touch as another applied suggestion.
+- Generation operations now scan before selecting work and refuse to send a
+  live file that changed after the scan with a stale database snapshot. This
+  prevents analysis from reading one version while stamping another.
+- Managed writes and identity insertion no longer assume top-level
+  frontmatter keys sit at column 0. `SetManaged`/`Canonical` excise the
+  `kbm`/`document_id` block at the mapping's actual indent — an indented
+  file previously kept its old block while a duplicate was appended,
+  corrupting the document; `document_id` insertion now matches the file's
+  own indent instead of producing mixed-indent YAML.
+- Task selection separates strict proposal/source hashes from semantic work
+  fingerprints. `related`/`contradicted_by` and relative Markdown link targets
+  no longer re-run LLM evaluation or fan out dependent analysis; visible text,
+  meaningful metadata, model changes and prompt/policy changes still do.
+- Proposal frontmatter now uses a stable authoring order (`document_id`,
+  `title`, `summary`, graph/retrieval fields, remaining metadata, `kbm` last),
+  preventing YAML map sorting from moving unchanged fields on every rewrite.
+  Existing notes are not bulk-reformatted.
+
+- Evidence-dependents sweep no longer collapses under a dense embedding
+  model: the absolute cosine threshold (0.72) is replaced by a per-run
+  calibrated gate — each changed note contributes at most its 16 nearest
+  neighbors, and only pairs above the 95th percentile of the corpus's own
+  sampled cosine distribution. Cosine scores are model-specific, so a fixed
+  bar tuned on one model re-analyzed nearly the whole repository after a
+  denser model was selected.
+- Dashboard "Inspect proposed content" stayed on "Loading…" forever, from
+  two distinct CSP-build issues in `knowledge.html`. First, expressions
+  calling `JSON.stringify`/`Math.round` threw "Undefined variable" — the
+  `@alpinejs/csp` evaluator resolves no host globals. Second and deeper:
+  `x-text="proposalText(suggestion.id)"` never updated because the CSP
+  evaluator calls template-invoked methods with `this` bound to a scope
+  object rather than the reactive component proxy, so `this.proposals[id]`
+  reads inside the method were never tracked and the binding went stale.
+  Expressions now read reactive state directly
+  (`proposalText(proposals[suggestion.id])`, with `proposalText` a pure
+  formatter), global access moved into `linkCheckTooltip`,
+  `freshnessTooltip`, and `confidenceLabel` component methods, and
+  `TestTemplatesAvoidForbiddenGlobals` lints Alpine attribute expressions
+  against a full host-global denylist. Verified end-to-end in a real
+  browser via Chrome DevTools Protocol.
+- Same class audited across every template: two more `x-for`-scoped methods
+  read mutable `this.*` state — `:disabled="modelUnavailable(m)"` read
+  `this.discovered` and `repoDetails(repo)` read `this.snapshot` — both
+  could go stale the same way. Both now receive the reactive value as an
+  explicit argument (`modelUnavailable(m, discovered)`,
+  `repoDetails(repo, snapshot)`). Argument-pure helpers, component-scope
+  calls (like `filteredSuggestions()`), and event handlers were verified
+  unaffected — handlers get the reactive `this`, writes propagate.
+- `frontmatter.SetManaged` could emit a `kbm` block the parser silently
+  drops: when the frontmatter's top-level mapping is indented (valid but
+  unusual YAML), the column-0 `kbm:` insertion landed outside the mapping.
+  The write is now self-verifying — the result must re-parse with `kbm`
+  reachable and the canonical hash unchanged — and frontmatter shapes that
+  cannot host a block fail closed instead of losing the write.
+- `frontmatter.CanonicalParts` kept an empty `---\n---\n` block as literal
+  bytes while `Parse` consumed it as an empty mapping, so a managed write
+  into an empty block changed the canonical hash. Empty blocks now collapse
+  like `kbm`-only ones, keeping managed writes hash-neutral.
+- `links.ExternalURLs` treated any scheme starting with `http` (e.g.
+  `http0://`) as an external URL in link targets; only `http://`/`https://`
+  qualify now — matching the bare-URL pass.
+- `tasks`/`all --model` applied the override to the embed lane too, so a
+  chat model was sent to `/api/embed` and the batch aborted. The override
+  now covers generation lanes only; embed uses its configured lane or an
+  independent `--embed-model` override (standalone `embed --model` remains a
+  backward-compatible alias).
+- Freshness structured output now constrains `target_path` to the empty
+  string, matching the in-place-only correction contract. The local proposal
+  validator remains authoritative for non-additive body edits and code changes.
+- CLI task model selection now uses the same capability/privacy preflight as
+  analyze/run and the HTTP API; cloud generation requires `--external`, while
+  remote enrichment/embedding requires `--allow-cloud`.
 
 ### Security
 
