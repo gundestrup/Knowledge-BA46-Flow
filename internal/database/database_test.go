@@ -422,6 +422,36 @@ func TestKnowledgeDashboardCountsUnanalyzedFilesAndLastRunCycle(t *testing.T) {
 	}
 }
 
+func TestKnowledgeDashboardSeparatesLocalAndExternalLineage(t *testing.T) {
+	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "lanes.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	doc := Document{
+		Path: "a.md", SHA256: "source-v1", SemanticSHA256: "semantic-v1",
+		AnalysisInputSHA256: "analysis-v1", EnrichmentInputSHA256: "enrich-v1",
+		Size: 1, ModifiedUnix: 1, TagsJSON: "[]",
+	}
+	if _, err := db.UpsertScanned(t.Context(), doc, "scan"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveAnalysis(t.Context(), doc, "local-model", "A", "S", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveExternalAnalysis(t.Context(), doc, "external-model", "A", "S", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	overview, err := db.KnowledgeDashboard(t.Context(), "local-model", "external-model")
+	if err != nil || overview.ChangedFiles != 0 || overview.ExternalChangedFiles != 0 {
+		t.Fatalf("current lanes reported pending: %+v err=%v", overview, err)
+	}
+	drift, err := db.KnowledgeDashboard(t.Context(), "another-local", "another-external")
+	if err != nil || drift.ModelDrift != 1 || drift.ExternalModelDrift != 1 {
+		t.Fatalf("lane model drift was conflated: %+v err=%v", drift, err)
+	}
+}
+
 func TestLegacyJobsTableMigrationPreservesHistory(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "legacy.db")
@@ -1363,7 +1393,13 @@ func TestDerivedStateUpdatesAndTaskStamps(t *testing.T) {
 	}
 	defer db.Close()
 
-	doc := Document{Path: "a.md", SHA256: "sha-a", BodySHA256: "body-a", Size: 1, ModifiedUnix: 1, TagsJSON: `[]`}
+	doc := Document{
+		Path: "a.md", SHA256: "sha-a", SemanticSHA256: "semantic-a",
+		SemanticBodySHA256: "semantic-body-a", AnalysisInputSHA256: "analysis-a",
+		EnrichmentInputSHA256: "enrich-a", ExpandInputSHA256: "expand-a",
+		FreshnessInputSHA256: "freshness-a", BodySHA256: "body-a",
+		Size: 1, ModifiedUnix: 1, TagsJSON: `[]`,
+	}
 	if _, err := db.UpsertScanned(ctx, doc, "scan"); err != nil {
 		t.Fatal(err)
 	}
@@ -1423,7 +1459,7 @@ func TestDerivedStateUpdatesAndTaskStamps(t *testing.T) {
 		t.Fatal(err)
 	}
 	docs, _ = db.Documents(ctx)
-	if docs[0].ExpandSHA256 != "sha-a" || docs[0].ExpandModel != "big-1" {
+	if docs[0].ExpandSHA256 != "expand-a" || docs[0].ExpandModel != "big-1" {
 		t.Errorf("expand stamp=%q/%q", docs[0].ExpandSHA256, docs[0].ExpandModel)
 	}
 	if pending, _ = db.PendingTask(ctx, "expand", "big-1", false); len(pending) != 0 {
@@ -1441,14 +1477,13 @@ func TestDerivedStateUpdatesAndTaskStamps(t *testing.T) {
 		t.Fatalf("old task suggestion should be superseded: %+v", sugs)
 	}
 
-	// StampTask advances lineage without suggestions — freshness tracks the
-	// body hash, not the canonical hash.
+	// StampTask advances lineage without suggestions.
 	if err := db.StampTask(ctx, doc, "freshness", "big-1"); err != nil {
 		t.Fatal(err)
 	}
 	docs, _ = db.Documents(ctx)
-	if docs[0].FreshnessSHA256 != "body-a" {
-		t.Errorf("freshness should stamp body hash, got %q", docs[0].FreshnessSHA256)
+	if docs[0].FreshnessSHA256 != "freshness-a" {
+		t.Errorf("freshness should stamp semantic task input, got %q", docs[0].FreshnessSHA256)
 	}
 	if pending, _ = db.PendingTask(ctx, "freshness", "big-1", false); len(pending) != 0 {
 		t.Fatalf("freshness-stamped doc should not be pending: %v", pending)
@@ -1456,7 +1491,7 @@ func TestDerivedStateUpdatesAndTaskStamps(t *testing.T) {
 	if err := db.StampTask(ctx, doc, "bogus-task", "m"); err == nil {
 		t.Error("unknown task should fail")
 	}
-	if taskCurrent(doc, "freshness") != "body-a" || taskCurrent(doc, "expand") != "sha-a" {
+	if taskCurrent(doc, "freshness") != "freshness-a" || taskCurrent(doc, "expand") != "expand-a" {
 		t.Error("taskCurrent picks the task's current column")
 	}
 	noBody := Document{SHA256: "sha-only"}

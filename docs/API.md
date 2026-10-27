@@ -20,14 +20,17 @@ All endpoints return JSON. Error responses are `{"error": "..."}`.
 
 ### `GET /api/dashboard`
 
-Returns the landing-page summaries: changed documents awaiting analysis, the
-last successful `run` cycle and age in days, plus the latest repository
-snapshot summary and optional timestamped comparison totals.
+Returns `changed_files`/`model_drift` for the local lane and
+`external_changed_files`/`external_model_drift` for the external lane, plus
+the last successful `run` cycle and age in days and the latest repository
+snapshot summary. Lane counts are not combined: an external pass does not
+silently mark the local lane complete.
 
 ### `GET /api/documents`
 
 Every tracked document with analysis metadata (path, title, summary, tags,
-status, hashes). Ordered by path.
+status, strict source hash, semantic fingerprint, task input fingerprints and
+lineage hashes/models). Ordered by path.
 
 ### `GET /api/progress`
 
@@ -141,6 +144,9 @@ Body: `{"op": "<op>"}` where `<op>` is `scan`, `analyze`, `run`,
 Optional fields include `model`, `embed_model`, `external`, `allow_cloud`,
 `allow_remote`, `web_verify`, `reanalyze` and `reanalyze_all`. Model capability and
 remote-data consent are validated before the background job is accepted.
+Every generation operation scans before selecting work, so hashes and frontmatter
+are refreshed after an apply. A scan may insert a missing hash-neutral
+`document_id`; it never normalizes the rest of an existing note.
 
 - `link-check` probes external body URLs and writes the verdicts into each
   note's `kbm.link_check` frontmatter block (tool-owned; never changes the
@@ -153,11 +159,12 @@ remote-data consent are validated before the background job is accepted.
   template; `freshness` records a currentness verdict in `kbm.freshness` and
   may emit ordinary suggestions.
 
-For `analyze`/`run`, `"reanalyze": true` additionally reprocesses documents
-whose last analysis ran under a different model than the configured
-`ollama_model`. `"reanalyze_all": true` explicitly forces all non-missing
-documents through the pass; use it after a prompt/taxonomy change only when a
-full refresh is worth the cost. `"external": true` runs the lane-capable ops
+`"reanalyze": true` additionally reprocesses documents whose active-lane model
+differs from the selected model. Same model, same semantic input, same prompt
+fingerprint queues no analysis. Prompt, taxonomy, write-scope and semantic
+content changes are detected independently. `"reanalyze_all": true` explicitly
+forces all non-missing documents through the pass; use it only when a full
+refresh is worth the cost. `"external": true` runs the lane-capable ops
 (`analyze`, `run`, `expand`, `freshness`, `all`) with
 `ollama_model_external` — enhanced lane for analysis, preferred lane for the
 enhanced tasks. Without an explicit `"model"` it requires
@@ -219,19 +226,29 @@ then `200` answers with the documents the selection would process:
     "analyzed": { "model": "gemma3:12b", "docs": 400 },
     "embedded": { "model": "embeddinggemma:300m", "docs": 521 }
   },
+  "analysis_reasons": {
+    "semantic_changes": 8,
+    "prompt_policy_changes": 2,
+    "model_drift": 1,
+    "unstamped": 0
+  },
   "warnings": [
+    "Counts use the latest scan snapshot; execution scans again and counts may change if files changed.",
+    "Analysis queue reasons (overlapping facets): semantic changes 8; prompt/policy changes 2; model drift 1; previously unstamped 0.",
     "embed uses qwen3-embedding:4b, but the latest pass on 521 document(s) ran with embeddinggemma:300m — every embedded document is re-vectorized and dependent analysis can expand"
   ]
 }
 ```
 
-`pending` lists the hash/model-stale queue per stage the op would run;
-`dependents`/`analyze_total` count the unchanged notes the analysis lane adds
-because their evidence (links, mentions, overlap, calibrated embedding
-neighbors) touched a changed document. `warnings` flags model choices that
-differ from the dominant recorded lineage — the `stamps` block — most
-importantly an embedding model switch, which re-vectorizes the whole corpus.
-Deterministic ops (`scan`, `link-check`) reject `dry_run` with `400`.
+`pending.analyze` is the direct semantic/prompt/model queue;
+`dependents`/`analyze_total` show additional unchanged notes selected because
+the substantive content of evidence they rely on changed. The `analysis_reasons`
+facets may overlap. Graph-only link edits do not count as changed evidence.
+Estimates use the latest scan snapshot, while execution scans again before work
+starts. `warnings` flags stale-snapshot risk and model choices that differ from
+the dominant recorded lineage — the `stamps` block — most importantly an
+embedding model switch, which re-vectorizes the corpus. Deterministic ops
+(`scan`, `link-check`) reject `dry_run` with `400`.
 
 Returns `202` with the running job, `409` if another op is already running:
 

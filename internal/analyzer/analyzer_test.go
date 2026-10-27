@@ -111,6 +111,19 @@ func TestRunAnalyzesPendingDoc(t *testing.T) {
 	}
 }
 
+func TestRunRefusesUnscannedSourceChangesBeforeLLM(t *testing.T) {
+	c, db := setup(t)
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	writeDoc(t, c.RepositoryPath, "a.md", "# Alpha doc\n\nChanged on disk after the scan.\n")
+	model := &fakeLLM{reply: `{"title":"Alpha","summary":"s","tags":[],"suggestions":[]}`}
+	result, err := RunProgress(t.Context(), c, db, Generators{Analysis: model}, RunOptions{ReanalyzeAll: true})
+	if err != nil || result.Failed != 1 || len(model.prompts) != 0 {
+		t.Fatalf("result=%+v prompts=%d err=%v; stale bytes must not reach the model", result, len(model.prompts), err)
+	}
+}
+
 func TestRunExternalLaneKeepsLocalLineage(t *testing.T) {
 	ctx := context.Background()
 	c, db := setup(t)
@@ -727,7 +740,7 @@ kb_policy:
 		t.Fatalf("analysis prompt=%v", slow.prompts)
 	}
 	docs, _ := db.Documents(ctx)
-	if docs[0].EnrichedModel != "fast-model" || docs[0].EnrichedSHA256 != docs[0].SHA256 {
+	if docs[0].EnrichedModel != "fast-model" || docs[0].EnrichedSHA256 != docs[0].EnrichmentInputSHA256 {
 		t.Fatalf("enrichment markers=%+v", docs[0])
 	}
 	// The analysis pass ran last, so its summary wins.

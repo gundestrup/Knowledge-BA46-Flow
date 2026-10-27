@@ -30,7 +30,6 @@ window.landingDashboard = () => ({
   },
 
   knowledgeValue(key) {
-    if (key === "changed_files" && !this.knowledge.last_cycle_at) return "—";
     return this.knowledge[key] ?? "—";
   },
 

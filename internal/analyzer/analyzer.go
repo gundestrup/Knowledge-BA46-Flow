@@ -405,6 +405,17 @@ func (p *pipeline) laneSHA(doc database.Document) string {
 	return doc.AnalyzedSHA256
 }
 
+func (p *pipeline) laneSemanticSHA(doc database.Document) string {
+	if p.external {
+		return doc.ExternalSemanticSHA256
+	}
+	return doc.AnalyzedSemanticSHA256
+}
+
+func (p *pipeline) laneInputSHA(doc database.Document) string {
+	return doc.AnalysisInputSHA256
+}
+
 func (p *pipeline) laneModel(doc database.Document) string {
 	if p.external {
 		return doc.ExternalModel
@@ -426,10 +437,10 @@ func (p *pipeline) pendingEvidencePaths(docs []database.Document) (map[string]bo
 	changed := make(map[string]bool)
 	analysisPending := make(map[string]bool)
 	for _, doc := range docs {
-		if doc.SHA256 != p.laneSHA(doc) {
+		if doc.SemanticSHA256 != p.laneSemanticSHA(doc) {
 			changed[doc.Path] = true
 		}
-		if p.opts.ReanalyzeAll || doc.SHA256 != p.laneSHA(doc) ||
+		if p.opts.ReanalyzeAll || p.laneInputSHA(doc) != p.laneSHA(doc) ||
 			(p.opts.Reanalyze && p.laneModel(doc) != p.analysisModel) {
 			analysisPending[doc.Path] = true
 		}
@@ -625,7 +636,7 @@ func (p *pipeline) addVisibleDocument(candidate *database.Document) string {
 	p.entities.addDocument(candidate.Path, current, text)
 	p.entities.addExplicitMarkdownLinks(candidate.Path, text)
 	if p.embedModel != "" && p.gens.Embed != nil && !p.embeddingDisabled &&
-		(len(candidate.Embedding) == 0 || candidate.EmbeddedModel != p.embedModel || candidate.EmbeddedSHA256 != candidate.SHA256) {
+		(len(candidate.Embedding) == 0 || candidate.EmbeddedModel != p.embedModel || candidate.EmbeddedSHA256 != candidate.SemanticSHA256) {
 		p.backfillEmbedding(candidate, text)
 	}
 	if len(candidate.Signature) == 0 {
@@ -647,7 +658,7 @@ func (p *pipeline) buildCorpusIndexes(allDocs []database.Document) {
 	for _, candidate := range allDocs {
 		p.sigs[candidate.Path] = similarity.Unmarshal(candidate.Signature)
 		if p.embedModel != "" && p.visiblePaths[candidate.Path] &&
-			candidate.EmbeddedModel == p.embedModel && candidate.EmbeddedSHA256 == candidate.SHA256 {
+			candidate.EmbeddedModel == p.embedModel && candidate.EmbeddedSHA256 == candidate.SemanticSHA256 {
 			p.embeds[candidate.Path] = similarity.UnmarshalEmbedding(candidate.Embedding)
 		}
 		if candidate.Status != "missing" {
@@ -677,7 +688,7 @@ func (p *pipeline) backfillEmbedding(doc *database.Document, text string) {
 	if err := p.db.SaveEmbedding(p.ctx, *doc, p.embedModel, blob); err == nil {
 		doc.Embedding = blob
 		doc.EmbeddedModel = p.embedModel
-		doc.EmbeddedSHA256 = doc.SHA256
+		doc.EmbeddedSHA256 = doc.SemanticSHA256
 	} else {
 		p.emit(Progress{Path: doc.Path, Outcome: "embedding warning", Detail: err.Error()})
 	}
@@ -716,7 +727,7 @@ func (p *pipeline) evidenceDependents(changedPaths, analysisPending map[string]b
 			return nil, p.ctx.Err()
 		}
 		if analysisPending[doc.Path] || doc.Status == "missing" ||
-			doc.SHA256 != p.laneSHA(doc) || !p.visiblePaths[doc.Path] {
+			p.laneInputSHA(doc) != p.laneSHA(doc) || !p.visiblePaths[doc.Path] {
 			continue
 		}
 		content, err := scanner.ReadDocument(p.c, doc.Path)
@@ -884,10 +895,13 @@ func (p *pipeline) process(doc database.Document, base *Progress, out *Result, e
 	if frontmatter.IsStub(fm, body, p.c.StubLineLimit()) {
 		return p.skipStub(doc, fm, content, base, out)
 	}
+	if scanner.CanonicalHash(content) != doc.SHA256 {
+		return p.fail(base, out, "source changed since scan; rescan before running LLM tasks")
+	}
 	detSug, hasDet := deterministicFix(doc.Path, content, fm, p.knownDocs, p.retarget)
-	needEnrich := p.enrichOn && (p.opts.ReanalyzeAll || doc.SHA256 != doc.EnrichedSHA256 ||
+	needEnrich := p.enrichOn && (p.opts.ReanalyzeAll || doc.EnrichmentInputSHA256 != doc.EnrichedSHA256 ||
 		(p.opts.Reanalyze && doc.EnrichedModel != p.fastModel))
-	needAnalyze := p.opts.ReanalyzeAll || p.forceAnalysis[doc.Path] || doc.SHA256 != p.laneSHA(doc) ||
+	needAnalyze := p.opts.ReanalyzeAll || p.forceAnalysis[doc.Path] || p.laneInputSHA(doc) != p.laneSHA(doc) ||
 		(p.opts.Reanalyze && p.laneModel(doc) != p.analysisModel)
 	if enrichOnly {
 		if needEnrich {
@@ -967,7 +981,7 @@ func (p *pipeline) analyzeDoc(doc database.Document, fm map[string]any, candidat
 	p.emit(Progress{Index: base.Index, Total: base.Total, Path: base.Path, Outcome: "analyzing"})
 	var localPatch metadataPatch
 	var localDerived []string
-	localMetadataPending := doc.EnrichedModel == "deterministic" && doc.EnrichedSHA256 == doc.SHA256
+	localMetadataPending := doc.EnrichedModel == "deterministic" && doc.EnrichedSHA256 == doc.EnrichmentInputSHA256
 	if localMetadataPending {
 		localPatch, localDerived, localMetadataPending = deterministicMetadataPatch(doc, fm, content, p.knownDocs, p.taxonomy)
 	}

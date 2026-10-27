@@ -112,7 +112,7 @@ func (p *pipeline) localEnrichOnlyBatch(docs []database.Document, out *Result) e
 		if err := p.ctx.Err(); err != nil {
 			return err
 		}
-		if doc.EnrichedSHA256 == doc.SHA256 && !p.opts.ReanalyzeAll {
+		if doc.EnrichedSHA256 == doc.EnrichmentInputSHA256 && !p.opts.ReanalyzeAll {
 			continue
 		}
 		base := Progress{Index: i + 1, Total: len(docs), Path: doc.Path}

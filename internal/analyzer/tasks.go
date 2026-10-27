@@ -203,6 +203,7 @@ func RunTask(ctx context.Context, c config.Config, db *database.DB, gens Generat
 	if gens.Analysis == nil {
 		return TaskResult{}, fmt.Errorf("%s needs a generation client for model %s", task, model)
 	}
+	verifyModel := model
 	if task == config.TaskFreshness && opts.WebVerify {
 		if gens.Search == nil {
 			return TaskResult{}, errors.New("freshness with web verification needs a search client (OLLAMA_API_KEY)")
@@ -211,7 +212,11 @@ func RunTask(ctx context.Context, c config.Config, db *database.DB, gens Generat
 			return TaskResult{}, errors.New("freshness with web verification needs a verify generation client")
 		}
 	}
-	docs, err := db.PendingTask(ctx, task, model, opts.Reanalyze, opts.ReanalyzeAll)
+	if task == config.TaskFreshness {
+		verifyModel = c.VerifyModel(opts.External, opts.Model, model)
+	}
+	docs, err := db.PendingTaskForRun(ctx, task, model, opts.Reanalyze,
+		database.TaskRunOptions{WebVerify: opts.WebVerify, VerifyModel: verifyModel}, opts.ReanalyzeAll)
 	if err != nil {
 		return TaskResult{}, err
 	}
@@ -240,6 +245,10 @@ func RunTask(ctx context.Context, c config.Config, db *database.DB, gens Generat
 	for i, doc := range docs {
 		if err := ctx.Err(); err != nil {
 			return out, err
+		}
+		if task == config.TaskFreshness {
+			doc.FreshnessWebVerify = opts.WebVerify
+			doc.FreshnessVerifyModel = verifyModel
 		}
 		base := Progress{Index: i + 1, Total: len(docs), Path: doc.Path}
 		var step error
@@ -311,6 +320,9 @@ func (p *pipeline) expandDoc(root *os.Root, doc database.Document, model string,
 	if !frontmatter.IsStub(fm, body, p.c.StubLineLimit()) {
 		return p.taskSkip(doc, config.TaskExpand, model, "not a stub", base, out)
 	}
+	if scanner.CanonicalHash(content) != doc.SHA256 {
+		return p.taskFail(base, out, "source changed since scan; rescan before running LLM tasks")
+	}
 	template, err := stubTemplate(root, doc.Path)
 	if err != nil {
 		return p.taskFail(base, out, err.Error())
@@ -373,6 +385,9 @@ func (p *pipeline) freshnessDoc(root *os.Root, doc database.Document, model, ver
 	}
 	if frontmatter.IsStub(fm, body, p.c.StubLineLimit()) {
 		return p.taskSkip(doc, config.TaskFreshness, model, "skipped: stub placeholder", base, out)
+	}
+	if scanner.CanonicalHash(content) != doc.SHA256 {
+		return p.taskFail(base, out, "source changed since scan; rescan before running LLM tasks")
 	}
 	p.emit(Progress{Index: base.Index, Total: base.Total, Path: base.Path, Outcome: "checking freshness"})
 	var kbmNote string
@@ -611,7 +626,10 @@ func (p *pipeline) expandSuggestion(doc database.Document, content string, parse
 	if preserved, err := frontmatter.PreserveIdentity(content, sug.ProposedContent); err != nil {
 		return nil, []string{"expand: " + err.Error()}
 	} else {
-		sug.ProposedContent = preserved
+		sug.ProposedContent, err = frontmatter.NormalizeOrder(preserved)
+		if err != nil {
+			return nil, []string{"expand: frontmatter normalization: " + err.Error()}
+		}
 	}
 	if err := p.validateSuggestion(sug, content, nil, false); err != nil {
 		return nil, []string{"expand: " + err.Error()}
@@ -681,7 +699,7 @@ func renderTaskCandidates(docPath string, fm map[string]any, known []database.Do
 	return strings.Join(lines, "\n")
 }
 
-// RunEmbed recomputes semantic vectors for documents whose canonical hash
+// RunEmbed recomputes semantic vectors for documents whose semantic input
 // moved past the embedded stamp — the standalone form of the embedding
 // backfill the analysis pipeline performs. Unlike the in-pipeline backfill a
 // transport failure aborts the run: an explicit embed op with a dead embed

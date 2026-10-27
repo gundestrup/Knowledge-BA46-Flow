@@ -400,71 +400,34 @@ func (o *ops) execReport(j database.Job, options repositoryreport.RunOptions) {
 
 // runOp executes an operation and returns a one-line summary like the CLI prints.
 func (o *ops) runOp(ctx context.Context, j database.Job, request opRequest) (string, error) {
-	model, external := request.Model, request.External
-	scan := func() (string, error) {
-		r, err := scanner.Scan(ctx, o.c, o.db)
-		return fmt.Sprintf("Scanned %d markdown files; %d new/changed.", r.Seen, r.Changed), err
-	}
-	genClient := func(m string, timeout int) *ollama.Client {
-		return ollama.New(o.c.OllamaURL, m, timeout, o.c.OllamaNumCtx, o.c.OllamaThink, o.c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityCompletion, external || request.AllowRemote)
-	}
-	// progress keeps the running job's detail current — the UI polls it.
-	progress := func(p analyzer.Progress) {
-		if err := o.db.UpdateJobDetail(ctx, j.ID, p.String()); err != nil {
-			fmt.Printf("WARNING: could not update job #%d progress: %v\n", j.ID, err)
-		}
-	}
-	taskOpts := analyzer.RunOptions{
-		Reanalyze: request.Reanalyze, ReanalyzeAll: request.ReanalyzeAll, External: external,
-		Model: model, EmbedModel: request.EmbedModel, AllowCloud: request.AllowCloud,
-		AllowRemote: request.AllowRemote, WebVerify: request.WebVerify, Progress: progress,
-	}
-	analyze := func() (string, error) {
-		analysisModel, err := o.c.TaskModel(config.TaskAnalyze, external, model)
-		if err != nil {
-			return "", err
-		}
-		fastModel, err := o.c.TaskModel(config.TaskEnrich, false, model)
-		if err != nil {
-			return "", err
-		}
-		gens := analyzer.Generators{
-			Analysis: genClient(analysisModel, o.c.RequestTimeoutSeconds),
-			Enrich:   ollama.New(o.c.OllamaURL, fastModel, int(o.c.EnrichmentTimeout().Seconds()), o.c.OllamaNumCtx, false, o.c.OllamaKeepAlive).WithOutputLimit(o.c.EnrichmentOutputTokens()).WithModelCheck(ollama.CapabilityCompletion, external || request.AllowCloud || request.AllowRemote),
-		}
-		embedModel, err := o.c.TaskModel(config.TaskEmbed, false, request.EmbedModel)
-		if err != nil && !errors.Is(err, config.ErrNoTaskModel) {
-			return "", err
-		}
-		if embedModel != "" {
-			gens.Embed = ollama.New(o.c.OllamaURL, embedModel, o.c.RequestTimeoutSeconds, 0, false, o.c.OllamaKeepAlive).WithModelCheck(ollama.CapabilityEmbedding, request.AllowCloud || request.AllowRemote)
-		}
-		r, err := analyzer.RunProgress(ctx, o.c, o.db, gens, taskOpts)
-		return r.Summary(analysisModel, fastModel), err
-	}
 	switch j.Op {
 	case "scan":
-		return scan()
+		return o.scanRepository(ctx)
 	case "analyze":
-		return analyze()
+		return o.scanThen(ctx, func() (string, error) { return o.analyze(ctx, j, request) })
 	case "run":
-		s, err := scan()
-		if err != nil {
-			return s, err
-		}
-		a, err := analyze()
-		return s + " " + a, err
+		return o.scanThen(ctx, func() (string, error) { return o.analyze(ctx, j, request) })
 	case "link-check":
 		r, err := linkcheck.Run(ctx, o.c, o.db)
 		return r.Summary(), err
 	case "enrich":
-		return o.enrich(ctx, j, taskOpts)
+		return o.scanThen(ctx, func() (string, error) {
+			return o.enrich(ctx, j, o.runOptions(ctx, j, request))
+		})
 	case "embed":
-		return o.embed(ctx, j, taskOpts)
+		return o.scanThen(ctx, func() (string, error) {
+			return o.embed(ctx, j, o.runOptions(ctx, j, request))
+		})
 	case "expand", "freshness":
-		return o.task(ctx, j, j.Op, taskOpts)
+		return o.scanThen(ctx, func() (string, error) {
+			return o.task(ctx, j, j.Op, o.runOptions(ctx, j, request))
+		})
 	case "all":
-		return o.runAll(ctx, j, taskOpts, model, analyze)
+		return o.scanThen(ctx, func() (string, error) {
+			opts := o.runOptions(ctx, j, request)
+			analyze := func() (string, error) { return o.analyze(ctx, j, request) }
+			return o.runAll(ctx, j, opts, request.Model, analyze)
+		})
 	case "report":
 		r, err := repositoryreport.Run(ctx, o.c.Report, o.db)
 		if err != nil {
@@ -473,6 +436,69 @@ func (o *ops) runOp(ctx context.Context, j database.Job, request opRequest) (str
 		return fmt.Sprintf("Reported %d repositories; %d problems.", r.Summary.Repositories, r.Summary.Problems), nil
 	}
 	return "", fmt.Errorf("unknown op %q", j.Op)
+}
+
+func (o *ops) scanThen(ctx context.Context, run func() (string, error)) (string, error) {
+	scanDetail, err := o.scanRepository(ctx)
+	if err != nil {
+		return scanDetail, err
+	}
+	detail, err := run()
+	return scanDetail + " " + detail, err
+}
+
+func (o *ops) scanRepository(ctx context.Context) (string, error) {
+	result, err := scanner.Scan(ctx, o.c, o.db)
+	detail := fmt.Sprintf("Scanned %d markdown files; %d new/changed.", result.Seen, result.Changed)
+	if result.IDsAssigned > 0 {
+		detail += fmt.Sprintf(" %d document IDs assigned.", result.IDsAssigned)
+	}
+	return detail, err
+}
+
+func (o *ops) runOptions(ctx context.Context, job database.Job, request opRequest) analyzer.RunOptions {
+	return analyzer.RunOptions{
+		Reanalyze: request.Reanalyze, ReanalyzeAll: request.ReanalyzeAll, External: request.External,
+		Model: request.Model, EmbedModel: request.EmbedModel, AllowCloud: request.AllowCloud,
+		AllowRemote: request.AllowRemote, WebVerify: request.WebVerify,
+		Progress: func(p analyzer.Progress) {
+			if err := o.db.UpdateJobDetail(ctx, job.ID, p.String()); err != nil {
+				fmt.Printf("WARNING: could not update job #%d progress: %v\n", job.ID, err)
+			}
+		},
+	}
+}
+
+func (o *ops) analyze(ctx context.Context, job database.Job, request opRequest) (string, error) {
+	model, err := o.c.TaskModel(config.TaskAnalyze, request.External, request.Model)
+	if err != nil {
+		return "", err
+	}
+	fastModel, err := o.c.TaskModel(config.TaskEnrich, false, request.Model)
+	if err != nil {
+		return "", err
+	}
+	generation := ollama.New(o.c.OllamaURL, model, o.c.RequestTimeoutSeconds,
+		o.c.OllamaNumCtx, o.c.OllamaThink, o.c.OllamaKeepAlive).
+		WithModelCheck(ollama.CapabilityCompletion, request.External || request.AllowRemote)
+	generators := analyzer.Generators{
+		Analysis: generation,
+		Enrich: ollama.New(o.c.OllamaURL, fastModel, int(o.c.EnrichmentTimeout().Seconds()),
+			o.c.OllamaNumCtx, false, o.c.OllamaKeepAlive).
+			WithOutputLimit(o.c.EnrichmentOutputTokens()).
+			WithModelCheck(ollama.CapabilityCompletion, request.External || request.AllowCloud || request.AllowRemote),
+	}
+	embedModel, err := o.c.TaskModel(config.TaskEmbed, false, request.EmbedModel)
+	if err != nil && !errors.Is(err, config.ErrNoTaskModel) {
+		return "", err
+	}
+	if embedModel != "" {
+		generators.Embed = ollama.New(o.c.OllamaURL, embedModel, o.c.RequestTimeoutSeconds,
+			0, false, o.c.OllamaKeepAlive).
+			WithModelCheck(ollama.CapabilityEmbedding, request.AllowCloud || request.AllowRemote)
+	}
+	result, err := analyzer.RunProgress(ctx, o.c, o.db, generators, o.runOptions(ctx, job, request))
+	return result.Summary(model, fastModel), err
 }
 
 func (o *ops) runAll(
@@ -575,7 +601,7 @@ func (o *ops) estimate(w http.ResponseWriter, r *http.Request, c config.Config, 
 		return
 	}
 	pending := map[string]int{}
-	warnings := []string{}
+	warnings := []string{"Counts use the latest scan snapshot; the task will scan before running, so pending counts may change if files changed since that scan."}
 	var analyzeEst analyzer.Estimate
 	for _, name := range stages {
 		model, stampKey, skip, err := estimateStageModel(c, b, name)
@@ -612,14 +638,25 @@ func (o *ops) estimate(w http.ResponseWriter, r *http.Request, c config.Config, 
 			"The analysis stage would also re-analyze %d unchanged document(s) whose evidence context changed (queue total %d of %d).",
 			analyzeEst.Dependents, analyzeEst.Total, total))
 	}
+	if analyzeEst.Pending > 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"Analysis queue reasons (overlapping facets): semantic changes %d; prompt/policy changes %d; model drift %d; previously unstamped %d.",
+			analyzeEst.SemanticChanges, analyzeEst.PromptChanges, analyzeEst.ModelDrift, analyzeEst.Unstamped))
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"op":            b.Op,
 		"documents":     total,
 		"pending":       pending,
 		"dependents":    analyzeEst.Dependents,
 		"analyze_total": analyzeEst.Total,
-		"warnings":      warnings,
-		"stamps":        stamps,
+		"analysis_reasons": map[string]int{
+			"semantic_changes":      analyzeEst.SemanticChanges,
+			"prompt_policy_changes": analyzeEst.PromptChanges,
+			"model_drift":           analyzeEst.ModelDrift,
+			"unstamped":             analyzeEst.Unstamped,
+		},
+		"warnings": warnings,
+		"stamps":   stamps,
 	})
 }
 
@@ -676,9 +713,14 @@ func estimateStageModel(c config.Config, b opRequest, name string) (model, stamp
 func (o *ops) stagePending(ctx context.Context, name, model string, b opRequest) (int, error) {
 	var docs []database.Document
 	var err error
-	if name == "enrich" {
+	switch name {
+	case "enrich":
 		docs, err = o.db.PendingEnrich(ctx, model, b.Reanalyze, b.ReanalyzeAll)
-	} else {
+	case config.TaskFreshness:
+		verifyModel := o.c.VerifyModel(b.External, b.Model, model)
+		docs, err = o.db.PendingTaskForRun(ctx, name, model, b.Reanalyze,
+			database.TaskRunOptions{WebVerify: b.WebVerify, VerifyModel: verifyModel}, b.ReanalyzeAll)
+	default:
 		docs, err = o.db.PendingTask(ctx, name, model, b.Reanalyze, b.ReanalyzeAll)
 	}
 	return len(docs), err

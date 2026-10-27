@@ -19,6 +19,31 @@ func TestCanonicalExcludesDocumentID(t *testing.T) {
 	}
 }
 
+// An indented frontmatter mapping (" title:") must get the ID line at the
+// same indent — a column-0 insert would produce mixed-indent YAML that no
+// parser (or Canonical's own excise) can read.
+func TestAddDocumentIDIndentedFrontmatter(t *testing.T) {
+	id := "2f0a3d3b-4c7d-4e5f-9a8b-7c6d5e4f3a2b"
+	input := "---\n tags:\n    - a\n title: T\n---\n# Body\n"
+	out, err := AddDocumentID(input, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields, _, err := Parse(out)
+	if err != nil {
+		t.Fatalf("output unparseable: %v", err)
+	}
+	if got, _ := DocumentID(fields); got != id {
+		t.Fatalf("id=%q", got)
+	}
+	if !strings.HasPrefix(out, "---\n document_id:") {
+		t.Fatalf("id not inserted at the mapping indent:\n%s", out)
+	}
+	if Canonical(out) != Canonical(input) {
+		t.Fatalf("document_id must stay hash-neutral on indented files")
+	}
+}
+
 func TestAddDocumentIDInsertsFirstFrontmatterLine(t *testing.T) {
 	id := "2f0a3d3b-4c7d-4e5f-9a8b-7c6d5e4f3a2b"
 	for _, raw := range []string{

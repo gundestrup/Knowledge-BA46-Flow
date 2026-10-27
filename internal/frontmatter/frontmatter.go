@@ -108,26 +108,29 @@ func CanonicalParts(content string) (fm, body string) {
 	raw := window[:close[0]]
 	body = trimmed[open[1]+close[1]:]
 	lines := strings.SplitAfter(raw, "\n")
+	topIndent := topLevelIndent(lines)
 	inKBM := false
 	afterKBM := false
 	kept := strings.Builder{}
 	found := false
 	for _, line := range lines {
 		trim := strings.TrimRight(line, "\r\n")
+		text := strings.TrimSpace(trim)
+		structural := isStructuralLine(text, indentOfLine(trim), topIndent)
 		switch {
-		case strings.HasPrefix(trim, ManagedKey+":"):
-			// Top-level key (column 0): the managed block starts here.
+		case structural && strings.HasPrefix(text, ManagedKey+":"):
+			// Top-level key: the managed block starts here.
 			inKBM, found = true, true
-		case strings.HasPrefix(trim, "document_id:"):
+		case structural && strings.HasPrefix(text, "document_id:"):
 			// Top-level identity line: excluded from the content hash so
 			// assigning a UUID does not look like a document edit. It also
-			// ends an open kbm block (column-0 key) but deliberately leaves
-			// afterKBM alone — the trailing-newline trim must still match a
-			// file whose frontmatter ends right after kbm.
+			// ends an open kbm block but deliberately leaves afterKBM alone —
+			// the trailing-newline trim must still match a file whose
+			// frontmatter ends right after kbm.
 			inKBM = false
 			found = true
-		case inKBM && trim != "" && trim[0] != ' ' && trim[0] != '\t' && trim[0] != '#':
-			// A column-0, non-comment line ends the block.
+		case inKBM && structural:
+			// A top-level, non-comment line ends the block.
 			inKBM = false
 			afterKBM = true
 			kept.WriteString(line)
@@ -285,15 +288,21 @@ func setManagedBlock(content string, kbm map[string]any) (string, error) {
 	raw := window[:close[0]]
 
 	// Excise the existing kbm mapping, byte-for-byte, same rule as Canonical.
+	// Top-level keys may sit at a consistent non-zero indent (e.g. " kbm:");
+	// detect the mapping indent from the first key-looking line instead of
+	// assuming column 0, or the old block is kept and a duplicate appended.
 	lines := strings.SplitAfter(raw, "\n")
+	topIndent := topLevelIndent(lines)
 	inKBM := false
 	kept := strings.Builder{}
 	for _, line := range lines {
 		trim := strings.TrimRight(line, "\r\n")
+		text := strings.TrimSpace(trim)
+		structural := isStructuralLine(text, indentOfLine(trim), topIndent)
 		switch {
-		case strings.HasPrefix(trim, ManagedKey+":"):
+		case structural && strings.HasPrefix(text, ManagedKey+":"):
 			inKBM = true
-		case inKBM && trim != "" && trim[0] != ' ' && trim[0] != '\t' && trim[0] != '#':
+		case structural:
 			inKBM = false
 			kept.WriteString(line)
 		case !inKBM:
@@ -304,6 +313,19 @@ func setManagedBlock(content string, kbm map[string]any) (string, error) {
 	if len(block) > 0 {
 		if newFM != "" && !strings.HasSuffix(newFM, "\n") {
 			newFM += "\n"
+		}
+		if topIndent > 0 {
+			// The emitted block must sit at the mapping's own indent — a
+			// column-0 key would dedent below the existing mapping.
+			pad := strings.Repeat(" ", topIndent)
+			indented := strings.Builder{}
+			for _, bl := range strings.SplitAfter(string(block), "\n") {
+				if strings.TrimSpace(bl) != "" {
+					indented.WriteString(pad)
+				}
+				indented.WriteString(bl)
+			}
+			block = []byte(indented.String())
 		}
 		newFM += string(block)
 	}
@@ -319,6 +341,47 @@ func setManagedBlock(content string, kbm map[string]any) (string, error) {
 		out = bom + trimmed[:open[1]] + newFM + trimmed[open[1]+close[0]:open[1]+close[1]] + trimmed[open[1]+close[1]:]
 	}
 	return out, nil
+}
+
+// indentOfLine counts leading whitespace (spaces and tabs) of a raw line.
+func indentOfLine(line string) int {
+	n := 0
+	for n < len(line) && (line[n] == ' ' || line[n] == '\t') {
+		n++
+	}
+	return n
+}
+
+// topLevelIndent detects the indentation of a mapping's top-level keys —
+// usually 0, but some files indent the whole frontmatter mapping uniformly
+// (" key:"). Falls back to 0 when no key-looking line exists.
+func topLevelIndent(lines []string) int {
+	for _, line := range lines {
+		if ind := indentOfKeyLine(line); ind >= 0 {
+			return ind
+		}
+	}
+	return 0
+}
+
+// isStructuralLine reports whether a frontmatter line sits at (or dedents
+// below) the mapping's top level — i.e. a top-level key or stranger that
+// ends an open block. Blanks, comments and list items are part of the
+// enclosing block: YAML allows sequences at the parent's indent.
+func isStructuralLine(text string, indent, topIndent int) bool {
+	return text != "" && text[0] != '#' && text[0] != '-' && indent <= topIndent
+}
+
+// indentOfKeyLine reports the indentation of a YAML key line, or -1 for
+// blanks, comments and list items. Used to locate a mapping's top-level
+// indent when keys are uniformly indented (e.g. " key:" frontmatter).
+func indentOfKeyLine(line string) int {
+	trim := strings.TrimRight(line, "\r\n")
+	text := strings.TrimSpace(trim)
+	if text == "" || text[0] == '#' || text[0] == '-' || !strings.Contains(text, ":") {
+		return -1
+	}
+	return indentOfLine(trim)
 }
 
 // verifyManagedWrite is the splice's self-check: it assumes a column-0
@@ -621,14 +684,13 @@ func StringList(fields map[string]any, key string) []string {
 // Render serializes fields back into a frontmatter block followed by body —
 // the inverse of Parse, used to build proposed_content for frontmatter-fix
 // suggestions. The body passes through verbatim. Empty fields return the body
-// alone (a document without frontmatter). Key order normalizes to YAML's
-// sorted map order; the suggestion review shows the result before anything
-// touches disk.
+// alone (a document without frontmatter). Top-level keys use the stable KBM
+// order; custom keys sort between standard metadata and the final kbm block.
 func Render(fields map[string]any, body string) (string, error) {
 	if len(fields) == 0 {
 		return body, nil
 	}
-	b, err := yaml.Marshal(fields)
+	b, err := marshalOrdered(fields)
 	if err != nil {
 		return "", fmt.Errorf("marshal frontmatter: %w", err)
 	}

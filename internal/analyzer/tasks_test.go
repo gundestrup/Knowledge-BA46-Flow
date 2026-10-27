@@ -81,7 +81,7 @@ func TestExpandProducesReviewableSuggestion(t *testing.T) {
 		t.Fatalf("unexpected suggestion: %+v", sugs[0])
 	}
 	doc := docByPath(t, db, "languages/go-stub.md")
-	if doc.ExpandSHA256 != doc.SHA256 || doc.ExpandModel == "" {
+	if doc.ExpandSHA256 != doc.ExpandInputSHA256 || doc.ExpandModel == "" {
 		t.Fatalf("expand lineage not stamped: %+v", doc)
 	}
 	if !strings.Contains(llm.prompt, "What it is") {
@@ -179,8 +179,8 @@ func TestFreshnessWritesManagedBlockWithoutHashChurn(t *testing.T) {
 	if after.SHA256 != before.SHA256 || after.FmSHA256 != before.FmSHA256 || after.BodySHA256 != before.BodySHA256 {
 		t.Fatalf("managed freshness write changed the content hash")
 	}
-	if after.FreshnessSHA256 != after.BodySHA256 {
-		t.Fatalf("freshness lineage should stamp the body hash: %+v", after)
+	if after.FreshnessSHA256 != after.FreshnessInputSHA256 {
+		t.Fatalf("freshness lineage should stamp its semantic input: %+v", after)
 	}
 	pending, err := db.Pending(ctx, c.OllamaModel, c.FastModel(), false)
 	if err != nil {
@@ -462,7 +462,7 @@ func TestEnrichOnlyStampsEnrichLaneWithoutAnalysis(t *testing.T) {
 		t.Fatalf("expected enrichment: %+v", r)
 	}
 	doc := docByPath(t, db, "doc.md")
-	if doc.EnrichedSHA256 != doc.SHA256 {
+	if doc.EnrichedSHA256 != doc.EnrichmentInputSHA256 {
 		t.Fatalf("enrich stamp missing: %+v", doc)
 	}
 	if doc.AnalyzedSHA256 != "" {

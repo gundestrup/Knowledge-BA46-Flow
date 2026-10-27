@@ -323,6 +323,60 @@ func TestSetManaged(t *testing.T) {
 	}
 }
 
+// Regression: frontmatter whose top-level keys are uniformly indented
+// (" kbm:") parses fine, and a managed write must replace the existing
+// block rather than append a duplicate column-0 key — observed production
+// corruption where an indented file ended up with two kbm mappings.
+func TestSetManagedIndentedFrontmatter(t *testing.T) {
+	input := "---\n tags:\n    - database\n title: MongoDB\n kbm:\n    freshness:\n        at: \"2026-10-25T10:41:22Z\"\n        verdict: review\n    link_check:\n        dead: []\n---\n# MongoDB\n"
+	out, err := SetManaged(input, "freshness", map[string]any{"at": "2026-10-27T06:30:17Z", "verdict": "current"})
+	if err != nil {
+		t.Fatalf("managed write on indented frontmatter must succeed: %v", err)
+	}
+	fields, body, err := Parse(out)
+	if err != nil {
+		t.Fatalf("output must stay parseable: %v", err)
+	}
+	if body != "# MongoDB\n" {
+		t.Fatalf("body changed: %q", body)
+	}
+	kbm, ok := fields[ManagedKey].(map[string]any)
+	if !ok {
+		t.Fatalf("kbm not a mapping: %v", fields[ManagedKey])
+	}
+	if fr, _ := kbm["freshness"].(map[string]any); fr["at"] != "2026-10-27T06:30:17Z" {
+		t.Fatalf("freshness not updated: %v", kbm["freshness"])
+	}
+	if _, ok := kbm["link_check"]; !ok {
+		t.Fatalf("link_check sibling lost: %v", kbm)
+	}
+	if Canonical(out) != Canonical(input) {
+		t.Fatalf("managed write moved the canonical hash")
+	}
+}
+
+func TestSetManagedNeverWritesDuplicateKBM(t *testing.T) {
+	inputs := map[string]string{
+		"indented keys":     "---\n tags:\n    - a\n kbm:\n    freshness:\n        at: t0\n---\nbody\n",
+		"deep indent":       "---\n    tags: [a]\n    kbm:\n        link_check:\n            dead: []\n---\nbody\n",
+		"kbm list children": "---\ntags: [a]\nkbm:\n  link_check:\n    dead:\n    - http://x\n---\nbody\n",
+	}
+	for name, input := range inputs {
+		out, err := SetManaged(input, "freshness", map[string]any{"at": "t1"})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		fields, _, err := Parse(out)
+		if err != nil {
+			t.Fatalf("%s: output unparseable: %v", name, err)
+		}
+		kbm, _ := fields[ManagedKey].(map[string]any)
+		if fr, _ := kbm["freshness"].(map[string]any); fr["at"] != "t1" {
+			t.Fatalf("%s: freshness not updated: %v", name, kbm)
+		}
+	}
+}
+
 func TestValidateManagedKey(t *testing.T) {
 	if issues := Validate(map[string]any{ManagedKey: map[string]any{"link_check": map[string]any{"at": "t"}}}); len(issues) != 0 {
 		t.Fatalf("valid kbm flagged: %v", issues)

@@ -61,16 +61,24 @@ embedding, MCP write, repository edit or reindex trigger is involved.
 ```
 
 `identify` previews scanned notes. `--prepare` creates pending UUID initialization
-proposals for eligible notes; it does not write frontmatter. Notes with existing
-pending/accepted proposals are blocked so initialization cannot invalidate a
-review queue silently. Review and accept each identity proposal normally, then
-run `apply` and `scan`. Existing UUIDs are preserved; duplicates require manual
-resolution. Normal scanning never generates IDs.
+proposals for eligible notes that remain ID-less (for example, a scan was
+blocked by mutation policy); it does not write frontmatter. Notes with existing
+pending/accepted proposals are blocked so initialization cannot affect an open
+review queue. Review and accept each identity proposal normally, then run
+`apply` and `scan`. Normal scans assign a missing UUID in place; existing IDs
+are preserved and duplicates require manual resolution.
 
 Identity proposals may only insert a top-level `document_id` UUID. Other metadata,
-body, links and live `kbm` data remain unchanged. The ID participates in the
-canonical hash, so later edits still require version checks. The MCP server
-accepts an unknown string field but does not use it as native identity.
+body, links and live `kbm` data remain unchanged. The ID is excluded from the
+strict source hash, as is `kbm`; later content edits still require full source
+version checks. The MCP server accepts an unknown string field but does not use
+it as native identity.
+
+New proposal frontmatter uses a stable order: `document_id`, `title`,
+`summary`, `related`, `tags`, `contradicted_by`, provenance/lifecycle/policy
+fields, custom keys alphabetically, and `kbm` last. The MCP server parses by
+key, so order does not change retrieval semantics. Scanning does not bulk-
+reformat existing notes.
 
 After IDs are registered by a scan, a unique UUID can connect an externally
 renamed-and-edited document to its previous database row. Its changed hash still

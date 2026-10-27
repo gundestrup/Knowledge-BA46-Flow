@@ -157,7 +157,12 @@ func (p *pipeline) validateModelSuggestions(doc database.Document, content strin
 				result.rejected = append(result.rejected, action+": "+err.Error())
 				continue
 			}
-			suggestion.ProposedContent = preserved
+			normalized, err := frontmatter.NormalizeOrder(preserved)
+			if err != nil {
+				result.rejected = append(result.rejected, action+": frontmatter normalization: "+err.Error())
+				continue
+			}
+			suggestion.ProposedContent = normalized
 		}
 		if err := p.validateSuggestion(suggestion, content, mergeBodies, moves > 1); err != nil {
 			result.rejected = append(result.rejected, action+": "+err.Error())

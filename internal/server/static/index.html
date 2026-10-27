@@ -224,23 +224,33 @@
                     class="portal-description"
                     x-text="t('ui.landing.kb_description', 'Inspect changed notes, review suggestions, and apply only the changes you accept.')"
                   ></p>
-                  <div class="portal-metrics">
+                  <div class="portal-metrics portal-metrics-four">
                     <div class="portal-metric">
                       <strong x-text="knowledgeValue('changed_files')"></strong>
                       <span
-                        x-text="t('ui.landing.metric_changed', 'files changed since analysis')"
+                        x-text="t('ui.landing.metric_local_pending', 'local semantic inputs pending')"
                       ></span>
                     </div>
                     <div class="portal-metric">
                       <strong x-text="knowledgeValue('model_drift')"></strong>
                       <span
-                        x-text="t('ui.landing.metric_drift', 'analyzed with another model')"
+                        x-text="t('ui.landing.metric_local_drift', 'local model drift')"
                       ></span>
                     </div>
                     <div class="portal-metric">
-                      <strong x-text="cycleAge()"></strong>
+                      <strong
+                        x-text="knowledgeValue('external_changed_files')"
+                      ></strong>
                       <span
-                        x-text="t('ui.landing.metric_cycle', 'since last full cycle')"
+                        x-text="t('ui.landing.metric_external_pending', 'external semantic inputs pending')"
+                      ></span>
+                    </div>
+                    <div class="portal-metric">
+                      <strong
+                        x-text="knowledgeValue('external_model_drift')"
+                      ></strong>
+                      <span
+                        x-text="t('ui.landing.metric_external_drift', 'external model drift')"
                       ></span>
                     </div>
                   </div>

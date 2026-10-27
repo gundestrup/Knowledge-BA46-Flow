@@ -5,28 +5,40 @@
 Scans the configured extensions recursively (minus `exclude_extensions`),
 skips dot-prefixed entries, the Knowledge Base MCP Server's `logs/`, `tmp/`,
 `_tmp/` and workflow-sidecar paths, plus the configured `exclude_directories`
-and root-anchored `exclude` paths/patterns, then computes SHA-256 and a content-similarity
-sketch (word 3-shingles, bottom-k minwise signature) in the same streaming
-pass and syncs SQLite. Changed content invalidates its cached embedding; a later
-analysis backfills it, while unchanged documents keep their vectors.
-No Ollama calls and no file changes.
+and root-anchored `exclude` paths/patterns, then syncs SQLite. Scanning assigns
+a missing `document_id` with a confined, byte-preserving frontmatter insertion;
+it does not reorder any other existing fields. No Ollama calls run.
 
-The stored `sha256` is the _canonical_ content hash: the document with the
-tool-owned `kbm` frontmatter block excised byte-for-byte. `kbm` holds
-operational metadata KBM-flow writes itself (link-check verdicts and similar),
-so updating it never marks a document changed, never requeues analysis and
-never invalidates an accepted suggestion — `apply` verifies the same canonical
-hash. Documents without a `kbm` block hash exactly as their raw bytes always
-did, so existing databases see no churn.
+`sha256` is the strict canonical source hash: the document with the tool-owned
+`kbm` block and top-level `document_id` line excised. It remains the source
+version for proposal acceptance/apply checks; graph or formatting changes can
+make an old full-file proposal stale without requiring a new content analysis.
+Managed `kbm` writes and ID assignment do not change it.
 
-Scan also stores the canonical hash **split at the frontmatter boundary** —
-`fm_sha256` over the frontmatter (minus `kbm`) and `body_sha256` over the
-body — so a frontmatter-only edit is distinguishable from a content edit at a
-glance. The freshness task keys its lineage on the body hash (metadata churn
-is not staleness), the dashboard labels documents "metadata changed" vs.
-"content changed" against the `seen_*` hashes stamped at the last analysis,
-and every hash check stays a fast local operation that targets reprocessing
-at the documents that actually changed.
+Scan also stores split raw hashes (`fm_sha256`, `body_sha256`) for reporting,
+plus a semantic task fingerprint. That fingerprint keeps title, tags,
+privacy/lifecycle/custom metadata and visible prose, but excludes graph-only
+`related`/`contradicted_by` fields and relative Markdown link destinations.
+Changing a link label or surrounding prose still changes it. Each LLM task
+combines this semantic fingerprint with its static prompt/policy inputs; model
+lineage remains separate. Therefore link-only changes refresh the link index
+and stale any full-file review proposal, but do not re-run content analysis,
+freshness, expansion, or embeddings. Semantic content changes still re-run
+appropriate tasks and may re-evaluate linked/evidence-dependent notes.
+
+The canonical field order for newly emitted frontmatter is:
+`document_id`, `title`, `summary`, `related`, `tags`, `contradicted_by`,
+provenance/lifecycle and policy fields, custom keys alphabetically, then
+`kbm` last. YAML key order has no meaning to the Knowledge Base MCP Server;
+this order is for stable diffs and human review. Its ingester lifts `title`
+and `tags`; `document_id`, `related` and nested `kbm` remain workflow data,
+not native MCP identity/filter fields.
+
+Every LLM operation (`analyze`, `run`, `tasks`/`all`, and standalone task
+passes) scans first. This refreshes hashes/frontmatter after accepted changes
+and prevents a task from reading live bytes while stamping an older database
+snapshot. The API dry-run is read-only and estimates from the latest scan;
+its warning notes that an execution will scan again and counts can change.
 
 Every scan also runs the **mandatory internal link check** — no model, no
 network: `[text](target)` body links (fenced/inline code excluded) resolve
@@ -122,8 +134,8 @@ plain HTTP request from this machine.
 ## Optional task passes: `enrich`, `embed`, `expand`, `freshness`, `tasks`
 
 Beyond the `scan`/`analyze`/`run` cycle, five focused passes run individual
-LLM tasks. Each is incremental against its own lineage columns (per-document
-`<task>_sha256`/`<task>_model`), accepts `--reanalyze`, `--reanalyze-all`,
+LLM tasks. Each is incremental against its own semantic input/prompt fingerprint
+and model lineage, accepts `--reanalyze`, `--reanalyze-all`,
 `--model <name>` (per-run override — a configured or installed model).
 `--external` is available on `expand`, `freshness` and `tasks`, and
 `--web-verify` on `freshness` and `tasks`. `enrich` and
@@ -137,7 +149,7 @@ model pickers run the same ops via
 
 - **`enrich`** — the fast-model metadata pass (title/tags) on its own, without
   analysis. Lane default: `ollama_model_fast`.
-- **`embed`** — recompute embedding vectors for documents whose canonical hash
+- **`embed`** — recompute embedding vectors for documents whose semantic input
   moved past `embedded_sha256` or whose producing model differs. Uses an
   independent `--embed-model`, the `ollama_task_models.embed` default or
   `ollama_embed_model`; standalone `--model` is an alias for `--embed-model`
@@ -155,20 +167,27 @@ model pickers run the same ops via
   configured, else `ollama_model`.
 - **`freshness`** — a heuristic currentness review: the model reads the note
   plus its modification date and `kbm.link_check` result, then flags claims
-  that may be dated (version pins, "latest release", ageing dates). Without
+  that may be dated (version pins, "latest release", ageing dates). A note
+  that is fundamentally about a versioned technology also earns at most one
+  implicit tracking flag ("<tech> latest stable release and notable
+  changes") even when it pins no version, so `--web-verify` can judge whether
+  a newer release changes what the note teaches. Without
   further options it cannot verify live facts — flags mean "check this",
   never "this is dead". The
   verdict, timestamp and flag list are recorded in the note's
   `kbm.freshness` block — tool-owned operational metadata, the same
   documented carve-out as `kbm.link_check`, so the write never invalidates
   the content hash — and concrete corrections arrive as normal `freshness`
-  suggestions. Lineage stamps `body_sha256`: frontmatter churn does not
-  re-date content. Lane default: `ollama_model_external` when configured.
+  suggestions. Lineage includes semantic input and the freshness prompt
+  fingerprint, so graph-only links do not re-date freshness while prompt edits
+  do. Lane default: `ollama_model_external` when configured.
   With `--web-verify` each flag's claim is sent as a query to Ollama's hosted
   web search API (bounded to 8 claims × 5 results per document) and a second
   model pass re-judges every flag against the evidence: `stale`, `current`
   or `unverifiable` verdicts land in `kbm.freshness` with the evidence and
-  source URL, `verified: true` and `verify_model` mark a completed check, and
+  source URL (tracking flags are judged on impact — `stale` only when the
+  newest release materially changes the note's substance),
+  `verified: true` and `verify_model` mark a completed check, and
   corrections the evidence supports arrive as ordinary suggestions. The
   second pass is its own model lane — `ollama_task_models.verify` when
   configured, else the external lane, else `ollama_model` — so a different
@@ -236,7 +255,13 @@ database, no file changes.
 
 ## `analyze`
 
-Finds rows where `sha256 != analyzed_sha256`, reads the document, composes prompts, calls Ollama and stores title, summary, tags and suggestions. Each analysis records the producing model in `analyzed_model` (shown in the dashboard's status column and in job summaries).
+Scans first, then finds rows whose semantic analysis input or prompt/policy
+fingerprint differs from the last run (plus explicit model drift when
+`--reanalyze` is selected). It reads the document, composes prompts, calls
+Ollama and stores title, summary, tags and suggestions. Each analysis records
+the producing model in `analyzed_model` (shown in the dashboard's status
+column and in job summaries). The strict full-source `sha256` remains the
+stale-proposal guard.
 
 Analysis runs in up to three stages per document:
 
@@ -331,16 +356,22 @@ per document, checks the live source hash, and validates expansion content.
 After one applies, other old snapshots are immediately superseded with a reason.
 They are never silently rebased or applied over the changed file.
 
-With `--reanalyze` (CLI) or `reanalyze: true` in the `/api/ops` body — a checkbox in the dashboard — documents whose `analyzed_model` differs from the configured `ollama_model` are reprocessed too: a different model may produce different suggestions, so redoing the corpus is an explicit choice, not automatic. Each re-analysis supersedes that document's still-`pending` suggestions (accepted/rejected decisions are kept). The landing page's _analyzed with another model_ metric counts how much of the corpus would drift under the current model.
+With `--reanalyze` (CLI) or `reanalyze: true` in the `/api/ops` body — a
+checkbox in the dashboard — documents whose active-lane model differs are
+reprocessed too. A same-model, same-input run queues nothing; prompt, policy,
+taxonomy and semantic-content changes are detected independently. Each
+re-analysis supersedes that document's still-`pending` suggestions
+(accepted/rejected decisions are kept). Local and external lineages remain
+separate privacy/provenance records; a same-named model in one lane does not
+silently claim work in the other.
 
 `--external` (or `external: true` in `/api/ops`) runs the same pipeline as an
 enhanced lane: the analysis pass uses `ollama_model_external` instead of
-`ollama_model`. Results stamp `external_sha256`/`external_model` on each
-document rather than `analyzed_*`, so the local lineage is untouched — a
-following normal run does not see the corpus as new or model-drifted, and the
-external lane is incremental against its own markers (unchanged documents are
-skipped on a second external run; `--reanalyze`/`--reanalyze-all` apply per
-lane). Enrichment stays the shared local stage in both lanes. Suggestions land
+`ollama_model`. Results stamp `external_sha256`/`external_model` and the
+external semantic snapshot rather than changing the local `analyzed_*`
+lineage. The external lane is incremental against its own markers; an
+unchanged same-lane run skips content analysis, while cross-lane lineage is
+not implicitly reused. Enrichment stays shared. Suggestions land
 in the same review queue (origin `analysis`) and supersede a document's pending
 analysis suggestions whichever lane produced them — accepted/rejected history
 is kept. An external model receives document content, so enabling the lane

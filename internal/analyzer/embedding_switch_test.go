@@ -63,7 +63,7 @@ func TestPipelineRefreshesEmbeddingModelWithoutRepeatingGeneration(t *testing.T)
 			}
 			continue
 		}
-		if doc.EmbeddedModel != "second-embedder" || doc.EmbeddedSHA256 != doc.SHA256 {
+		if doc.EmbeddedModel != "second-embedder" || doc.EmbeddedSHA256 != doc.SemanticSHA256 {
 			t.Fatalf("vector provenance is stale: %+v", doc)
 		}
 	}

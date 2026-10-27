@@ -235,6 +235,14 @@ func scanCmd() *cobra.Command {
 	}
 }
 
+func scanSummary(result scanner.Result) string {
+	detail := fmt.Sprintf("Scanned %d markdown files; %d new/changed.", result.Seen, result.Changed)
+	if result.IDsAssigned > 0 {
+		detail += fmt.Sprintf(" %d document IDs assigned.", result.IDsAssigned)
+	}
+	return detail
+}
+
 // check-links probes the external http(s) URLs referenced by the corpus and
 // records the verdict in each note's tool-owned kbm.link_check frontmatter
 // block — the one documented file write outside apply, since the block is
@@ -344,13 +352,20 @@ func analyzeCmd() *cobra.Command {
 			defer stop()
 			detail := ""
 			defer finishJob(db, job.ID, &detail, &runErr)
+			scanResult, err := scanner.Scan(ctx, c, db)
+			if err != nil {
+				return err
+			}
+			scanDetail := scanSummary(scanResult)
+			fmt.Fprintln(cmd.OutOrStdout(), scanDetail)
 			print := progressPrinter(cmd.OutOrStdout())
-			detail, err = runAnalyze(ctx, c, db, analysisModel, analyzer.RunOptions{Reanalyze: reanalyze, ReanalyzeAll: reanalyzeAll, External: external, Model: model, EmbedModel: embedModel, AllowCloud: allowCloud, AllowRemote: allowRemote, Progress: func(p analyzer.Progress) {
+			taskDetail, err := runAnalyze(ctx, c, db, analysisModel, analyzer.RunOptions{Reanalyze: reanalyze, ReanalyzeAll: reanalyzeAll, External: external, Model: model, EmbedModel: embedModel, AllowCloud: allowCloud, AllowRemote: allowRemote, Progress: func(p analyzer.Progress) {
 				print(p)
 				_ = db.UpdateJobDetail(ctx, job.ID, p.String())
 			}})
 			if err == nil {
-				fmt.Fprintln(cmd.OutOrStdout(), detail)
+				detail = scanDetail + " " + taskDetail
+				fmt.Fprintln(cmd.OutOrStdout(), taskDetail)
 			}
 			return err
 		},
@@ -474,8 +489,14 @@ func taskCmd(use, short, op string, allowExternal bool, run func(ctx context.Con
 			defer stop()
 			detail := ""
 			defer finishJob(db, job.ID, &detail, &runErr)
+			scanResult, err := scanner.Scan(ctx, c, db)
+			if err != nil {
+				return err
+			}
+			detail = scanSummary(scanResult)
+			fmt.Fprintln(cmd.OutOrStdout(), detail)
 			print := progressPrinter(cmd.OutOrStdout())
-			detail, err = run(ctx, c, db, resolved, analyzer.RunOptions{
+			taskDetail, err := run(ctx, c, db, resolved, analyzer.RunOptions{
 				Reanalyze: reanalyze, ReanalyzeAll: reanalyzeAll, External: external,
 				Model: model, EmbedModel: embedModel, AllowCloud: allowCloud,
 				AllowRemote: allowRemote, WebVerify: webVerify,
@@ -485,7 +506,8 @@ func taskCmd(use, short, op string, allowExternal bool, run func(ctx context.Con
 				},
 			})
 			if err == nil {
-				fmt.Fprintln(cmd.OutOrStdout(), detail)
+				detail += " " + taskDetail
+				fmt.Fprintln(cmd.OutOrStdout(), taskDetail)
 			}
 			return err
 		},
@@ -622,6 +644,12 @@ func tasksCmd() *cobra.Command {
 			defer stop()
 			detail := ""
 			defer finishJob(db, job.ID, &detail, &runErr)
+			scanResult, err := scanner.Scan(ctx, c, db)
+			if err != nil {
+				return err
+			}
+			detail = scanSummary(scanResult)
+			fmt.Fprintln(cmd.OutOrStdout(), detail)
 			print := progressPrinter(cmd.OutOrStdout())
 			opts := analyzer.RunOptions{
 				Reanalyze: reanalyze, ReanalyzeAll: reanalyzeAll, External: external,
@@ -642,7 +670,7 @@ func tasksCmd() *cobra.Command {
 				{"freshness", runFreshness},
 				{"analyze", runAnalyze},
 			}
-			var parts []string
+			parts := []string{detail}
 			for _, t := range runners {
 				// Generation and embedding overrides are independent.
 				taskModel, taskOpts := model, opts

@@ -62,3 +62,23 @@ func TestComposeRequiresAnalyzePrompt(t *testing.T) {
 		t.Fatalf("expected an analyze prompt error, got %v", err)
 	}
 }
+
+func TestFingerprintTracksOnlyStaticTaskPromptInputs(t *testing.T) {
+	dir := t.TempDir()
+	writeAll(t, dir)
+	first, err := Fingerprint(dir, testMCP, "analyze.md", "write_scope=metadata-links")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedScope, err := Fingerprint(dir, testMCP, "analyze.md", "write_scope=content")
+	if err != nil || first == changedScope {
+		t.Fatalf("policy input did not affect fingerprint: %q %q err=%v", first, changedScope, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "analyze.md"), []byte("changed task"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	changedPrompt, err := Fingerprint(dir, testMCP, "analyze.md", "write_scope=metadata-links")
+	if err != nil || first == changedPrompt {
+		t.Fatalf("task prompt edit did not affect fingerprint: %q %q err=%v", first, changedPrompt, err)
+	}
+}

@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"knowledge-ba46-flow/internal/frontmatter"
+
 	_ "modernc.org/sqlite" // registers the pure-Go "sqlite" database/sql driver
 )
 
@@ -22,42 +24,52 @@ import (
 type DB struct{ *sql.DB }
 
 // Document mirrors a row of the documents table: a markdown file plus its
-// analysis metadata. AnalyzedSHA256 records which content hash was last sent
-// to the LLM and AnalyzedModel which model produced it, so a changed hash OR
-// a changed model means "needs (re)analysis" — different models produce
-// different suggestions. EnrichedSHA256/EnrichedModel track the cheaper
-// enrichment pass (ollama_model_fast) the same way. Signature is a marshaled
-// similarity sketch used to rank merge/relation candidates by text overlap;
+// analysis metadata. SHA256 is the strict canonical source version used for
+// proposal staleness; the task input hashes omit graph-only links and include
+// prompt/policy fingerprints. AnalyzedSHA256 and the sibling task markers
+// record those evaluation inputs, while model fields preserve lane provenance.
+// Signature is a marshaled similarity sketch used to rank merge/relation candidates by text overlap;
 // Embedding is a marshaled float32 vector from the optional embed model,
 // used to rank candidates by topical relatedness.
 type Document struct {
-	Path           string `json:"path"`
-	SHA256         string `json:"sha256"`
-	AnalyzedSHA256 string `json:"analyzed_sha256"`
-	AnalyzedModel  string `json:"analyzed_model"`
+	Path                   string `json:"path"`
+	SHA256                 string `json:"sha256"`
+	AnalyzedSHA256         string `json:"analyzed_sha256"`
+	AnalyzedModel          string `json:"analyzed_model"`
+	AnalyzedSemanticSHA256 string `json:"analyzed_semantic_sha256"`
 	// ExternalSHA256/ExternalModel form the optional external lane: an
 	// enhanced run (ollama_model_external, e.g. a cloud model) stamps these
 	// instead of analyzed_*, so the local analysis lineage — and therefore
 	// the next normal run's pending/drift view — is left untouched.
-	ExternalSHA256 string `json:"external_sha256"`
-	ExternalModel  string `json:"external_model"`
-	EnrichedSHA256 string `json:"enriched_sha256"`
-	EnrichedModel  string `json:"enriched_model"`
-	// FmSHA256/BodySHA256 split the canonical hash at the frontmatter
-	// boundary: a frontmatter-only edit is distinguishable from a body edit,
-	// so freshness checks key on BodySHA256 and the UI can label a changed
-	// document as a metadata-only touch.
+	ExternalSHA256         string `json:"external_sha256"`
+	ExternalModel          string `json:"external_model"`
+	ExternalSemanticSHA256 string `json:"external_semantic_sha256"`
+	EnrichedSHA256         string `json:"enriched_sha256"`
+	EnrichedModel          string `json:"enriched_model"`
+	// FmSHA256/BodySHA256 split the strict canonical hash at the frontmatter
+	// boundary for reporting source changes; they are not task invalidation keys.
 	FmSHA256   string `json:"fm_sha256"`
 	BodySHA256 string `json:"body_sha256"`
+	// SemanticSHA256 omits graph-only frontmatter and internal Markdown link
+	// destinations. SemanticBodySHA256 is the same projection of the body.
+	// These drive task invalidation; SHA256 remains the strict source version
+	// used to protect reviewed full-file proposals.
+	SemanticSHA256         string `json:"semantic_sha256"`
+	SemanticFrontmatterSHA string `json:"semantic_frontmatter_sha256"`
+	SemanticBodySHA256     string `json:"semantic_body_sha256"`
+	AnalysisInputSHA256    string `json:"analysis_input_sha256"`
+	EnrichmentInputSHA256  string `json:"enrichment_input_sha256"`
+	ExpandInputSHA256      string `json:"expand_input_sha256"`
+	FreshnessInputSHA256   string `json:"freshness_input_sha256"`
+	FreshnessWebVerify     bool   `json:"freshness_web_verify"`
+	FreshnessVerifyModel   string `json:"freshness_verify_model"`
 	// SeenFmSHA256/SeenBodySHA256 record what the document looked like when
 	// the last analysis of either lane ran — the reference for the
 	// changed-frontmatter-only vs changed-body breakdown.
 	SeenFmSHA256   string `json:"seen_fm_sha256"`
 	SeenBodySHA256 string `json:"seen_body_sha256"`
-	// Expand/Freshness/Embedded lineage keep the optional LLM task runs
-	// incremental the same way the analysis lanes do: expand stamps the
-	// canonical hash, freshness the body hash (frontmatter churn is not a
-	// freshness concern), embed the hash of the embedded canonical text.
+	// Expand/Freshness/Embedded lineage keep optional passes incremental against
+	// their current input fingerprints; full source SHA remains available above.
 	ExpandSHA256    string `json:"expand_sha256"`
 	ExpandModel     string `json:"expand_model"`
 	FreshnessSHA256 string `json:"freshness_sha256"`
@@ -122,11 +134,13 @@ type Suggestion struct {
 // KnowledgeDashboard summarizes current analysis work and the most recent
 // successful full run cycle.
 type KnowledgeDashboard struct {
-	ChangedFiles int `json:"changed_files"`
+	ChangedFiles         int `json:"changed_files"`
+	ExternalChangedFiles int `json:"external_changed_files"`
 	// ModelDrift counts documents whose last analysis ran under a model other
 	// than the configured one — candidates for an explicit re-analyze run.
-	ModelDrift  int    `json:"model_drift"`
-	LastCycleAt string `json:"last_cycle_at"`
+	ModelDrift         int    `json:"model_drift"`
+	ExternalModelDrift int    `json:"external_model_drift"`
+	LastCycleAt        string `json:"last_cycle_at"`
 }
 
 // Open creates the parent directory if needed, opens the SQLite file and runs
@@ -162,7 +176,7 @@ func Open(ctx context.Context, path string) (*DB, error) {
 // schemaVersion stamps the shape migrate() produces — bump it on every schema
 // change. A database stamped newer than this build is refused at Open so an
 // old binary cannot silently half-migrate a future layout.
-const schemaVersion = 13
+const schemaVersion = 14
 
 func (d *DB) migrate(ctx context.Context) error {
 	var stamped int
@@ -178,8 +192,10 @@ CREATE TABLE IF NOT EXISTS documents (
  sha256 TEXT NOT NULL,
  analyzed_sha256 TEXT NOT NULL DEFAULT '',
  analyzed_model TEXT NOT NULL DEFAULT '',
+ analyzed_semantic_sha256 TEXT NOT NULL DEFAULT '',
  external_sha256 TEXT NOT NULL DEFAULT '',
  external_model TEXT NOT NULL DEFAULT '',
+ external_semantic_sha256 TEXT NOT NULL DEFAULT '',
  enriched_sha256 TEXT NOT NULL DEFAULT '',
  enriched_model TEXT NOT NULL DEFAULT '',
  sig BLOB,
@@ -197,8 +213,17 @@ CREATE TABLE IF NOT EXISTS documents (
  frontmatter_json TEXT NOT NULL DEFAULT '',
  frontmatter_issues TEXT NOT NULL DEFAULT '[]',
  link_issues TEXT NOT NULL DEFAULT '[]',
- fm_sha256 TEXT NOT NULL DEFAULT '',
- body_sha256 TEXT NOT NULL DEFAULT '',
+	fm_sha256 TEXT NOT NULL DEFAULT '',
+	body_sha256 TEXT NOT NULL DEFAULT '',
+ semantic_sha256 TEXT NOT NULL DEFAULT '',
+ semantic_frontmatter_sha256 TEXT NOT NULL DEFAULT '',
+ semantic_body_sha256 TEXT NOT NULL DEFAULT '',
+ analysis_input_sha256 TEXT NOT NULL DEFAULT '',
+ enrichment_input_sha256 TEXT NOT NULL DEFAULT '',
+ expand_input_sha256 TEXT NOT NULL DEFAULT '',
+ freshness_input_sha256 TEXT NOT NULL DEFAULT '',
+ freshness_web_verify INTEGER NOT NULL DEFAULT 0,
+ freshness_verify_model TEXT NOT NULL DEFAULT '',
  seen_fm_sha256 TEXT NOT NULL DEFAULT '',
  seen_body_sha256 TEXT NOT NULL DEFAULT '',
  expand_sha256 TEXT NOT NULL DEFAULT '',
@@ -358,14 +383,25 @@ func (d *DB) upgradeDocumentColumns(ctx context.Context) error {
 		{"frontmatter_issues", `ALTER TABLE documents ADD COLUMN frontmatter_issues TEXT NOT NULL DEFAULT '[]'`},
 		{"link_issues", `ALTER TABLE documents ADD COLUMN link_issues TEXT NOT NULL DEFAULT '[]'`},
 		{"analyzed_model", `ALTER TABLE documents ADD COLUMN analyzed_model TEXT NOT NULL DEFAULT ''`},
+		{"analyzed_semantic_sha256", `ALTER TABLE documents ADD COLUMN analyzed_semantic_sha256 TEXT NOT NULL DEFAULT ''`},
 		{"external_sha256", `ALTER TABLE documents ADD COLUMN external_sha256 TEXT NOT NULL DEFAULT ''`},
 		{"external_model", `ALTER TABLE documents ADD COLUMN external_model TEXT NOT NULL DEFAULT ''`},
+		{"external_semantic_sha256", `ALTER TABLE documents ADD COLUMN external_semantic_sha256 TEXT NOT NULL DEFAULT ''`},
 		{"enriched_sha256", `ALTER TABLE documents ADD COLUMN enriched_sha256 TEXT NOT NULL DEFAULT ''`},
 		{"enriched_model", `ALTER TABLE documents ADD COLUMN enriched_model TEXT NOT NULL DEFAULT ''`},
 		{"sig", `ALTER TABLE documents ADD COLUMN sig BLOB`},
 		{"embedding", `ALTER TABLE documents ADD COLUMN embedding BLOB`},
 		{"fm_sha256", `ALTER TABLE documents ADD COLUMN fm_sha256 TEXT NOT NULL DEFAULT ''`},
 		{"body_sha256", `ALTER TABLE documents ADD COLUMN body_sha256 TEXT NOT NULL DEFAULT ''`},
+		{"semantic_sha256", `ALTER TABLE documents ADD COLUMN semantic_sha256 TEXT NOT NULL DEFAULT ''`},
+		{"semantic_frontmatter_sha256", `ALTER TABLE documents ADD COLUMN semantic_frontmatter_sha256 TEXT NOT NULL DEFAULT ''`},
+		{"semantic_body_sha256", `ALTER TABLE documents ADD COLUMN semantic_body_sha256 TEXT NOT NULL DEFAULT ''`},
+		{"analysis_input_sha256", `ALTER TABLE documents ADD COLUMN analysis_input_sha256 TEXT NOT NULL DEFAULT ''`},
+		{"enrichment_input_sha256", `ALTER TABLE documents ADD COLUMN enrichment_input_sha256 TEXT NOT NULL DEFAULT ''`},
+		{"expand_input_sha256", `ALTER TABLE documents ADD COLUMN expand_input_sha256 TEXT NOT NULL DEFAULT ''`},
+		{"freshness_input_sha256", `ALTER TABLE documents ADD COLUMN freshness_input_sha256 TEXT NOT NULL DEFAULT ''`},
+		{"freshness_web_verify", `ALTER TABLE documents ADD COLUMN freshness_web_verify INTEGER NOT NULL DEFAULT 0`},
+		{"freshness_verify_model", `ALTER TABLE documents ADD COLUMN freshness_verify_model TEXT NOT NULL DEFAULT ''`},
 		{"seen_fm_sha256", `ALTER TABLE documents ADD COLUMN seen_fm_sha256 TEXT NOT NULL DEFAULT ''`},
 		{"seen_body_sha256", `ALTER TABLE documents ADD COLUMN seen_body_sha256 TEXT NOT NULL DEFAULT ''`},
 		{"expand_sha256", `ALTER TABLE documents ADD COLUMN expand_sha256 TEXT NOT NULL DEFAULT ''`},
@@ -559,30 +595,54 @@ func (d *DB) rebuildTable(ctx context.Context, table, marker, create, cols, post
 	return tx.Commit()
 }
 
-// UpsertScanned inserts a freshly scanned file or updates its hash/size/mtime.
-// When the sha256 changed (or the row is new): tags are replaced, status resets
-// to 'pending', last_error clears, and pending or accepted suggestions for that
-// document are marked 'superseded' — they were generated from stale content.
+// UpsertScanned inserts a freshly scanned file or updates its source and
+// semantic fingerprints. A strict source-hash change supersedes pending or
+// accepted full-file proposals; only a semantic-input change resets task
+// status/embeddings. Graph-only changes do not requeue content evaluations.
 // A unique UUID (or exact hash without one) plus observed filesystem absence
 // can identify a rename. Without absence evidence no rename is inferred.
 // Returns whether the file was new or changed (i.e. needs re-analysis).
+func scannedDefaults(doc Document) Document {
+	if doc.SemanticSHA256 == "" {
+		doc.SemanticSHA256 = doc.SHA256
+	}
+	if doc.SemanticFrontmatterSHA == "" {
+		doc.SemanticFrontmatterSHA = doc.FmSHA256
+	}
+	if doc.SemanticBodySHA256 == "" {
+		doc.SemanticBodySHA256 = doc.BodySHA256
+	}
+	if doc.AnalysisInputSHA256 == "" {
+		doc.AnalysisInputSHA256 = doc.SemanticSHA256
+	}
+	if doc.EnrichmentInputSHA256 == "" {
+		doc.EnrichmentInputSHA256 = doc.SemanticSHA256
+	}
+	if doc.ExpandInputSHA256 == "" {
+		doc.ExpandInputSHA256 = doc.SemanticSHA256
+	}
+	if doc.FreshnessInputSHA256 == "" {
+		doc.FreshnessInputSHA256 = doc.SemanticSHA256
+	}
+	return doc
+}
+
 func (d *DB) UpsertScanned(ctx context.Context, doc Document, seen string, absence ...func(string) bool) (bool, error) {
+	doc = scannedDefaults(doc)
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback()
 
-	var old string
-	err = tx.QueryRowContext(ctx, `SELECT sha256 FROM documents WHERE path=?`, doc.Path).Scan(&old)
-	newPath := err == sql.ErrNoRows
-	changed := newPath || old != doc.SHA256
+	old, err := loadScannedSnapshot(ctx, tx, doc.Path)
+	newPath := errors.Is(err, sql.ErrNoRows)
 	if err != nil && !newPath {
 		return false, err
 	}
 	if newPath {
 		var absent func(string) bool
-		if len(absence) != 0 {
+		if len(absence) > 0 {
 			absent = absence[0]
 		}
 		renamed, rerr := renameObserved(ctx, tx, doc, seen, absent)
@@ -590,40 +650,152 @@ func (d *DB) UpsertScanned(ctx context.Context, doc Document, seen string, absen
 			return false, rerr
 		}
 		if renamed {
-			if err := tx.QueryRowContext(ctx, `SELECT sha256 FROM documents WHERE path=?`, doc.Path).Scan(&old); err != nil {
+			old, err = loadScannedSnapshot(ctx, tx, doc.Path)
+			if err != nil {
 				return false, err
 			}
-			changed = old != doc.SHA256 // stable identity does not make an edit fresh.
+			newPath = false
 		}
 	}
-	// The CASE expressions preserve tags/status/last_error/frontmatter when the
-	// hash is unchanged — only the timestamps refresh on an unmodified file.
-	_, err = tx.ExecContext(ctx, `INSERT INTO documents(path,sha256,size,modified_unix,tags_json,frontmatter_json,frontmatter_issues,sig,status,first_seen_at,last_seen_at,fm_sha256,body_sha256)
-VALUES(?,?,?,?,?,?,?,?,'pending',?,?,?,?)
-ON CONFLICT(path) DO UPDATE SET sha256=excluded.sha256,fm_sha256=excluded.fm_sha256,body_sha256=excluded.body_sha256,size=excluded.size,modified_unix=excluded.modified_unix,
-tags_json=CASE WHEN documents.sha256<>excluded.sha256 THEN excluded.tags_json ELSE documents.tags_json END,
-frontmatter_json=excluded.frontmatter_json,
-frontmatter_issues=excluded.frontmatter_issues,
-sig=CASE WHEN documents.sha256<>excluded.sha256 THEN excluded.sig ELSE documents.sig END,
-embedding=CASE WHEN documents.sha256<>excluded.sha256 THEN NULL ELSE documents.embedding END,
-last_seen_at=excluded.last_seen_at,
-status=CASE WHEN documents.sha256<>excluded.sha256 THEN 'pending' WHEN documents.status='missing' THEN CASE WHEN documents.sha256=documents.analyzed_sha256 THEN 'analyzed' ELSE 'pending' END ELSE documents.status END,
-last_error=CASE WHEN documents.sha256<>excluded.sha256 THEN '' ELSE documents.last_error END`,
-		doc.Path, doc.SHA256, doc.Size, doc.ModifiedUnix, doc.TagsJSON, doc.FrontmatterJSON, doc.FrontmatterIssues, doc.Signature, seen, seen, doc.FmSHA256, doc.BodySHA256)
-	if err != nil {
+	changed := newPath || old.sha != doc.SHA256
+	legacy, semanticSame := scannedSemanticsUnchanged(old, doc, newPath)
+	semanticChanged := newPath || !semanticSame
+	lineage := migrateLegacyLineage(old, doc, legacy && semanticSame)
+	if err := upsertScannedRow(ctx, tx, doc, seen, old, newPath, semanticChanged, lineage); err != nil {
 		return false, err
 	}
-	if changed {
-		if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded',error='source content changed during scan; review a new proposal',
-decided_at=COALESCE(decided_at,?) WHERE document_path=? AND status IN ('pending','accepted') AND source_sha256<>?`,
-			time.Now().UTC().Format(time.RFC3339), doc.Path, doc.SHA256); err != nil {
-			return false, err
-		}
+	if err := retireStaleScannedSuggestions(ctx, tx, doc, changed); err != nil {
+		return false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}
 	return changed, nil
+}
+
+type scanSnapshot struct {
+	sha, fmSHA, bodySHA, semanticSHA, semanticFM, semanticBody                  string
+	analyzedSHA, externalSHA, enrichedSHA, expandSHA, freshnessSHA, embeddedSHA string
+	analyzedSemantic, externalSemantic                                          string
+	frontmatterJSON, status                                                     string
+}
+
+type scanLineage struct {
+	analyzedSHA, externalSHA, enrichedSHA, expandSHA, freshnessSHA, embeddedSHA string
+	analyzedSemantic, externalSemantic                                          string
+}
+
+func loadScannedSnapshot(ctx context.Context, tx *sql.Tx, path string) (scanSnapshot, error) {
+	var old scanSnapshot
+	err := tx.QueryRowContext(ctx, `SELECT sha256,fm_sha256,body_sha256,semantic_sha256,
+semantic_frontmatter_sha256,semantic_body_sha256,analyzed_sha256,external_sha256,enriched_sha256,
+expand_sha256,freshness_sha256,embedded_sha256,analyzed_semantic_sha256,external_semantic_sha256,
+frontmatter_json,status FROM documents WHERE path=?`, path).Scan(
+		&old.sha, &old.fmSHA, &old.bodySHA, &old.semanticSHA, &old.semanticFM, &old.semanticBody,
+		&old.analyzedSHA, &old.externalSHA, &old.enrichedSHA, &old.expandSHA,
+		&old.freshnessSHA, &old.embeddedSHA, &old.analyzedSemantic, &old.externalSemantic,
+		&old.frontmatterJSON, &old.status)
+	return old, err
+}
+
+func scannedSemanticsUnchanged(old scanSnapshot, doc Document, newPath bool) (legacy, same bool) {
+	if newPath {
+		return false, false
+	}
+	legacy = old.semanticSHA == "" || old.semanticSHA == old.sha
+	if !legacy {
+		return false, old.semanticSHA == doc.SemanticSHA256
+	}
+	if old.sha == doc.SHA256 {
+		return true, true
+	}
+	oldSemanticFM, ok := frontmatter.SemanticFrontmatterHashJSON(old.frontmatterJSON)
+	return true, ok && oldSemanticFM == doc.SemanticFrontmatterSHA && old.bodySHA == doc.BodySHA256
+}
+
+func migrateLegacyLineage(old scanSnapshot, doc Document, semanticSame bool) scanLineage {
+	lineage := scanLineage{
+		analyzedSHA: old.analyzedSHA, externalSHA: old.externalSHA,
+		enrichedSHA: old.enrichedSHA, expandSHA: old.expandSHA,
+		freshnessSHA: old.freshnessSHA, embeddedSHA: old.embeddedSHA,
+		analyzedSemantic: old.analyzedSemantic, externalSemantic: old.externalSemantic,
+	}
+	if !semanticSame {
+		return lineage
+	}
+	if old.analyzedSHA == old.sha {
+		lineage.analyzedSHA, lineage.analyzedSemantic = doc.AnalysisInputSHA256, doc.SemanticSHA256
+	}
+	if old.externalSHA == old.sha {
+		lineage.externalSHA, lineage.externalSemantic = doc.AnalysisInputSHA256, doc.SemanticSHA256
+	}
+	if old.enrichedSHA == old.sha {
+		lineage.enrichedSHA = doc.EnrichmentInputSHA256
+	}
+	if old.expandSHA == old.sha {
+		lineage.expandSHA = doc.ExpandInputSHA256
+	}
+	if old.embeddedSHA == old.sha {
+		lineage.embeddedSHA = doc.SemanticSHA256
+	}
+	// Do not migrate freshness: its prompt now includes version-impact review,
+	// so an old result needs one refresh under the new contract.
+	return lineage
+}
+
+func upsertScannedRow(ctx context.Context, tx *sql.Tx, doc Document, seen string, old scanSnapshot, newPath, semanticChanged bool, lineage scanLineage) error {
+	analysisCurrent := lineage.analyzedSHA == doc.AnalysisInputSHA256
+	newStatus := old.status
+	if newPath || semanticChanged {
+		newStatus = "pending"
+	} else if old.status == "missing" {
+		newStatus = "pending"
+		if analysisCurrent {
+			newStatus = "analyzed"
+		}
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO documents(
+path,sha256,size,modified_unix,tags_json,frontmatter_json,frontmatter_issues,sig,status,
+first_seen_at,last_seen_at,fm_sha256,body_sha256,semantic_sha256,semantic_frontmatter_sha256,
+semantic_body_sha256,analysis_input_sha256,enrichment_input_sha256,expand_input_sha256,
+freshness_input_sha256,analyzed_sha256,external_sha256,enriched_sha256,expand_sha256,
+freshness_sha256,embedded_sha256,analyzed_semantic_sha256,external_semantic_sha256)
+VALUES(?,?,?,?,?,?,?,?,'pending',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(path) DO UPDATE SET sha256=excluded.sha256,fm_sha256=excluded.fm_sha256,
+body_sha256=excluded.body_sha256,semantic_sha256=excluded.semantic_sha256,
+semantic_frontmatter_sha256=excluded.semantic_frontmatter_sha256,
+semantic_body_sha256=excluded.semantic_body_sha256,
+analysis_input_sha256=excluded.analysis_input_sha256,
+enrichment_input_sha256=excluded.enrichment_input_sha256,
+expand_input_sha256=excluded.expand_input_sha256,
+freshness_input_sha256=excluded.freshness_input_sha256,
+analyzed_sha256=?,external_sha256=?,enriched_sha256=?,expand_sha256=?,freshness_sha256=?,
+embedded_sha256=?,analyzed_semantic_sha256=?,external_semantic_sha256=?,
+size=excluded.size,modified_unix=excluded.modified_unix,
+tags_json=CASE WHEN ? THEN excluded.tags_json ELSE documents.tags_json END,
+frontmatter_json=excluded.frontmatter_json,frontmatter_issues=excluded.frontmatter_issues,
+sig=excluded.sig,embedding=CASE WHEN ? THEN NULL ELSE documents.embedding END,
+last_seen_at=excluded.last_seen_at,status=?,last_error=CASE WHEN ? THEN '' ELSE documents.last_error END`,
+		doc.Path, doc.SHA256, doc.Size, doc.ModifiedUnix, doc.TagsJSON, doc.FrontmatterJSON,
+		doc.FrontmatterIssues, doc.Signature, seen, seen, doc.FmSHA256, doc.BodySHA256,
+		doc.SemanticSHA256, doc.SemanticFrontmatterSHA, doc.SemanticBodySHA256,
+		doc.AnalysisInputSHA256, doc.EnrichmentInputSHA256, doc.ExpandInputSHA256,
+		doc.FreshnessInputSHA256, lineage.analyzedSHA, lineage.externalSHA, lineage.enrichedSHA,
+		lineage.expandSHA, lineage.freshnessSHA, lineage.embeddedSHA, lineage.analyzedSemantic,
+		lineage.externalSemantic, lineage.analyzedSHA, lineage.externalSHA, lineage.enrichedSHA,
+		lineage.expandSHA, lineage.freshnessSHA, lineage.embeddedSHA, lineage.analyzedSemantic,
+		lineage.externalSemantic, semanticChanged, semanticChanged, newStatus, semanticChanged)
+	return err
+}
+
+func retireStaleScannedSuggestions(ctx context.Context, tx *sql.Tx, doc Document, changed bool) error {
+	if !changed {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded',error='source content changed during scan; review a new proposal',
+decided_at=COALESCE(decided_at,?) WHERE document_path=? AND status IN ('pending','accepted') AND source_sha256<>?`,
+		time.Now().UTC().Format(time.RFC3339), doc.Path, doc.SHA256)
+	return err
 }
 
 // Renames returns every recorded move as old_path → new_path — the prefilter
@@ -751,18 +923,17 @@ func (d *DB) MarkMissing(ctx context.Context, seen string) error {
 }
 
 // documentColumns is the shared SELECT list for Document rows.
-const documentColumns = `path,sha256,analyzed_sha256,analyzed_model,external_sha256,external_model,enriched_sha256,enriched_model,fm_sha256,body_sha256,seen_fm_sha256,seen_body_sha256,expand_sha256,expand_model,freshness_sha256,freshness_model,embedded_sha256,embedded_model,size,modified_unix,title,summary,tags_json,status,last_error,frontmatter_json,frontmatter_issues,link_issues,sig,embedding`
+const documentColumns = `path,sha256,analyzed_sha256,analyzed_model,analyzed_semantic_sha256,external_sha256,external_model,external_semantic_sha256,enriched_sha256,enriched_model,fm_sha256,body_sha256,semantic_sha256,semantic_frontmatter_sha256,semantic_body_sha256,analysis_input_sha256,enrichment_input_sha256,expand_input_sha256,freshness_input_sha256,freshness_web_verify,freshness_verify_model,seen_fm_sha256,seen_body_sha256,expand_sha256,expand_model,freshness_sha256,freshness_model,embedded_sha256,embedded_model,size,modified_unix,title,summary,tags_json,status,last_error,frontmatter_json,frontmatter_issues,link_issues,sig,embedding`
 
 // scanDocument reads one Document row in documentColumns order.
 func scanDocument(rows *sql.Rows) (Document, error) {
 	var x Document
-	err := rows.Scan(&x.Path, &x.SHA256, &x.AnalyzedSHA256, &x.AnalyzedModel, &x.ExternalSHA256, &x.ExternalModel, &x.EnrichedSHA256, &x.EnrichedModel, &x.FmSHA256, &x.BodySHA256, &x.SeenFmSHA256, &x.SeenBodySHA256, &x.ExpandSHA256, &x.ExpandModel, &x.FreshnessSHA256, &x.FreshnessModel, &x.EmbeddedSHA256, &x.EmbeddedModel, &x.Size, &x.ModifiedUnix, &x.Title, &x.Summary, &x.TagsJSON, &x.Status, &x.LastError, &x.FrontmatterJSON, &x.FrontmatterIssues, &x.LinkIssues, &x.Signature, &x.Embedding)
+	err := rows.Scan(&x.Path, &x.SHA256, &x.AnalyzedSHA256, &x.AnalyzedModel, &x.AnalyzedSemanticSHA256, &x.ExternalSHA256, &x.ExternalModel, &x.ExternalSemanticSHA256, &x.EnrichedSHA256, &x.EnrichedModel, &x.FmSHA256, &x.BodySHA256, &x.SemanticSHA256, &x.SemanticFrontmatterSHA, &x.SemanticBodySHA256, &x.AnalysisInputSHA256, &x.EnrichmentInputSHA256, &x.ExpandInputSHA256, &x.FreshnessInputSHA256, &x.FreshnessWebVerify, &x.FreshnessVerifyModel, &x.SeenFmSHA256, &x.SeenBodySHA256, &x.ExpandSHA256, &x.ExpandModel, &x.FreshnessSHA256, &x.FreshnessModel, &x.EmbeddedSHA256, &x.EmbeddedModel, &x.Size, &x.ModifiedUnix, &x.Title, &x.Summary, &x.TagsJSON, &x.Status, &x.LastError, &x.FrontmatterJSON, &x.FrontmatterIssues, &x.LinkIssues, &x.Signature, &x.Embedding)
 	return x, err
 }
 
-// Pending returns documents that need (re)processing in the local lane: the
-// content hash differs from the last analysis hash (analysis pass) or the
-// last enrichment hash (fast-model pass), and the file is not missing. The
+// Pending returns documents whose semantic/prompt input differs from the
+// last analysis or enrichment input in the local lane, and the file is not missing. The
 // enrichment condition only applies when fastModel is a genuinely different
 // model — a single configured model never schedules the cheaper pass
 // separately. With reanalyze, documents last processed under a different
@@ -770,7 +941,7 @@ func scanDocument(rows *sql.Rows) (Document, error) {
 // document, for example after a prompt or taxonomy policy change; both
 // options stay opt-in.
 func (d *DB) Pending(ctx context.Context, analysisModel, fastModel string, reanalyze bool, forceAll ...bool) ([]Document, error) {
-	return d.pending(ctx, "analyzed_sha256", "analyzed_model", analysisModel, fastModel, reanalyze, forceAll...)
+	return d.pending(ctx, "analysis_input_sha256", "analyzed_sha256", "analyzed_model", analysisModel, "enrichment_input_sha256", "enriched_sha256", fastModel, reanalyze, forceAll...)
 }
 
 // PendingExternal is Pending for the external lane: an enhanced run
@@ -781,10 +952,10 @@ func (d *DB) Pending(ctx context.Context, analysisModel, fastModel string, reana
 // the external model.
 func (d *DB) PendingExternal(ctx context.Context, analysisModel, fastModel string, enrichOn, reanalyze bool, forceAll ...bool) ([]Document, error) {
 	twoModel := enrichOn && fastModel != ""
-	cond := `sha256<>external_sha256`
+	cond := `analysis_input_sha256<>external_sha256`
 	var args []any
 	if twoModel {
-		cond += ` OR sha256<>enriched_sha256`
+		cond += ` OR enrichment_input_sha256<>enriched_sha256`
 	}
 	if reanalyze {
 		cond += ` OR external_model<>?`
@@ -797,15 +968,15 @@ func (d *DB) PendingExternal(ctx context.Context, analysisModel, fastModel strin
 	return d.documentsWhere(ctx, `(`+cond+`)`, args)
 }
 
-func (d *DB) pending(ctx context.Context, shaCol, modelCol, analysisModel, fastModel string, reanalyze bool, forceAll ...bool) ([]Document, error) {
+func (d *DB) pending(ctx context.Context, inputCol, stampCol, modelCol, analysisModel, enrichInputCol, enrichStampCol, fastModel string, reanalyze bool, forceAll ...bool) ([]Document, error) {
 	if len(forceAll) > 0 && forceAll[0] {
 		return d.documentsWhere(ctx, `1=1`, nil)
 	}
 	twoModel := fastModel != "" && fastModel != analysisModel
-	cond := `sha256<>` + shaCol
+	cond := inputCol + `<>` + stampCol
 	var args []any
 	if twoModel {
-		cond += ` OR sha256<>enriched_sha256`
+		cond += ` OR ` + enrichInputCol + `<>` + enrichStampCol
 	}
 	if reanalyze {
 		cond += ` OR ` + modelCol + `<>?`
@@ -818,14 +989,14 @@ func (d *DB) pending(ctx context.Context, shaCol, modelCol, analysisModel, fastM
 	return d.documentsWhere(ctx, `(`+cond+`)`, args)
 }
 
-// PendingEnrich returns documents needing the fast enrichment pass only:
-// the hash differs from the last enrichment stamp, or (with reanalyze) the
-// stamp came from another model.
+// PendingEnrich returns documents whose semantic/prompt input differs from
+// the last enrichment stamp, or (with reanalyze) whose stamp came from another
+// model.
 func (d *DB) PendingEnrich(ctx context.Context, fastModel string, reanalyze bool, forceAll ...bool) ([]Document, error) {
 	if len(forceAll) > 0 && forceAll[0] {
 		return d.documentsWhere(ctx, `1=1`, nil)
 	}
-	cond := `sha256<>enriched_sha256`
+	cond := `enrichment_input_sha256<>enriched_sha256`
 	var args []any
 	if reanalyze {
 		cond += ` OR enriched_model<>?`
@@ -834,33 +1005,66 @@ func (d *DB) PendingEnrich(ctx context.Context, fastModel string, reanalyze bool
 	return d.documentsWhere(ctx, `(`+cond+`)`, args)
 }
 
-// taskColumns maps an optional LLM task to its lineage columns and the
-// current-state column the stamp compares against: freshness tracks the body
-// hash (frontmatter churn never re-dates content), expand and embed the full
-// canonical hash.
+// taskColumns maps an optional task to its current input fingerprint, stamp and
+// model columns. All tasks use semantic input; their fingerprint also includes
+// the relevant static prompt/policy settings.
 func taskColumns(task string) (cur, sha, model string, err error) {
 	switch task {
 	case "expand":
-		return "sha256", "expand_sha256", "expand_model", nil
+		return "expand_input_sha256", "expand_sha256", "expand_model", nil
 	case "freshness":
-		return "COALESCE(NULLIF(body_sha256,''),sha256)", "freshness_sha256", "freshness_model", nil
+		return "freshness_input_sha256", "freshness_sha256", "freshness_model", nil
 	case "embed":
-		return "sha256", "embedded_sha256", "embedded_model", nil
+		return "semantic_sha256", "embedded_sha256", "embedded_model", nil
 	}
 	return "", "", "", fmt.Errorf("unknown task %q", task)
 }
 
 // taskCurrent returns the document field matching taskColumns' current column.
 func taskCurrent(doc Document, task string) string {
-	if task == "freshness" && doc.BodySHA256 != "" {
-		return doc.BodySHA256
+	switch task {
+	case "expand":
+		return firstNonempty(doc.ExpandInputSHA256, fallbackSemanticSHA(doc))
+	case "freshness":
+		return firstNonempty(doc.FreshnessInputSHA256, fallbackSemanticSHA(doc))
+	case "embed":
+		return firstNonempty(doc.SemanticSHA256, doc.SHA256)
+	}
+	return ""
+}
+
+func fallbackSemanticSHA(doc Document) string {
+	if doc.SemanticSHA256 != "" {
+		return doc.SemanticSHA256
 	}
 	return doc.SHA256
 }
 
+func firstNonempty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 // PendingTask returns documents whose task lineage is behind the current
 // content — the task run is incremental, exactly like the analysis lanes.
+type TaskRunOptions struct {
+	WebVerify   bool
+	VerifyModel string
+}
+
 func (d *DB) PendingTask(ctx context.Context, task, model string, reanalyze bool, forceAll ...bool) ([]Document, error) {
+	return d.pendingTask(ctx, task, model, reanalyze, TaskRunOptions{}, forceAll...)
+}
+
+func (d *DB) PendingTaskForRun(ctx context.Context, task, model string, reanalyze bool, options TaskRunOptions, forceAll ...bool) ([]Document, error) {
+	return d.pendingTask(ctx, task, model, reanalyze, options, forceAll...)
+}
+
+func (d *DB) pendingTask(ctx context.Context, task, model string, reanalyze bool, opts TaskRunOptions, forceAll ...bool) ([]Document, error) {
 	cur, sha, modelCol, err := taskColumns(task)
 	if err != nil {
 		return nil, err
@@ -870,6 +1074,10 @@ func (d *DB) PendingTask(ctx context.Context, task, model string, reanalyze bool
 	}
 	cond := cur + `<>` + sha
 	var args []any
+	if task == "freshness" && opts.WebVerify {
+		cond += ` OR freshness_web_verify=0 OR freshness_verify_model<>?`
+		args = append(args, opts.VerifyModel)
+	}
 	if reanalyze || task == "embed" {
 		cond += ` OR ` + modelCol + `<>?`
 		args = append(args, model)
@@ -918,8 +1126,16 @@ func (d *DB) SaveTask(ctx context.Context, doc Document, task, model string, sug
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `UPDATE documents SET `+shaCol+`=?,`+modelCol+`=? WHERE path=?`, // #nosec G202 -- columns are compile-time constants
-		taskCurrent(doc, task), model, doc.Path); err != nil {
+	inputSHA := taskCurrent(doc, task)
+	query := `UPDATE documents SET ` + shaCol + `=?,` + modelCol + `=?` // #nosec G202 -- columns are compile-time constants from taskColumns
+	args := []any{inputSHA, model}
+	if task == "freshness" {
+		query += `,freshness_web_verify=?,freshness_verify_model=?`
+		args = append(args, doc.FreshnessWebVerify, doc.FreshnessVerifyModel)
+	}
+	query += ` WHERE path=?`
+	args = append(args, doc.Path)
+	if _, err = tx.ExecContext(ctx, query, args...); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded',decided_at=COALESCE(decided_at,?) WHERE document_path=? AND status='pending' AND origin=?`, time.Now().UTC().Format(time.RFC3339), doc.Path, task); err != nil {
@@ -944,8 +1160,16 @@ func (d *DB) StampTask(ctx context.Context, doc Document, task, model string) er
 	if err != nil {
 		return err
 	}
-	_, err = d.ExecContext(ctx, `UPDATE documents SET `+shaCol+`=?,`+modelCol+`=? WHERE path=?`, // #nosec G202 -- columns are compile-time constants
-		taskCurrent(doc, task), model, doc.Path)
+	inputSHA := taskCurrent(doc, task)
+	query := `UPDATE documents SET ` + shaCol + `=?,` + modelCol + `=?` // #nosec G202 -- columns are compile-time constants from taskColumns
+	args := []any{inputSHA, model}
+	if task == "freshness" {
+		query += `,freshness_web_verify=?,freshness_verify_model=?`
+		args = append(args, doc.FreshnessWebVerify, doc.FreshnessVerifyModel)
+	}
+	query += ` WHERE path=?`
+	args = append(args, doc.Path)
+	_, err = d.ExecContext(ctx, query, args...)
 	return err
 }
 
@@ -1139,31 +1363,35 @@ func (d *DB) RejectedSuggestions(ctx context.Context, path string, limit int) ([
 }
 
 // SaveAnalysis atomically records a successful analysis — title, summary, merged
-// tags, analyzed_sha256, status='analyzed' — and inserts any actionable
+// tags, analysis input lineage, status='analyzed' — and inserts any actionable
 // suggestions as 'pending'. 'none' suggestions are dropped. The transaction
 // makes it all-or-nothing: a crash can't leave half-saved state.
 func (d *DB) SaveAnalysis(ctx context.Context, doc Document, model, title, summary string, tags []string, suggestions []Suggestion, results ...StageResult) error {
-	return d.saveAnalysis(ctx, doc, "analyzed_sha256", "analyzed_model", model, title, summary, tags, suggestions, results...)
+	return d.saveAnalysis(ctx, doc, "analyzed_sha256", "analyzed_model", "analyzed_semantic_sha256", model, title, summary, tags, suggestions, results...)
 }
 
 // SaveExternalAnalysis is SaveAnalysis for the external lane: an enhanced run
-// stamps external_sha256/external_model and leaves the local analyzed_*
+// stamps external input/model lineage and leaves the local analyzed_*
 // markers untouched, so the next normal run does not see the whole corpus as
 // new or model-drifted. Suggestion handling stays identical — pending
 // 'analysis' suggestions are superseded and the new ones are inserted.
 func (d *DB) SaveExternalAnalysis(ctx context.Context, doc Document, model, title, summary string, tags []string, suggestions []Suggestion, results ...StageResult) error {
-	return d.saveAnalysis(ctx, doc, "external_sha256", "external_model", model, title, summary, tags, suggestions, results...)
+	return d.saveAnalysis(ctx, doc, "external_sha256", "external_model", "external_semantic_sha256", model, title, summary, tags, suggestions, results...)
 }
 
-func (d *DB) saveAnalysis(ctx context.Context, doc Document, shaCol, modelCol, model, title, summary string, tags []string, suggestions []Suggestion, results ...StageResult) error {
+func (d *DB) saveAnalysis(ctx context.Context, doc Document, shaCol, modelCol, semanticCol, model, title, summary string, tags []string, suggestions []Suggestion, results ...StageResult) error {
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	tj, _ := json.Marshal(tags)
-	if _, err = tx.ExecContext(ctx, `UPDATE documents SET `+shaCol+`=?,`+modelCol+`=?,title=?,summary=?,tags_json=?,status='analyzed',last_error='',analyzed_at=?,seen_fm_sha256=?,seen_body_sha256=? WHERE path=?`, // #nosec G202 -- shaCol/modelCol are compile-time lane constants, never user input
-		doc.SHA256, model, title, summary, string(tj), time.Now().UTC().Format(time.RFC3339), doc.FmSHA256, doc.BodySHA256, doc.Path); err != nil {
+	inputSHA := doc.AnalysisInputSHA256
+	if inputSHA == "" {
+		inputSHA = fallbackSemanticSHA(doc)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE documents SET `+shaCol+`=?,`+modelCol+`=?,`+semanticCol+`=?,title=?,summary=?,tags_json=?,status='analyzed',last_error='',analyzed_at=?,seen_fm_sha256=?,seen_body_sha256=? WHERE path=?`, // #nosec G202 -- columns are compile-time constants, never user input
+		inputSHA, model, fallbackSemanticSHA(doc), title, summary, string(tj), time.Now().UTC().Format(time.RFC3339), doc.FmSHA256, doc.BodySHA256, doc.Path); err != nil {
 		return err
 	}
 	// Retire the pending analysis suggestions this pass replaces. Keep a
@@ -1220,11 +1448,15 @@ func (d *DB) SaveEnrichment(ctx context.Context, doc Document, model, title, sum
 	}
 	defer tx.Rollback()
 	tj, _ := json.Marshal(tags)
+	inputSHA := doc.EnrichmentInputSHA256
+	if inputSHA == "" {
+		inputSHA = fallbackSemanticSHA(doc)
+	}
 	if _, err = tx.ExecContext(ctx, `UPDATE documents SET enriched_sha256=?,enriched_model=?,
-title=CASE WHEN analyzed_sha256=sha256 THEN title ELSE ? END,
-summary=CASE WHEN analyzed_sha256=sha256 THEN summary ELSE ? END,
-tags_json=CASE WHEN analyzed_sha256=sha256 THEN tags_json ELSE ? END WHERE path=?`,
-		doc.SHA256, model, title, summary, string(tj), doc.Path); err != nil {
+title=CASE WHEN analyzed_sha256=analysis_input_sha256 THEN title ELSE ? END,
+summary=CASE WHEN analyzed_sha256=analysis_input_sha256 THEN summary ELSE ? END,
+tags_json=CASE WHEN analyzed_sha256=analysis_input_sha256 THEN tags_json ELSE ? END WHERE path=?`,
+		inputSHA, model, title, summary, string(tj), doc.Path); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded',decided_at=COALESCE(decided_at,?) WHERE document_path=? AND status='pending' AND origin IN ('enrich','deterministic')`, time.Now().UTC().Format(time.RFC3339), doc.Path); err != nil {
@@ -1304,15 +1536,26 @@ func (d *DB) Documents(ctx context.Context) ([]Document, error) {
 // successful analysis, how many were analysed under a different model than
 // configured (drift — re-runable via analyze's reanalyze option), and the
 // latest completed `run` cycle.
-func (d *DB) KnowledgeDashboard(ctx context.Context, model string) (KnowledgeDashboard, error) {
+func (d *DB) KnowledgeDashboard(ctx context.Context, model string, externalModels ...string) (KnowledgeDashboard, error) {
 	var overview KnowledgeDashboard
 	if err := d.QueryRowContext(ctx, `SELECT COUNT(*) FROM documents
-WHERE sha256<>analyzed_sha256 AND status<>'missing'`).Scan(&overview.ChangedFiles); err != nil {
+WHERE analysis_input_sha256<>analyzed_sha256 AND status<>'missing'`).Scan(&overview.ChangedFiles); err != nil {
 		return KnowledgeDashboard{}, err
 	}
 	if err := d.QueryRowContext(ctx, `SELECT COUNT(*) FROM documents
-WHERE analyzed_model<>? AND sha256=analyzed_sha256 AND status<>'missing'`, model).Scan(&overview.ModelDrift); err != nil {
+WHERE analysis_input_sha256<>external_sha256 AND status<>'missing'`).Scan(&overview.ExternalChangedFiles); err != nil {
 		return KnowledgeDashboard{}, err
+	}
+	if err := d.QueryRowContext(ctx, `SELECT COUNT(*) FROM documents
+WHERE analyzed_model<>? AND analysis_input_sha256=analyzed_sha256 AND status<>'missing'`, model).Scan(&overview.ModelDrift); err != nil {
+		return KnowledgeDashboard{}, err
+	}
+	if len(externalModels) > 0 && externalModels[0] != "" {
+		if err := d.QueryRowContext(ctx, `SELECT COUNT(*) FROM documents
+WHERE external_model<>? AND analysis_input_sha256=external_sha256 AND status<>'missing'`,
+			externalModels[0]).Scan(&overview.ExternalModelDrift); err != nil {
+			return KnowledgeDashboard{}, err
+		}
 	}
 	err := d.QueryRowContext(ctx, `SELECT COALESCE((
 SELECT finished_at FROM jobs

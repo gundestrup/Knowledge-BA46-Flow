@@ -22,6 +22,7 @@ import (
 	"knowledge-ba46-flow/internal/database"
 	repositoryreport "knowledge-ba46-flow/internal/report"
 	"knowledge-ba46-flow/internal/review"
+	"knowledge-ba46-flow/internal/scanner"
 )
 
 // setup opens a temp DB with one document and one pending 'move' suggestion.
@@ -708,7 +709,7 @@ func TestAnalyzeAndRunJobsWithoutPendingDocuments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(detail, "Analyzed 0; fast-enriched 0; locally enriched 0; skipped 0 by MCP policy; failed 0 (model ") ||
+	if !strings.HasPrefix(detail, "Scanned 1 markdown files; 0 new/changed. 1 document IDs assigned. Analyzed 0; fast-enriched 0; locally enriched 0; skipped 0 by MCP policy; failed 0 (model ") ||
 		!strings.HasSuffix(detail, "; rejected 0 unsafe edit(s); skipped 0 stub placeholder(s).") {
 		t.Fatalf("analyze detail=%q", detail)
 	}
@@ -717,8 +718,34 @@ func TestAnalyzeAndRunJobsWithoutPendingDocuments(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(detail, "Scanned 1 markdown files; 0 new/changed.") ||
-		!strings.Contains(detail, "Analyzed 0; fast-enriched 0; locally enriched 0; skipped 0 by MCP policy; failed 0 (model ") {
+		!strings.Contains(detail, "Analyzed 0; fast-enriched 0; locally enriched 0; skipped 0 by MCP policy; failed 0 (model ") ||
+		!strings.Contains(detail, "skipped 0 stub placeholder(s)") {
 		t.Fatalf("run detail=%q", detail)
+	}
+}
+
+func TestAnalyzeOperationScansLiveChangesBeforeSelectingWork(t *testing.T) {
+	c, db, srv := setup(t)
+	defer srv.Close()
+	write := []byte("# changed after the last scan\n\nA substantive edit.\n")
+	if err := os.WriteFile(filepath.Join(c.RepositoryPath, "a.md"), write, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c.OllamaModel = ""
+	c.OllamaTaskModels = nil
+	o := &ops{c: c, db: db}
+	if _, err := o.runOp(context.Background(), database.Job{Op: "analyze"}, opRequest{}); err == nil {
+		t.Fatal("analysis without a configured model should fail after preflight scan")
+	}
+	docs, err := db.Documents(context.Background())
+	if err != nil || len(docs) != 1 {
+		t.Fatalf("docs=%+v err=%v", docs, err)
+	}
+	if docs[0].SHA256 != scanner.CanonicalHash(string(write)) {
+		t.Fatalf("preflight did not sync live source hash: got=%s", docs[0].SHA256)
+	}
+	if docs[0].AnalyzedSHA256 == docs[0].AnalysisInputSHA256 {
+		t.Fatal("changed semantic content should remain pending for a future configured run")
 	}
 }
 
@@ -1142,7 +1169,7 @@ func TestRunOpExpandSkipsNonStubs(t *testing.T) {
 		t.Fatalf("expand detail=%q", detail)
 	}
 	doc, err := db.Documents(context.Background())
-	if err != nil || doc[0].ExpandSHA256 != doc[0].SHA256 {
+	if err != nil || doc[0].ExpandSHA256 != doc[0].ExpandInputSHA256 {
 		t.Fatalf("skipped doc should be stamped: %+v", doc)
 	}
 }
@@ -1231,7 +1258,7 @@ func TestRunOpEnrichStampsFastLaneOnly(t *testing.T) {
 	if err != nil || len(docs) != 1 {
 		t.Fatalf("docs=%v err=%v", docs, err)
 	}
-	if docs[0].EnrichedSHA256 != docs[0].SHA256 {
+	if docs[0].EnrichedSHA256 != docs[0].EnrichmentInputSHA256 {
 		t.Fatalf("enrich lineage not stamped: %+v", docs[0])
 	}
 	// The local analysis lane must not move — enrich-only is a separate pass.
@@ -1251,7 +1278,7 @@ func TestRunOpEmbedStoresVector(t *testing.T) {
 	if err != nil || len(docs) != 1 {
 		t.Fatalf("docs=%v err=%v", docs, err)
 	}
-	if len(docs[0].Embedding) == 0 || docs[0].EmbeddedSHA256 != docs[0].SHA256 {
+	if len(docs[0].Embedding) == 0 || docs[0].EmbeddedSHA256 != docs[0].SemanticSHA256 {
 		t.Fatalf("embedding not stored/stamped: %+v", docs[0])
 	}
 }
@@ -1274,14 +1301,12 @@ func TestRunOpFreshnessWritesManagedBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The fixture bypassed the scanner, so body_sha256 is empty and the stamp
-	// falls back to the canonical hash.
-	if docs[0].FreshnessSHA256 != docs[0].SHA256 {
+	if docs[0].FreshnessSHA256 != docs[0].FreshnessInputSHA256 {
 		t.Fatalf("freshness lineage not stamped: %+v", docs[0])
 	}
-	// The managed write must not have changed the canonical hash.
-	if docs[0].SHA256 != docs[0].AnalyzedSHA256 {
-		t.Fatal("kbm write invalidated the canonical hash")
+	// The managed write must not have changed the strict source hash.
+	if docs[0].SemanticSHA256 == "" || docs[0].SHA256 == "" {
+		t.Fatal("managed write lost the source or semantic hash")
 	}
 }
 
@@ -1301,7 +1326,7 @@ func TestRunOpAllSkipsUnconfiguredLanes(t *testing.T) {
 	if err != nil || len(docs) != 1 {
 		t.Fatalf("docs=%v err=%v", docs, err)
 	}
-	if docs[0].EnrichedSHA256 != docs[0].SHA256 || docs[0].FreshnessSHA256 == "" {
+	if docs[0].EnrichedSHA256 != docs[0].EnrichmentInputSHA256 || docs[0].FreshnessSHA256 != docs[0].FreshnessInputSHA256 {
 		t.Fatalf("all-run lineage incomplete: %+v", docs[0])
 	}
 }
@@ -1532,10 +1557,18 @@ func TestOpsDryRunWarnsAndCountsDependents(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(c.RepositoryPath, "b.md"), bContent, 0644); err != nil {
 		t.Fatal(err)
 	}
-	bSum := sha256.Sum256(bContent)
-	bDoc := database.Document{Path: "b.md", SHA256: hex.EncodeToString(bSum[:]), Size: int64(len(bContent)), ModifiedUnix: 1, TagsJSON: "[]", FrontmatterJSON: `{"related":["a.md"]}`}
-	if _, err := db.UpsertScanned(ctx, bDoc, "s1"); err != nil {
+	if _, err := scanner.Scan(ctx, c, db); err != nil {
 		t.Fatal(err)
+	}
+	docs, err := db.Documents(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bDoc database.Document
+	for _, d := range docs {
+		if d.Path == "b.md" {
+			bDoc = d
+		}
 	}
 	if err := db.SaveAnalysis(ctx, bDoc, "test-model", "t", "s", nil, nil); err != nil {
 		t.Fatal(err)
@@ -1546,7 +1579,7 @@ func TestOpsDryRunWarnsAndCountsDependents(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(c.RepositoryPath, "a.md"), aContent, 0644); err != nil {
 		t.Fatal(err)
 	}
-	docs, err := db.Documents(ctx)
+	docs, err = db.Documents(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1556,11 +1589,14 @@ func TestOpsDryRunWarnsAndCountsDependents(t *testing.T) {
 			aDoc = d
 		}
 	}
-	aSum := sha256.Sum256(aContent)
-	aDoc.SHA256 = hex.EncodeToString(aSum[:])
-	aDoc.Size = int64(len(aContent))
-	if _, err := db.UpsertScanned(ctx, aDoc, "s2"); err != nil {
+	if _, err := scanner.Scan(ctx, c, db); err != nil {
 		t.Fatal(err)
+	}
+	docs, _ = db.Documents(ctx)
+	for _, d := range docs {
+		if d.Path == "a.md" {
+			aDoc = d
+		}
 	}
 
 	// Stamp the corpus under the previous embedding model and a deterministic

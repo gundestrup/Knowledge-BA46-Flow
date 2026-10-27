@@ -18,10 +18,12 @@ type landingResponse struct {
 }
 
 type landingKnowledge struct {
-	ChangedFiles       int    `json:"changed_files"`
-	ModelDrift         int    `json:"model_drift"`
-	LastCycleAt        string `json:"last_cycle_at"`
-	DaysSinceLastCycle *int   `json:"days_since_last_cycle"`
+	ChangedFiles         int    `json:"changed_files"`
+	ModelDrift           int    `json:"model_drift"`
+	ExternalChangedFiles int    `json:"external_changed_files"`
+	ExternalModelDrift   int    `json:"external_model_drift"`
+	LastCycleAt          string `json:"last_cycle_at"`
+	DaysSinceLastCycle   *int   `json:"days_since_last_cycle"`
 }
 
 type landingReport struct {
@@ -35,16 +37,23 @@ type landingReport struct {
 
 func landingData(c config.Config, db *database.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		knowledge, err := db.KnowledgeDashboard(r.Context(), c.OllamaModel)
+		localModel, err := c.TaskModel(config.TaskAnalyze, false, "")
+		if err != nil {
+			localModel = c.OllamaModel
+		}
+		externalModel, _ := c.TaskModel(config.TaskAnalyze, true, "")
+		knowledge, err := db.KnowledgeDashboard(r.Context(), localModel, externalModel)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
 		result := landingResponse{
 			Knowledge: landingKnowledge{
-				ChangedFiles: knowledge.ChangedFiles,
-				ModelDrift:   knowledge.ModelDrift,
-				LastCycleAt:  knowledge.LastCycleAt,
+				ChangedFiles:         knowledge.ChangedFiles,
+				ModelDrift:           knowledge.ModelDrift,
+				ExternalChangedFiles: knowledge.ExternalChangedFiles,
+				ExternalModelDrift:   knowledge.ExternalModelDrift,
+				LastCycleAt:          knowledge.LastCycleAt,
 			},
 			Report: landingReport{
 				Configured:    c.Report.RegistryPath != "",

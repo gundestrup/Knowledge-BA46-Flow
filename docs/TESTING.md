@@ -6,6 +6,12 @@ machine audit versus human feedback, unavailable taxonomy validation, withdrawal
 and note/type grouping. Identity tests cover reviewed byte-preserving UUID
 insertion, rename-plus-edit freshness, duplicate IDs, live UUID replacement,
 incoming references, outgoing-link warnings and live-copy ordering.
+Semantic-hash tests verify graph-only link edits do not invalidate task
+lineages but still stale full-source proposals; visible text changes do.
+Prompt tests verify a task prompt edit invalidates only that task. Ordered
+frontmatter tests pin `document_id`, title, graph/retrieval fields and `kbm`
+placement while preserving values/body. Task-entry tests verify a preflight
+scan catches post-apply edits before an LLM prompt is built.
 
 The opt-in production replay also previews and confirms reconciliation only in
 the sandbox, checks retirement/audit counts and unchanged note bytes, then
@@ -401,9 +407,15 @@ The tests cover:
   cannot resolve; the class of bug Go tests and API tests cannot see
 - schema-v3-to-v4 preservation of populated documents, embeddings and pending
   suggestions, plus atomic stage-audit/pass writes and retained attempt history
-- split frontmatter/body hashing: `fm_sha256`/`body_sha256` distinguish
-  metadata-only edits from body edits, `kbm`-only writes leave all content
-  hashes identical, and the legacy-schema migrations preserve state
+- strict source hashing versus semantic task fingerprints: full-source
+  proposal checks remain strict, graph-only link edits do not requeue semantic
+  tasks, task prompt/policy changes do, and legacy current lineages migrate
+  without a blind corpus-wide analysis pass
+- preflight scans on CLI/HTTP task entry points and a live-source guard that
+  refuses to send bytes newer than the indexed source snapshot to a model
+- frontmatter rendering and proposal normalization: stable `document_id`/title/
+  graph/tag ordering, `kbm` last, values/body preserved, and MCP-compatible
+  typed fields remain at top level
 - managed `kbm` block writes (`kbm.link_check`, `kbm.freshness`): surgical
   byte-preserving updates, sibling-key retention, `os.Root`-confined atomic
   writes, and immunity from pending requeues

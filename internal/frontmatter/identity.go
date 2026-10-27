@@ -3,6 +3,7 @@ package frontmatter
 import (
 	"crypto/rand"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 )
@@ -53,7 +54,16 @@ func AddDocumentID(content, id string) (string, error) {
 		if strings.Contains(trimmed[:open[1]], "\r\n") {
 			eol = "\r\n"
 		}
-		out = bom + trimmed[:open[1]] + "document_id: \"" + strings.ToLower(id) + "\"" + eol + trimmed[open[1]:]
+		// Match the file's top-level key indent — inserting at column 0 into
+		// a uniformly indented mapping would produce mixed-indent YAML.
+		indent := ""
+		for _, line := range strings.SplitAfter(trimmed[open[1]:], "\n") {
+			if ind := indentOfKeyLine(line); ind >= 0 {
+				indent = line[:ind]
+				break
+			}
+		}
+		out = bom + trimmed[:open[1]] + indent + "document_id: \"" + strings.ToLower(id) + "\"" + eol + trimmed[open[1]:]
 	}
 	if _, _, err := Parse(out); err != nil {
 		return "", err
@@ -62,7 +72,7 @@ func AddDocumentID(content, id string) (string, error) {
 }
 
 func ValidateIdentity(original, proposed string) error {
-	fields, _, err := Parse(proposed)
+	fields, proposedBody, err := Parse(proposed)
 	if err != nil {
 		return err
 	}
@@ -74,7 +84,11 @@ func ValidateIdentity(original, proposed string) error {
 	if err != nil {
 		return err
 	}
-	if Canonical(expected) != Canonical(proposed) {
+	expectedFields, expectedBody, err := Parse(expected)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(expectedFields, fields) || expectedBody != proposedBody {
 		return fmt.Errorf("identity initialization may only insert document_id; no other metadata, links or body may change")
 	}
 	return nil

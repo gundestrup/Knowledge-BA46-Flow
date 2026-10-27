@@ -693,7 +693,7 @@ func TestTasksCommandRunsEveryConfiguredLane(t *testing.T) {
 	guide := byPath["guide.md"]
 	// The deterministic stage enriched the note locally, so the enrich lane
 	// stamps "deterministic" as its producer rather than the model name.
-	if guide.EnrichedSHA256 != guide.SHA256 || guide.EnrichedModel == "" ||
+	if guide.EnrichedSHA256 != guide.EnrichmentInputSHA256 || guide.EnrichedModel == "" ||
 		guide.AnalyzedModel != "an-m" || guide.FreshnessModel != "fr-m" ||
 		guide.EmbeddedModel != "emb-m" {
 		t.Fatalf("guide.md lane lineage wrong: %+v", guide)

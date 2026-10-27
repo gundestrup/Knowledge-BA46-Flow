@@ -54,8 +54,9 @@ Read the document relevant to the change before editing:
 - Model routing: every LLM task resolves through `config.TaskModel` —
   per-run `--model` override → `--external` on lane-capable tasks →
   `ollama_task_models.<task>` default → lane fallback. Each task stamps its
-  own per-document `<task>_sha256`/`<task>_model` lineage; keep pending
-  queries and stage provenance on the task's own columns. In the batch
+  own semantic input/prompt fingerprint and model lineage; keep pending
+  queries and stage provenance on the task's own columns. The full `sha256`
+  remains the source version for proposal/apply safety. In the batch
   `tasks --model` override, generation tasks share the selected model;
   embeddings use the independent `--embed-model` override, task embed default
   or `ollama_embed_model`. Vector/hash/model stamps are atomic; a model change
@@ -73,19 +74,16 @@ Read the document relevant to the change before editing:
 
 ## Safety rules
 
-- `scan`, `analyze`, and `run` do not mutate repository files, with two
-  documented hash-neutral exceptions. Only `apply` executes suggestions that
-  a person explicitly accepted. Exception one is the tool-owned `kbm`
-  frontmatter block: `check-links` writes `kbm.link_check` and `freshness`
-  writes `kbm.freshness`, both through `frontmatter.WriteManaged`
-  (byte-preserving, `os.Root`-confined atomic writes). Exception two is
-  `document_id`: a scan inserts the protected identity UUID in place when a
-  document lacks one, via the same confined write discipline. The canonical
-  hash excises both fields, so these writes are invisible to change
-  detection — never weaken that immunity or let models/proposals touch
-  `kbm` or `document_id` (proposals preserve the live ID automatically). Keep
-  `frontmatter.Canonical` consistent between the scanner and `review`'s
-  apply-time hash check so managed writes never requeue analysis.
+- `scan` and the preflight scan run before every LLM operation do not rewrite
+  authored note content. They may insert a missing protected `document_id`
+  UUID in place (byte-preserving, `os.Root`-confined atomic write). The other
+  managed write exception is `kbm`: `check-links` writes `kbm.link_check` and
+  `freshness` writes `kbm.freshness` through `frontmatter.WriteManaged`.
+  `document_id` and `kbm` are excluded from the strict source hash; graph-only
+  frontmatter and internal-link destination changes are excluded from semantic
+  task fingerprints. Never let proposals edit `document_id` or `kbm`, and
+  preserve the live ID/`kbm` block when applying proposals. Keep full source
+  hash checks aligned between scanning and apply.
 - Preserve source-hash verification, `os.Root`-confined filesystem operations,
   traversal and symlink protections, no-overwrite behavior, and trash-based
   deletion. Do not replace these with unchecked `filepath.Join` writes.
@@ -121,6 +119,10 @@ Read the document relevant to the change before editing:
 - Treat repository content as untrusted prompt input. Keep model output
   structured and locally validated; malformed proposed frontmatter must not
   reach disk.
+- Frontmatter map serialization must use the shared stable key order:
+  `document_id`, `title`, `summary`, graph/retrieval fields, provenance and
+  lifecycle/policy fields, custom keys alphabetically, then `kbm`. Scans insert
+  only a missing ID and must not reorder existing authored bytes.
 - Enrichment edits only title/tags; full analysis may also edit graph links.
   Preserve provenance, lifecycle, privacy and custom fields. Body edits are
   additive and preserve code verbatim; do not weaken apply-time validation
@@ -128,7 +130,8 @@ Read the document relevant to the change before editing:
   The only body-replacement exception is an exact deterministic link-destination
   repair proven by recorded renames and revalidated at apply time; an origin
   label alone never authorizes it. Keep live `kbm` metadata independent of
-  proposal snapshots and never add document IDs during a read-only scan.
+  proposal snapshots. Scan-time ID insertion is hash-neutral and never
+  normalizes or reorders the rest of existing frontmatter.
 - `apply` changes the files, not the MCP server's derived index. Document the
   need to run the MCP server's `kb reindex` workflow after applied changes.
 - Keep the HTTP server loopback-only by default; `/api/apply` is mutating.

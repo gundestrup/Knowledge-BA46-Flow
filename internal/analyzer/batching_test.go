@@ -107,7 +107,7 @@ func TestEnrichmentFailureFallsThroughAndRetriesOnlyEnrichment(t *testing.T) {
 		t.Fatalf("result=%+v enrich calls=%d analysis calls=%d error=%v", result, calls, len(full.prompts), err)
 	}
 	docs, err := db.Documents(t.Context())
-	if err != nil || docs[0].EnrichedSHA256 != "" || docs[0].AnalyzedSHA256 != docs[0].SHA256 || docs[0].LastError != "" {
+	if err != nil || docs[0].EnrichedSHA256 != "" || docs[0].AnalyzedSHA256 != docs[0].AnalysisInputSHA256 || docs[0].LastError != "" {
 		t.Fatalf("fallback state=%+v error=%v", docs, err)
 	}
 	var message string

@@ -12,9 +12,13 @@ import (
 // The HTTP dry-run uses it to show the consequence of a selection before
 // committing to a run.
 type Estimate struct {
-	Pending    int `json:"pending"`
-	Dependents int `json:"dependents"`
-	Total      int `json:"total"`
+	Pending         int `json:"pending"`
+	Dependents      int `json:"dependents"`
+	Total           int `json:"total"`
+	SemanticChanges int `json:"semantic_changes"`
+	PromptChanges   int `json:"prompt_changes"`
+	ModelDrift      int `json:"model_drift"`
+	Unstamped       int `json:"unstamped"`
 }
 
 // EstimateAnalysis computes the RunProgress queue — pending resolution plus
@@ -37,32 +41,57 @@ func EstimateAnalysis(ctx context.Context, c config.Config, db *database.DB, opt
 	// Mirror RunProgress: the server always builds an enrichment client when a
 	// fast model resolves, so the pending predicate must see the same enrichOn.
 	p.enrichOn = models.fast != "" && (models.fast != c.OllamaModel || opts.EnrichOnly)
-	var docs []database.Document
-	switch {
-	case opts.EnrichOnly:
-		docs, err = db.PendingEnrich(ctx, p.fastModel, opts.Reanalyze, opts.ReanalyzeAll)
-	case p.external:
-		docs, err = db.PendingExternal(ctx, p.analysisModel, p.fastModel, p.enrichOn, opts.Reanalyze, opts.ReanalyzeAll)
-	default:
-		docs, err = db.Pending(ctx, p.analysisModel, p.fastModel, opts.Reanalyze, opts.ReanalyzeAll)
-	}
+	allDocs, err := db.Documents(ctx)
 	if err != nil {
 		return Estimate{}, err
 	}
-	est := Estimate{Pending: len(docs), Total: len(docs)}
-	if len(docs) == 0 || opts.EnrichOnly {
+	direct := make([]database.Document, 0, len(allDocs))
+	est := Estimate{}
+	for _, doc := range allDocs {
+		if doc.Status == "missing" {
+			continue
+		}
+		laneInput, laneSemantic, laneModel := doc.AnalyzedSHA256, doc.AnalyzedSemanticSHA256, doc.AnalyzedModel
+		if p.external {
+			laneInput, laneSemantic, laneModel = doc.ExternalSHA256, doc.ExternalSemanticSHA256, doc.ExternalModel
+		}
+		semanticChanged := doc.SemanticSHA256 != laneSemantic
+		promptChanged := !semanticChanged && doc.AnalysisInputSHA256 != laneInput
+		modelDrift := opts.Reanalyze && laneModel != p.analysisModel
+		if opts.ReanalyzeAll || doc.AnalysisInputSHA256 != laneInput || modelDrift {
+			direct = append(direct, doc)
+			est.Pending++
+			if opts.ReanalyzeAll {
+				continue
+			}
+			if laneInput == "" {
+				est.Unstamped++
+			}
+			if semanticChanged {
+				est.SemanticChanges++
+			}
+			if promptChanged {
+				est.PromptChanges++
+			}
+			if modelDrift {
+				est.ModelDrift++
+			}
+		}
+	}
+	est.Total = len(direct)
+	if len(direct) == 0 || opts.EnrichOnly {
 		return est, nil
 	}
 	if err := p.loadCorpus(); err != nil {
 		return Estimate{}, err
 	}
-	changedEvidence, analysisPending := p.pendingEvidencePaths(docs)
+	changedEvidence, analysisPending := p.pendingEvidencePaths(direct)
 	p.forceAnalysis = make(map[string]bool)
 	dependents, err := p.evidenceDependents(changedEvidence, analysisPending)
 	if err != nil {
 		return Estimate{}, err
 	}
 	est.Dependents = len(dependents)
-	est.Total = len(mergeDocumentLists(docs, dependents))
+	est.Total = len(mergeDocumentLists(direct, dependents))
 	return est, nil
 }

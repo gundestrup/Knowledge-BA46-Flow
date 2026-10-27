@@ -68,12 +68,17 @@ remain pending and `apply` is never called.
    paths excluded by the Knowledge Base MCP Server ingest filter, and the
    configured `exclude_directories`, `exclude` paths/patterns and
    `exclude_extensions`.
-2. Computes a canonical SHA-256 — the document minus the tool-owned `kbm`
-   frontmatter block and the identity `document_id` — plus a content-similarity
-   sketch, and stores path,
-   size, mtime, tags, frontmatter findings and internal body-link findings
-   (`link_issues`) in SQLite.
-3. Compares `sha256` with `analyzed_sha256`, so only new or changed files are sent to Ollama.
+2. Computes a strict canonical source SHA-256 — the document minus tool-owned
+   `kbm` and identity `document_id` — and a separate semantic task fingerprint.
+   The semantic fingerprint ignores graph-only `related`/`contradicted_by`
+   changes and relative Markdown link destinations, but includes visible link
+   labels, prose, title/tags, privacy/lifecycle fields and custom metadata.
+   Prompt, taxonomy, write-scope and stub-template fingerprints are tracked
+   independently. Path, timestamps, frontmatter findings and internal-link
+   findings (`link_issues`) are stored in SQLite.
+3. Compares each task's semantic input/prompt fingerprint and model lineage,
+   so a link-only edit does not re-run content analysis. The strict source hash
+   remains the guard for reviewed proposals.
 4. Repairs mechanical frontmatter problems deterministically (unresolved
    `related`/`contradicted_by` targets) — those become normal pending
    suggestions, no model involved.
@@ -101,7 +106,10 @@ findings, Sonar gate issues, or combinations of those signals. See
 
 ## Safety
 
-- No file changes happen during `scan`, `analyze` or `run`.
+- `analyze`, `run`, `all`/`tasks`, and standalone LLM tasks scan first so the
+  database and live files agree before work selection. A scan may insert a
+  missing `document_id`; it does not reorder existing frontmatter. `check-links`
+  and `freshness` may update the managed `kbm` block.
 - `delete` moves the file to `<repo>/.kbm-trash/<timestamp>/` — not a permanent deletion.
 - `move` is rejected if the destination file already exists.
 - `apply` checks the source SHA-256 again and supersedes suggestions if the file changed after analysis.
@@ -112,7 +120,7 @@ findings, Sonar gate issues, or combinations of those signals. See
 - `apply` honors the Knowledge Base MCP Server's `.kb-policy.json`; deny or invalid policies block mutations, and the policy file itself is protected.
 - Frontmatter `kb_policy.no_llm_context: true` keeps that document out of Ollama prompts; invalid `kb_policy` values also fail closed.
 - A `stub` tag — or a body of at most `stub_max_body_lines` non-empty lines (default 5) — marks a placeholder: it stays a valid link target and candidate but every generation stage skips it.
-- Every scan runs the internal link check (no model): `](...)` body targets that resolve neither to a document nor an existing file land in `link_issues`. `KBM-flow check-links` — CLI or dashboard button — additionally probes external `http(s)` URLs over the network and records the verdict in each note's `kbm.link_check` block; `KBM-flow freshness` similarly records a heuristic currentness verdict in `kbm.freshness`. The `kbm` block is tool-owned operational metadata and, together with `document_id`, the only file content written outside `apply`; the canonical hash ignores both so a check or ID assignment never requeues analysis.
+- Every scan runs the internal link check (no model): `](...)` body targets that resolve neither to a document nor an existing file land in `link_issues`. `KBM-flow check-links` — CLI or dashboard button — additionally probes external `http(s)` URLs over the network and records the verdict in each note's `kbm.link_check` block; `KBM-flow freshness` similarly records a currentness verdict in `kbm.freshness`. The `kbm` block is tool-owned operational metadata and, together with `document_id`, the only file content written outside `apply`. The strict source hash ignores both; task fingerprints additionally ignore graph-only links.
 - If the repository root contains `taxonomy.yaml`, new tag values are constrained to its approved vocabulary during analysis and revalidated at apply time.
 - Take a backup or commit the repository to Git before `apply`.
 
@@ -123,6 +131,14 @@ pending proposals — and protected from proposals, which keep the live ID
 automatically. IDs enable rename-plus-edit tracking and fast inbound-link
 repair; the MCP server accepts the unknown string field but does not treat it
 as native identity, and the ID never replaces source-version checks.
+
+Newly emitted proposal frontmatter uses a stable order: `document_id`, `title`,
+`summary`, `related`, `tags`, `contradicted_by`, provenance/lifecycle/policy
+fields, custom keys alphabetically, and `kbm` last. The MCP server parses YAML
+by key, not by position: `title` and `tags` are lifted, while `document_id`,
+`related`, and `kbm` are not native MCP identity/retrieval fields. Existing
+notes are not bulk-reformatted; scan-time ID insertion preserves their other
+frontmatter bytes.
 `identify` inspects identity state and `identify --prepare` migrates databases
 populated before scan-time assignment. KBM preserves unknown/custom fields.
 Tool-owned `kbm` operational metadata is kept from the live file when approved
@@ -338,7 +354,7 @@ YAML sources explicitly.
 
 ```text
 scan      scan + SHA256 + SQLite, no Ollama call
-analyze   analyzes only files whose hash changed since last success
+analyze   scan, then analyze semantic/prompt/model-pending documents
 run       scan followed by analyze; records the last successful cycle
 enrich    standalone fast-model metadata pass (title/tags)
 embed     recompute embedding vectors for changed documents
@@ -375,6 +391,13 @@ field whitelist (`title`, `tags`, `status`, `tier`, `last_verified_at`,
 `contradicted_by`, `kb_policy`, …) plus a `related` link list; issues are
 stored on the document and fed back to the LLM, which proposes fixes via
 `expand` suggestions. See `docs/FUNCTIONS.md` for the curated field list.
+
+When KBM-flow emits proposal frontmatter, its stable order is `document_id`,
+`title`, `summary`, `related`, `tags`, `contradicted_by`, provenance/lifecycle/
+policy fields, custom keys alphabetically, then `kbm`. YAML keys are parsed by
+name, so this convention improves diffs without changing MCP behavior. The MCP
+server lifts `title` and `tags`; it treats `document_id`, `related` and nested
+`kbm` as extras/unsupported metadata, not native identity or retrieval filters.
 
 KBM-flow is currently optimized for the
 [Knowledge Base MCP Server](https://github.com/jeanibarz/knowledge-base-mcp-server):

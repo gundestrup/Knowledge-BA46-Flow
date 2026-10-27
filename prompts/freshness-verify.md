@@ -10,6 +10,13 @@ against that evidence:
 - `unverifiable` — the evidence is absent, thin, contradictory or
   untrustworthy; the claim stays for a human to check.
 
+A flag about "<technology> latest stable release and notable changes" is a
+tracking flag — the note asserts no version, so judge IMPACT instead of
+literal truth: `stale` only when the newest release materially changes what
+the document teaches or recommends; `current` when the latest release leaves
+the note's substance untouched; `unverifiable` when the evidence cannot show
+either. Prefer official changelogs and release notes over secondary coverage.
+
 Return exactly this JSON format:
 
 {

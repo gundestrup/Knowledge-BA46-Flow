@@ -8,10 +8,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -20,6 +22,7 @@ import (
 	"knowledge-ba46-flow/internal/database"
 	"knowledge-ba46-flow/internal/frontmatter"
 	"knowledge-ba46-flow/internal/paths"
+	"knowledge-ba46-flow/internal/prompts"
 	"knowledge-ba46-flow/internal/similarity"
 )
 
@@ -64,7 +67,19 @@ func Scan(ctx context.Context, c config.Config, db *database.DB) (Result, error)
 	}
 	defer root.Close()
 
-	w := repoWalker{ctx: ctx, c: c, db: db, root: root, seen: seen, excludes: excludes, exts: exts, exclude: patterns, paths: map[string]bool{}}
+	taskPrompts, err := scanPromptInputs(c)
+	if err != nil {
+		return Result{}, err
+	}
+	taxonomySHA, err := taxonomyFingerprint(root)
+	if err != nil {
+		return Result{}, err
+	}
+	w := repoWalker{
+		ctx: ctx, c: c, db: db, root: root, seen: seen,
+		excludes: excludes, exts: exts, exclude: patterns, paths: map[string]bool{},
+		promptInputs: taskPrompts, taxonomySHA: taxonomySHA,
+	}
 	err = filepath.WalkDir(c.RepositoryPath, w.visit)
 	if err != nil {
 		return w.result, err
@@ -81,16 +96,94 @@ func Scan(ctx context.Context, c config.Config, db *database.DB) (Result, error)
 // repoWalker carries the scan state behind the WalkDir callback: configuration,
 // lookup sets, the run timestamp and the running Result.
 type repoWalker struct {
-	ctx      context.Context
-	c        config.Config
-	db       *database.DB
-	root     *os.Root
-	seen     string
-	excludes map[string]bool
-	exts     map[string]bool
-	exclude  paths.ExcludePatterns
-	result   Result
-	paths    map[string]bool // every document path indexed this run
+	ctx          context.Context
+	c            config.Config
+	db           *database.DB
+	root         *os.Root
+	seen         string
+	excludes     map[string]bool
+	exts         map[string]bool
+	exclude      paths.ExcludePatterns
+	result       Result
+	paths        map[string]bool // every document path indexed this run
+	promptInputs taskPromptInputs
+	taxonomySHA  string
+}
+
+type taskPromptInputs struct {
+	analysis  string
+	enrich    string
+	expand    string
+	freshness string
+}
+
+func scanPromptInputs(c config.Config) (taskPromptInputs, error) {
+	if c.PromptDirectory == "" {
+		return taskPromptInputs{}, nil
+	}
+	server := c.MCPServer
+	if server == "" {
+		server = config.MCPServerKnowledgeBase
+	}
+	fingerprint := func(task string, extras ...string) (string, error) {
+		return prompts.Fingerprint(c.PromptDirectory, server, task, extras...)
+	}
+	var result taskPromptInputs
+	var err error
+	result.analysis, _ = fingerprint("analyze.md")
+	result.enrich, _ = fingerprint("enrich.md")
+	result.expand, _ = fingerprint("expand.md")
+	result.freshness, _ = fingerprint("freshness.md")
+	verify, err := fingerprint("freshness-verify.md")
+	if err == nil {
+		result.freshness = hashInputs(result.freshness, verify)
+	}
+	return result, nil
+}
+
+func taxonomyFingerprint(root *os.Root) (string, error) {
+	content, err := root.ReadFile("taxonomy.yaml")
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(content)), nil
+}
+
+func hashInputs(inputs ...string) string {
+	h := sha256.New()
+	for _, input := range inputs {
+		_, _ = h.Write([]byte(input))
+		_, _ = h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (w *repoWalker) expandTemplateHash(docPath string) (string, error) {
+	dir := path.Dir(docPath)
+	for {
+		candidate := StubTemplateName
+		if dir != "." {
+			candidate = dir + "/" + StubTemplateName
+		}
+		content, err := w.root.ReadFile(candidate)
+		if err == nil {
+			return fmt.Sprintf("%x", sha256.Sum256(content)), nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+		if dir == "." {
+			return "", nil
+		}
+		parent := path.Dir(dir)
+		if parent == dir {
+			return "", nil
+		}
+		dir = parent
+	}
 }
 
 // visit handles one walk entry: prune unwanted trees, skip non-documents and
@@ -172,6 +265,10 @@ func (w *repoWalker) indexFile(path, rel string, e os.DirEntry) error {
 	if err != nil {
 		return err
 	}
+	templateSHA, err := w.expandTemplateHash(rel)
+	if err != nil {
+		return err
+	}
 	// Path-derived tags, e.g. frameworks/bulma/x.md -> ["frameworks","bulma","x"].
 	tags := pathTags(rel)
 	b, _ := json.Marshal(tags)
@@ -184,13 +281,31 @@ func (w *repoWalker) indexFile(path, rel string, e os.DirEntry) error {
 	if idIssue != "" {
 		fmIssues = appendIssue(fmIssues, idIssue)
 	}
-	// UpsertScanned reports whether the row is new or the hash changed; a change
-	// also resets status to 'pending' and supersedes stale suggestions.
+	// UpsertScanned reports any strict source change. It requeues tasks only
+	// when the semantic input changed, while stale full-file suggestions are
+	// superseded for every strict source change.
 	changed, err := w.db.UpsertScanned(w.ctx, database.Document{
-		Path:              rel,
-		SHA256:            hashes.combined,
-		FmSHA256:          hashes.frontmatter,
-		BodySHA256:        hashes.body,
+		Path:                   rel,
+		SHA256:                 hashes.combined,
+		FmSHA256:               hashes.frontmatter,
+		BodySHA256:             hashes.body,
+		SemanticSHA256:         hashes.semantic,
+		SemanticFrontmatterSHA: hashes.semanticFrontmatter,
+		SemanticBodySHA256:     hashes.semanticBody,
+		AnalysisInputSHA256: hashInputs(
+			hashes.semantic, w.promptInputs.analysis, w.taxonomySHA,
+			"write_scope="+w.c.EffectiveWriteScope(),
+			fmt.Sprintf("stub_max_body_lines=%d", w.c.StubLineLimit())),
+		EnrichmentInputSHA256: hashInputs(
+			hashes.semantic, w.promptInputs.enrich, w.taxonomySHA,
+			"enrichment_mode="+string(w.c.EnrichmentMode),
+			fmt.Sprintf("stub_max_body_lines=%d", w.c.StubLineLimit())),
+		ExpandInputSHA256: hashInputs(
+			hashes.semantic, w.promptInputs.expand, templateSHA, w.taxonomySHA,
+			fmt.Sprintf("stub_max_body_lines=%d", w.c.StubLineLimit())),
+		FreshnessInputSHA256: hashInputs(
+			hashes.semantic, w.promptInputs.freshness,
+			fmt.Sprintf("stub_max_body_lines=%d", w.c.StubLineLimit())),
 		Size:              info.Size(),
 		ModifiedUnix:      info.ModTime().Unix(),
 		TagsJSON:          string(b),
@@ -299,20 +414,22 @@ func inspectContent(raw string) (string, string, error) {
 	return string(fmJSON), string(issues), nil
 }
 
-// canonicalHashes holds the semantic hash split at the frontmatter boundary:
-// combined is the canonical document hash (fm+body), the halves let tasks and
-// the UI tell metadata-only edits from content edits.
+// canonicalHashes keeps strict source hashes separate from semantic work
+// fingerprints. The full canonical hash protects reviewed proposals; semantic
+// hashes ignore graph-only links and frontmatter ordering for task selection.
 type canonicalHashes struct {
-	combined    string
-	frontmatter string
-	body        string
+	combined            string
+	frontmatter         string
+	body                string
+	semantic            string
+	semanticFrontmatter string
+	semanticBody        string
 }
 
-// hashAndSignature reads the file once and hashes the canonical content —
-// the document with the tool-owned `kbm` frontmatter block excised — so
-// updating check metadata never requeues analysis. The frontmatter and body
-// halves hash independently, and the similarity sketch runs over the same
-// canonical text, keeping managed tokens out of the duplicate signal.
+// hashAndSignature reads the file once and computes both the strict source
+// hash and the semantic fingerprint used for task selection. The raw
+// frontmatter/body hashes remain available for reporting; similarity uses the
+// semantic projection so graph-only links do not distort relatedness.
 func hashAndSignature(path string) (canonicalHashes, []uint64, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -324,9 +441,11 @@ func hashAndSignature(path string) (canonicalHashes, []uint64, error) {
 func hashAndSignatureContent(raw string) (canonicalHashes, []uint64, error) {
 	fm, body := frontmatter.CanonicalParts(raw)
 	content := fm + body
-	h := sha256.New()
+	semanticFM, semanticBody := frontmatter.SemanticParts(raw)
+	semanticContent := semanticFM + "\x00" + semanticBody
+	h := sha256.Sum256([]byte(content))
 	sk := similarity.NewSketcher()
-	words := bufio.NewScanner(io.TeeReader(strings.NewReader(content), h))
+	words := bufio.NewScanner(strings.NewReader(semanticContent))
 	words.Split(bufio.ScanWords)
 	words.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for words.Scan() {
@@ -336,10 +455,21 @@ func hashAndSignatureContent(raw string) (canonicalHashes, []uint64, error) {
 		return canonicalHashes{}, nil, err
 	}
 	return canonicalHashes{
-		combined:    hex.EncodeToString(h.Sum(nil)),
-		frontmatter: fmt.Sprintf("%x", sha256.Sum256([]byte(fm))),
-		body:        fmt.Sprintf("%x", sha256.Sum256([]byte(body))),
+		combined:            hex.EncodeToString(h[:]),
+		frontmatter:         fmt.Sprintf("%x", sha256.Sum256([]byte(fm))),
+		body:                fmt.Sprintf("%x", sha256.Sum256([]byte(body))),
+		semantic:            fmt.Sprintf("%x", sha256.Sum256([]byte(semanticContent))),
+		semanticFrontmatter: fmt.Sprintf("%x", sha256.Sum256([]byte(semanticFM))),
+		semanticBody:        fmt.Sprintf("%x", sha256.Sum256([]byte(semanticBody))),
 	}, sk.Signature(), nil
+}
+
+// CanonicalHash returns the strict source hash used by review/apply freshness
+// checks. It intentionally includes graph links and formatting but excludes
+// only the tool-owned kbm block and document_id.
+func CanonicalHash(content string) string {
+	canonical := frontmatter.Canonical(content)
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(canonical)))
 }
 
 // pathTags derives tags from the relative path: every directory component plus the

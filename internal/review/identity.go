@@ -55,61 +55,94 @@ func PlanIdentities(ctx context.Context, c config.Config, db *database.DB, note 
 		if note != "" && doc.Path != note {
 			continue
 		}
-		item := IdentityItem{Path: doc.Path}
-		raw, err := readCurrentSource(root, doc.Path, c.MaxDocumentBytes)
+		item, prepared, err := planIdentityItem(ctx, c, db, root, doc, active, used, duplicates, prepare)
 		if err != nil {
-			item.State, item.Reason = "unavailable", err.Error()
-		} else {
-			fields, _, parseErr := frontmatter.Parse(raw)
-			item.ID, err = frontmatter.DocumentID(fields)
-			switch {
-			case parseErr != nil:
-				item.State, item.Reason = "invalid", parseErr.Error()
-			case err != nil:
-				item.State, item.Reason = "invalid", err.Error()
-			case duplicates[item.ID] && item.ID != "":
-				item.State, item.Reason = "duplicate", "duplicate UUID; resolve manually before identity-based repair"
-			case item.ID != "":
-				item.State = "initialized"
-			case active[doc.Path]:
-				item.State, item.Reason = "blocked", "finish or retire this note's existing review proposals first"
-			default:
-				hash, hashErr := hashSource(c.RepositoryPath, doc.Path)
-				policyErr := mcppolicy.AssertMutationAllowed(root, doc.Path)
-				switch {
-				case hashErr != nil:
-					item.State, item.Reason = "unavailable", hashErr.Error()
-				case hash != doc.SHA256:
-					item.State, item.Reason = "blocked", "scan the changed note before initializing identity"
-				case policyErr != nil:
-					item.State, item.Reason = "blocked", policyErr.Error()
-				default:
-					item.State = "eligible"
-					if prepare {
-						id := frontmatter.NewDocumentID()
-						for used[id] != "" {
-							id = frontmatter.NewDocumentID()
-						}
-						proposed, err := frontmatter.AddDocumentID(raw, id)
-						if err == nil {
-							err = db.SaveIdentityProposal(ctx, doc.Path, hash, proposed)
-						}
-						if err != nil {
-							return result, fmt.Errorf("prepared %d identity proposals before stopping (no files changed): %w", result.Prepared, err)
-						}
-						used[id] = doc.Path
-						item.State, item.ID = "prepared", id
-						result.Prepared++
-					}
-				}
-			}
+			return result, fmt.Errorf("prepared %d identity proposals before stopping (no files changed): %w", result.Prepared, err)
 		}
 		result.Items = append(result.Items, item)
+		if prepared {
+			result.Prepared++
+		}
 	}
 	if note != "" && len(result.Items) == 0 {
 		return result, fmt.Errorf("note is not in the scanned corpus: %s", note)
 	}
 	return result, nil
+}
+
+func planIdentityItem(
+	ctx context.Context,
+	c config.Config,
+	db *database.DB,
+	root *os.Root,
+	doc database.Document,
+	active map[string]bool,
+	used map[string]string,
+	duplicates map[string]bool,
+	prepare bool,
+) (IdentityItem, bool, error) {
+	item := IdentityItem{Path: doc.Path}
+	raw, err := readCurrentSource(root, doc.Path, c.MaxDocumentBytes)
+	if err != nil {
+		item.State, item.Reason = "unavailable", err.Error()
+		return item, false, nil
+	}
+	fields, _, parseErr := frontmatter.Parse(raw)
+	if parseErr != nil {
+		item.State, item.Reason = "invalid", parseErr.Error()
+		return item, false, nil
+	}
+	item.ID, err = frontmatter.DocumentID(fields)
+	if err != nil {
+		item.State, item.Reason = "invalid", err.Error()
+		return item, false, nil
+	}
+	if item.ID != "" && duplicates[item.ID] {
+		item.State, item.Reason = "duplicate", "duplicate UUID; resolve manually before identity-based repair"
+		return item, false, nil
+	}
+	if item.ID != "" {
+		item.State = "initialized"
+		return item, false, nil
+	}
+	if active[doc.Path] {
+		item.State, item.Reason = "blocked", "finish or retire this note's existing review proposals first"
+		return item, false, nil
+	}
+	hash, err := hashSource(c.RepositoryPath, doc.Path)
+	if err != nil {
+		item.State, item.Reason = "unavailable", err.Error()
+		return item, false, nil
+	}
+	if hash != doc.SHA256 {
+		item.State, item.Reason = "blocked", "scan the changed note before initializing identity"
+		return item, false, nil
+	}
+	if err := mcppolicy.AssertMutationAllowed(root, doc.Path); err != nil {
+		item.State, item.Reason = "blocked", err.Error()
+		return item, false, nil
+	}
+	item.State = "eligible"
+	if !prepare {
+		return item, false, nil
+	}
+	id := frontmatter.NewDocumentID()
+	for used[id] != "" {
+		id = frontmatter.NewDocumentID()
+	}
+	proposed, err := frontmatter.AddDocumentID(raw, id)
+	if err == nil {
+		proposed, err = frontmatter.NormalizeOrder(proposed)
+	}
+	if err == nil {
+		err = db.SaveIdentityProposal(ctx, doc.Path, hash, proposed)
+	}
+	if err != nil {
+		return item, false, err
+	}
+	used[id] = doc.Path
+	item.State, item.ID = "prepared", id
+	return item, true, nil
 }
 
 func liveIdentities(ctx context.Context, c config.Config, db *database.DB) (map[string]string, map[string]bool, error) {

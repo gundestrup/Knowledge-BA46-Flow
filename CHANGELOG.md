@@ -23,6 +23,23 @@ tag is prepared.
 - Apply outcomes persist batch IDs and attempt timestamps, expose per-document
   errors, and report reindex-trigger failures separately instead of counting
   the trigger touch as another applied suggestion.
+- Generation operations now scan before selecting work and refuse to send a
+  live file that changed after the scan with a stale database snapshot. This
+  prevents analysis from reading one version while stamping another.
+- Managed writes and identity insertion no longer assume top-level
+  frontmatter keys sit at column 0. `SetManaged`/`Canonical` excise the
+  `kbm`/`document_id` block at the mapping's actual indent — an indented
+  file previously kept its old block while a duplicate was appended,
+  corrupting the document; `document_id` insertion now matches the file's
+  own indent instead of producing mixed-indent YAML.
+- Task selection separates strict proposal/source hashes from semantic work
+  fingerprints. `related`/`contradicted_by` and relative Markdown link targets
+  no longer re-run LLM evaluation or fan out dependent analysis; visible text,
+  meaningful metadata, model changes and prompt/policy changes still do.
+- Proposal frontmatter now uses a stable authoring order (`document_id`,
+  `title`, `summary`, graph/retrieval fields, remaining metadata, `kbm` last),
+  preventing YAML map sorting from moving unchanged fields on every rewrite.
+  Existing notes are not bulk-reformatted.
 
 ### Added
 
@@ -32,6 +49,15 @@ tag is prepared.
 - Dry-run `reconcile` / `/api/reconcile` with current-preview confirmation,
   atomic machine retirement reasons and durable `review_events`; valid,
   conflicting, blocked and validation-unavailable proposals remain preserved.
+- Freshness pass-1 emits one implicit version-tracking flag for notes about
+  a released technology even without a version pin; `--web-verify` then
+  searches "<tech> latest release" and judges release IMPACT on the note's
+  substance, not just literal claim truth.
+- Task fingerprints include the static prompt files, task policy inputs and
+  applicable `STUB.md` template; the freshness verifier also records whether
+  web verification ran and which verifier model was used. The one-time schema
+  upgrade seeds current non-freshness lineage where the old full source hash
+  proves it current, and schedules freshness once under its revised prompt.
 - Note-grouped review with change-type/origin facets and visible alternatives;
   `withdraw` returns an acceptance to pending without losing its audit.
 - Stable `document_id` UUIDs, assigned in place by scans when a document lacks
