@@ -468,6 +468,13 @@ window.knowledgeDashboard = () => ({
     ]);
   },
 
+  // refreshQueue re-pulls only what a review decision can change — the queue
+  // list and the accepted/pending badges. Documents and the progress chart
+  // do not move on a decide, so they stay out of this path.
+  async refreshQueue() {
+    await Promise.all([this.loadSuggestions(), this.loadAcceptedCount()]);
+  },
+
   async loadProgress() {
     try {
       const data = await this.requestJSON("/api/progress");
@@ -677,7 +684,7 @@ window.knowledgeDashboard = () => ({
         "Retired {{.Count}} obsolete proposals. No notes were changed.",
         { Count: result.retired },
       );
-      await this.refreshData();
+      await this.refreshQueue();
     } catch (error) {
       this.error = error.message;
     } finally {
@@ -926,13 +933,33 @@ window.knowledgeDashboard = () => ({
     }
     try {
       await this.postJSON(`/api/suggestions/${id}/decide`, { status, note });
+      // Optimistic removal: splice the decided card out of the visible list
+      // so the queue updates without a refetch — a background queue-only
+      // refresh then reconciles server truth (sibling supersessions).
+      const i = this.suggestions.findIndex((s) => s.id === id);
+      if (i >= 0) {
+        const prev = this.suggestions[i].status;
+        this.suggestions.splice(i, 1);
+        if (prev === "pending") this.pendingCount--;
+        if (prev === "accepted") this.acceptedCount--;
+        if (status === "accepted") this.acceptedCount++;
+        if (status === "pending") this.pendingCount++;
+        delete this.proposals[id];
+        delete this.proposalOpen[id];
+        delete this.proposalView[id];
+      }
       this.queuePlan = null;
       this.notice = this.t(
         "ui.kb.suggestion_decided",
         "Suggestion #{{.Id}} {{.Status}}.",
-        { Id: id, Status: status },
+        {
+          Id: id,
+          Status: status,
+        },
       );
-      await this.refreshData();
+      this.refreshQueue().catch((error) => {
+        this.error = error.message;
+      });
     } catch (error) {
       this.error = error.message;
     }

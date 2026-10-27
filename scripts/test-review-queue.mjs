@@ -52,6 +52,9 @@ const plan = {
 };
 let posts = 0;
 dashboard.requestJSON = async (url) => {
+  // The post-confirm queue refresh re-pulls suggestions and counts — stub
+  // those too so the test observes the light refresh path, not full data.
+  if (url.startsWith("/api/suggestions")) return [];
   assert.equal(url, "/api/reconcile");
   return plan;
 };
@@ -82,6 +85,92 @@ await dashboard.confirmReconciliation();
 assert.match(dashboard.error, /preview changed/);
 assert.equal(dashboard.queuePlan, plan);
 assert.equal(dashboard.reconciling, false);
+
+// Optimistic decide: the decided card leaves the visible list as soon as
+// the POST resolves — the UI must not wait for a refetch. Counts adjust
+// locally, the card's cached proposal is dropped, and the background
+// refresh is queue-scoped (never documents or the progress chart).
+dashboard.statusFilter = "pending";
+dashboard.suggestions = [
+  {
+    id: 10,
+    document_path: "x.md",
+    status: "pending",
+    origin: "analysis",
+    change_types: ["frontmatter"],
+  },
+  {
+    id: 11,
+    document_path: "y.md",
+    status: "pending",
+    origin: "analysis",
+    change_types: ["body"],
+  },
+];
+dashboard.pendingCount = 2;
+dashboard.acceptedCount = 0;
+dashboard.proposals[10] = { stale: true };
+const fetched = [];
+dashboard.requestJSON = async (url) => {
+  fetched.push(url);
+  if (url.startsWith("/api/suggestions")) return [];
+  throw new Error(`unexpected fetch ${url}`);
+};
+dashboard.postJSON = async () => ({});
+await dashboard.decide(10, "accepted");
+assert.deepEqual(
+  dashboard.suggestions.map((s) => s.id),
+  [11],
+  "decided card must leave the list immediately",
+);
+assert.equal(dashboard.pendingCount, 1);
+assert.equal(dashboard.acceptedCount, 1);
+assert.equal(dashboard.proposals[10], undefined);
+await new Promise((resolve) => setTimeout(resolve, 0));
+assert.ok(
+  fetched.length > 0 && fetched.every((u) => u.startsWith("/api/suggestions")),
+  `decide refresh must stay queue-scoped: ${fetched}`,
+);
+
+// Withdraw (accepted → pending) reverses the local counts the same way.
+dashboard.statusFilter = "accepted";
+dashboard.suggestions = [
+  {
+    id: 12,
+    document_path: "w.md",
+    status: "accepted",
+    origin: "analysis",
+    change_types: [],
+  },
+];
+dashboard.acceptedCount = 1;
+dashboard.pendingCount = 0;
+await dashboard.decide(12, "pending");
+assert.equal(dashboard.suggestions.length, 0);
+assert.equal(dashboard.acceptedCount, 0);
+assert.equal(dashboard.pendingCount, 1);
+
+// A failed POST keeps the card — the server is the source of truth.
+dashboard.statusFilter = "pending";
+dashboard.suggestions = [
+  {
+    id: 13,
+    document_path: "z.md",
+    status: "pending",
+    origin: "analysis",
+    change_types: [],
+  },
+];
+dashboard.postJSON = async () => {
+  throw new Error("source changed");
+};
+await dashboard.decide(13, "accepted");
+assert.equal(
+  dashboard.suggestions.length,
+  1,
+  "failed decide must not drop the card",
+);
+assert.match(dashboard.error, /source changed/);
 console.log(
-  "Note grouping, type/origin facets and explicit queue confirmation passed.",
+  "Note grouping, facets, queue confirmation and optimistic decide passed.",
 );

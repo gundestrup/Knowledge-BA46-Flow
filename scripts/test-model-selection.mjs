@@ -238,23 +238,24 @@ dashboard.requestJSON = async (path, options) => {
   return payload;
 };
 dashboard.refreshData = async () => {};
+const decideCalls = () => requests.filter((r) => r.path.endsWith("/decide"));
 const rejected = dashboard.decide(7, "rejected");
 dashboard.dialogInput = "b.md is the canonical note";
 dashboard.resolveDialog(true);
 await rejected;
-assert.deepEqual(requests.at(-1), {
+assert.deepEqual(decideCalls().at(-1), {
   path: "/api/suggestions/7/decide",
   body: { status: "rejected", note: "b.md is the canonical note" },
 });
 {
-  const count = requests.length;
+  const count = decideCalls().length;
   const cancelled = dashboard.decide(8, "rejected");
   dashboard.resolveDialog(false); // Cancel aborts the rejection
   await cancelled;
-  assert.equal(requests.length, count);
+  assert.equal(decideCalls().length, count);
 }
 await dashboard.decide(9, "accepted");
-assert.equal(requests.at(-1).body.note, "");
+assert.equal(decideCalls().at(-1).body.note, "");
 
 console.log(
   "Independent model selection, discovery, cloud consent, lineage/estimate preview, and rejection notes passed.",

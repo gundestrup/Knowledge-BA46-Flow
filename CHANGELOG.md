@@ -188,6 +188,12 @@ tag is prepared.
 
 ### Changed
 
+- Review-queue decisions now update the UI optimistically: accepting,
+  rejecting or withdrawing a suggestion removes the card immediately and
+  adjusts the pending/accepted counts locally, while a queue-only refresh
+  reconciles server state in the background — the ~2 MB documents payload
+  and the progress chart are no longer refetched per click. Reconciliation
+  confirms use the same queue-scoped refresh.
 - Bounded generation clients now self-adapt their output cap: a reply
   truncated at `enrichment_max_tokens` is retried once with a 4× cap (learned
   ceiling 8192), and a cap that proves sufficient is reused for subsequent
