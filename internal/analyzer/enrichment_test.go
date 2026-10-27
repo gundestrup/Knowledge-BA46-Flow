@@ -86,7 +86,7 @@ WHERE document_path='frameworks/rails/README.md' AND stage='enrich'`).Scan(&stag
 		t.Fatalf("local stage model=%q patch=%q derived=%s suggestions=%d error=%v", stageModel, patchOutcome, derived, suggestionsCount, err)
 	}
 	unchanged, err := os.ReadFile(path)
-	if err != nil || string(unchanged) != content {
+	if err != nil || frontmatter.Canonical(string(unchanged)) != frontmatter.Canonical(content) {
 		t.Fatalf("local analysis mutated source: %q error=%v", unchanged, err)
 	}
 }
@@ -128,7 +128,7 @@ func TestLocalMetadataSuggestionSurvivesFullAnalysisFailure(t *testing.T) {
 		t.Fatalf("deterministic proposal lost after model failure: %+v", suggestions)
 	}
 	unchanged, err := os.ReadFile(path)
-	if err != nil || string(unchanged) != content {
+	if err != nil || frontmatter.Canonical(string(unchanged)) != frontmatter.Canonical(content) {
 		t.Fatalf("analysis failure mutated source: %q error=%v", unchanged, err)
 	}
 }
@@ -372,7 +372,7 @@ FROM stage_results WHERE stage='enrich'`).Scan(&metadata, &patchOutcome, &patch,
 		t.Fatalf("Phi output was overwritten: %s error=%v", metadata, err)
 	}
 	original, err := os.ReadFile(filepath.Join(c.RepositoryPath, "a.md"))
-	if err != nil || string(original) != "# Alpha doc" {
+	if err != nil || frontmatter.Canonical(string(original)) != "# Alpha doc" {
 		t.Fatalf("analysis mutated source: %q error=%v", original, err)
 	}
 }

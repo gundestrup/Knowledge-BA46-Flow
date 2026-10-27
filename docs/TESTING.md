@@ -1,5 +1,17 @@
 # Tests
 
+Queue-policy regressions cover default and legacy-accepted write blocks,
+read-only reconciliation previews, current-token/explicit HTTP confirmation,
+machine audit versus human feedback, unavailable taxonomy validation, withdrawal,
+and note/type grouping. Identity tests cover reviewed byte-preserving UUID
+insertion, rename-plus-edit freshness, duplicate IDs, live UUID replacement,
+incoming references, outgoing-link warnings and live-copy ordering.
+
+The opt-in production replay also previews and confirms reconciliation only in
+the sandbox, checks retirement/audit counts and unchanged note bytes, then
+accepts/applies one valid expansion per note. Its report includes `write_scope`,
+`queue_counts`, `reconciled`, and `review_events`. No live queue is cleaned up.
+
 Run the standard quality gate:
 
 ```bash
@@ -17,6 +29,49 @@ go vet ./...
 go test -race ./...
 go build ./...
 ```
+
+## Production snapshot replay
+
+An explicit opt-in test reuses real stored proposals without changing the
+production database or documents:
+
+```bash
+KBM_REPLAY_CONFIG=../engineering-memory/.kbm/config.json \
+KBM_REPLAY_REPORT="/tmp/kbm-replay-$(date -u +%Y%m%dT%H%M%SZ).json" \
+go test ./internal/review -run '^TestProductionReplay$' -count=1 -v
+```
+
+`KBM_REPLAY_CONFIG` is a test-only environment variable, not a normal config
+override. The test is skipped unless explicitly enabled; ordinary CI never
+needs a real knowledge repository. `KBM_REPLAY_REPORT` is optional and its
+parent directory must exist. Reports are private (`0600`), contain IDs/paths
+and validation errors rather than proposal bodies, and refuse to overwrite an
+existing file. Do not commit production fixtures or reports.
+
+The source SQLite connection uses `mode=ro` and the online backup API, including
+committed WAL pages. Only the private temporary copy is passed to
+`database.Open` and migrated. A raw `cp state.db` can miss WAL data; opening the
+original through the application can migrate a database an older server still
+holds. Unit tests cover WAL inclusion and preservation of deny policies.
+
+The repository snapshot copies regular configured documents, taxonomy and
+mutation policies, excluding credentials, hidden runtime/index/Git state and
+symlinks. Validation differences caused by excluded files are reported as
+incomplete snapshot coverage, not as proof of an invalid production proposal.
+The database snapshot is transactional, but copying files is not globally
+atomic: wait for writers, and use a filesystem snapshot or pause mutations when
+a strict cross-resource point-in-time copy is required. The test refuses active
+jobs and compares source document/database/WAL hashes before and after.
+
+Pending, accepted and historical failed rows are preflighted separately against
+the copied current content. Invalid and stale rows are expected classifications,
+not test failures. Only the earliest valid accepted/pending expansion per
+document is selected for simulated review and apply; failed history is never
+selected. Moves/deletes/merges remain excluded even if previously accepted.
+The test asserts that every selected expansion applies and unselected files
+remain unchanged. Repository/database paths point to temporary copies, the
+reindex trigger is disabled, and no model/MCP/network call runs. Temporary
+copies are removed after the test.
 
 ## Curated example corpora
 
@@ -395,6 +450,14 @@ The tests cover:
   missing headings/caveats, padded lossy rewrites, regex/indentation corruption,
   invented provenance, invalid/unresolved/traversing graph links, README-to-script
   moves, complete merge-target context and preservation of both merge bodies
+- real-database rename resolution and deterministic link repair through apply:
+  no-rename/live links are unchanged, genuine repairs remain document-relative,
+  and code/privacy fields survive; managed metadata updates are preserved even
+  when a stored proposal carries an old or injected `kbm` block
+- stale/duplicate acceptance, immediate retirement of old source snapshots,
+  independent unique-document applies, persisted apply batches/reasons, and
+  the schema-v11 apply-history migration; dashboard result accounting and
+  separate reindex-trigger failures via `scripts/test-apply-results.mjs`
 - content-similarity sketches: shingle signatures, Jaccard estimation,
   marshal round-trips, and similarity-ranked merge/relation candidates
 - the HTTP API: suggestion validation, decide/apply, embedded UI assets,

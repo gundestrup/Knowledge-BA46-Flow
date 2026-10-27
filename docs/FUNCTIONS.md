@@ -43,13 +43,18 @@ git branch switch. Pending and accepted suggestions for missing documents
 stay out of the review and apply queues while the file is gone; if the file
 reappears unchanged its status — and those suggestions — resurface.
 
-A moved or renamed file is recognized by its canonical hash: when content
-seen at a new path matches exactly one document that vanished in the same
-scan, the database row is re-keyed — analysis stamps, embeddings, and
-suggestions follow the move (an unchanged file is never re-analyzed for a
-rename alone). A move combined with an edit, an ambiguous match (several
-vanished files with identical content), or a live duplicate at the old path
-is treated as a separate document instead.
+A moved file is recognized by a unique protected `document_id` UUID plus
+observed absence of its old path, including a rename combined with an edit.
+Without an ID, one exact canonical-hash match and absence proof are required.
+The database row is re-keyed; unchanged analysis/embeddings follow it, but an
+edit still invalidates cached content and old proposals. Duplicate IDs, live
+copies and ambiguous matches never authorize a rename. Scanning observes
+external moves; it never renames a file. When a scanned document lacks
+`document_id`, the scan inserts a generated UUID in place (byte-preserving,
+`os.Root`-confined, reported in scan output). Like `kbm`, the field is excised
+from the canonical hash, so assignment never invalidates pending proposals —
+an unprocessed review queue keeps its source-hash lineage and simply gains
+identity tracking.
 
 Each detected rename is also recorded in a `renames` table. The next
 pipeline run — no model needed — finds documents whose `related`/
@@ -57,6 +62,34 @@ pipeline run — no model needed — finds documents whose `related`/
 proposes a deterministic `expand` that retargets them to the new location
 (following move chains to the live endpoint) instead of dropping the links
 as unresolved. Like every suggestion it waits for a human accept.
+An existing link is never rewritten merely to normalize its spelling.
+Repairs require a recorded rename to a different live document. Markdown body
+destinations remain relative to the linking document, while frontmatter graph
+paths remain repository-root-relative. These repairs change links, not filenames.
+
+Scan also builds a source-hash-versioned reverse-reference index for body and
+frontmatter links. Indexed target IDs make incoming lookup independent of the
+old path. A recorded target UUID is checked against the live target before a
+repair can pass review/apply. Outgoing relative-link identity changes after a
+referrer move are reported for manual review, not silently rewritten.
+
+## `reconcile`, `withdraw`, `identify`
+
+`reconcile` previews the complete active queue, including missing documents.
+`reconcile --confirm TOKEN` revalidates the preview and atomically supersedes
+only invalid, stale and missing-source proposals, with machine audit reasons.
+It never applies notes or turns machine cleanup into human rejection feedback.
+Policy blocks, conflicts and unavailable validation remain actionable records.
+
+`withdraw ID` returns an accepted proposal to pending with an audit event.
+`identify` previews UUID eligibility; `identify --prepare` creates pending
+identity-initialization proposals, optionally restricted by `--note PATH`.
+Existing active proposals block initialization for that note. UUID insertion
+still requires acceptance and `apply`, followed by `scan`; it changes the
+canonical hash, not the identity/version rules.
+
+See [the production review workflow](REVIEW.md) for write scopes, note grouping,
+confirmation steps and migration boundaries.
 
 ## `check-links`
 
@@ -293,8 +326,10 @@ Each stage's suggestions carry an `origin` marker (`analysis`, `enrich`,
 `deterministic`) shown as a tag in the review UI; re-running a stage
 supersedes only the pending suggestions it regenerates.
 Suggestions from different stages may concern the same source file. Review
-them individually; applying one changes the source hash and makes a second
-proposal based on the old file stale rather than silently overwriting it.
+them as alternatives: CLI/HTTP acceptance permits only one accepted snapshot
+per document, checks the live source hash, and validates expansion content.
+After one applies, other old snapshots are immediately superseded with a reason.
+They are never silently rebased or applied over the changed file.
 
 With `--reanalyze` (CLI) or `reanalyze: true` in the `/api/ops` body — a checkbox in the dashboard — documents whose `analyzed_model` differs from the configured `ollama_model` are reprocessed too: a different model may produce different suggestions, so redoing the corpus is an explicit choice, not automatic. Each re-analysis supersedes that document's still-`pending` suggestions (accepted/rejected decisions are kept). The landing page's _analyzed with another model_ metric counts how much of the corpus would drift under the current model.
 
@@ -416,6 +451,17 @@ unchanged, frontmatter values must be valid, graph links must resolve to regular
 configured document types inside `os.Root`, and both merge bodies must survive.
 Body rewrites that remove text or change existing code fail before any write.
 These checks can reject an old suggestion that was previously accepted.
+Deterministic body-link repairs have a separate, shared validation contract:
+only the exact destination edits proven by recorded renames are permitted;
+code, unrelated body text, and protected metadata remain unchanged.
+
+The live tool-owned `kbm` block is preserved independently of proposal content.
+A link check or freshness update after generation cannot cause an otherwise
+valid edit to fail or restore an old verdict. Models still cannot author `kbm`.
+Every attempted suggestion records a batch ID and attempt timestamp separately
+from its acceptance time; failure and supersession reasons remain inspectable
+through the API and dashboard. Reindex-trigger success is not another applied
+suggestion.
 
 Before mutating any source or destination, `apply` checks the applicable
 `.kb-policy.json` file. `{"mutations":"deny"}` blocks the operation;

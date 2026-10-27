@@ -608,6 +608,11 @@ func (p *pipeline) expandSuggestion(doc database.Document, content string, parse
 		ProposedContent: parsed.ProposedContent,
 		Origin:          "expand",
 	}
+	if preserved, err := frontmatter.PreserveIdentity(content, sug.ProposedContent); err != nil {
+		return nil, []string{"expand: " + err.Error()}
+	} else {
+		sug.ProposedContent = preserved
+	}
 	if err := p.validateSuggestion(sug, content, nil, false); err != nil {
 		return nil, []string{"expand: " + err.Error()}
 	}

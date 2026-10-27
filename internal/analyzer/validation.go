@@ -38,6 +38,9 @@ func (p *pipeline) currentlyVisible(path string) bool {
 }
 
 func (p *pipeline) validateSuggestion(s database.Suggestion, content string, mergeBodies map[string]string, multipleMoves bool) error {
+	if err := proposal.ValidateAction(p.c.EffectiveWriteScope(), s.Action); err != nil {
+		return err
+	}
 	if s.Reason == "" {
 		return fmt.Errorf("suggestion requires a concrete reason")
 	}
@@ -90,6 +93,12 @@ func (p *pipeline) validateSuggestion(s database.Suggestion, content string, mer
 	if err := proposal.ValidateRewrite(content, s.ProposedContent); err != nil {
 		return err
 	}
+	if err := proposal.ValidateBodyScope(p.c.EffectiveWriteScope(), s.DocumentPath, content, s.ProposedContent,
+		p.retarget, func(path string) bool {
+			return slices.ContainsFunc(p.knownDocs, func(doc database.Document) bool { return doc.Path == path })
+		}); err != nil {
+		return err
+	}
 	return proposal.ValidateLinks(s.ProposedContent, documentLookup(s.DocumentPath, p.knownDocs))
 }
 
@@ -137,6 +146,18 @@ func (p *pipeline) validateModelSuggestions(doc database.Document, content strin
 				result.rejected = append(result.rejected, action+": local metadata composition: "+err.Error())
 				continue
 			}
+		}
+		if suggestion.ProposedContent != "" {
+			base := content
+			if action == "merge" {
+				base = mergeBodies[suggestion.TargetPath]
+			}
+			preserved, err := frontmatter.PreserveIdentity(base, suggestion.ProposedContent)
+			if err != nil {
+				result.rejected = append(result.rejected, action+": "+err.Error())
+				continue
+			}
+			suggestion.ProposedContent = preserved
 		}
 		if err := p.validateSuggestion(suggestion, content, mergeBodies, moves > 1); err != nil {
 			result.rejected = append(result.rejected, action+": "+err.Error())

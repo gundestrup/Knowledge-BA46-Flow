@@ -6,6 +6,34 @@ import (
 	"testing"
 )
 
+func TestValidateLinkRepair(t *testing.T) {
+	original := "---\ntags: [go]\nkb_policy: {no_llm_context: true}\n---\n# Note\n\nSee [old](old.md#part).\n\n`[code](old.md)`\n"
+	fixed := strings.Replace(original, "](old.md#part)", "](../archive/new.md#part)", 1)
+	retarget := func(path string) (string, bool) { return "archive/new.md", path == "sub/old.md" }
+	exists := func(path string) bool { return path == "archive/new.md" }
+	for _, tt := range []struct {
+		name, proposed string
+		valid          bool
+	}{
+		{"unchanged body", original, true},
+		{"verified repair", fixed, true},
+		{"invented path", strings.Replace(fixed, "../archive/new.md", "../other.md", 1), false},
+		{"deleted heading", strings.Replace(fixed, "# Note\n", "", 1), false},
+		{"changed code", strings.Replace(fixed, "`[code](old.md)`", "`[code](new.md)`", 1), false},
+		{"changed privacy", strings.Replace(fixed, "no_llm_context: true", "no_llm_context: false", 1), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateLinkRepair("sub/note.md", original, tt.proposed, retarget, exists)
+			if (err == nil) != tt.valid {
+				t.Fatalf("valid=%v err=%v", tt.valid, err)
+			}
+		})
+	}
+	if err := ValidateRewrite(original, fixed); err == nil {
+		t.Fatal("model-authored body rewrites must remain disallowed")
+	}
+}
+
 func TestValidateRewrite(t *testing.T) {
 	for _, tt := range []struct {
 		name     string

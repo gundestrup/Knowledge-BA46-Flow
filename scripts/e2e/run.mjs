@@ -162,6 +162,7 @@ async function main() {
       JSON.stringify(
         {
           repository_path: repoDir,
+          write_scope: "all",
           database_path: dbPath,
           prompt_directory: join(root, "prompts"),
           ollama_url: "http://127.0.0.1:1",
@@ -381,7 +382,13 @@ async function main() {
     check("expand card present", cardIndex >= 0);
     page.requests = [];
     await page.eval(
-      `[...document.querySelectorAll(".suggestion-card")][${cardIndex}].querySelector("button").click()`,
+      `(() => {
+        const card = [...document.querySelectorAll(".suggestion-card")][${cardIndex}];
+        const btn = [...card.querySelectorAll("button")].find((b) =>
+          b.textContent.includes("Inspect proposed content"),
+        );
+        if (btn) btn.click();
+      })()`,
     );
     await page.waitFor(
       `(() => {
@@ -414,7 +421,13 @@ async function main() {
       buttonLabel,
     );
     await page.eval(
-      `[...document.querySelectorAll(".suggestion-card")][${cardIndex}].querySelector("button").click()`,
+      `(() => {
+        const card = [...document.querySelectorAll(".suggestion-card")][${cardIndex}];
+        const btn = [...card.querySelectorAll("button")].find((b) =>
+          b.textContent.includes("Hide proposed content"),
+        );
+        if (btn) btn.click();
+      })()`,
     );
     check(
       "proposal collapses on second click",

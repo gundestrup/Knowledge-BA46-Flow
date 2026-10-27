@@ -19,7 +19,7 @@
     "version:sync": "node scripts/sync-version-metadata.mjs",
     "version:bump": "node scripts/bump-version.mjs",
     "version:test": "sh scripts/test-version.sh",
-    "check:js": "node scripts/check-static-js.mjs && node scripts/test-report-filters.mjs && node scripts/test-model-selection.mjs && node scripts/test-knowledge-progress.mjs && node scripts/check-i18n.mjs",
+    "check:js": "node scripts/check-static-js.mjs && node scripts/test-report-filters.mjs && node scripts/test-model-selection.mjs && node scripts/test-knowledge-progress.mjs && node scripts/test-apply-results.mjs && node scripts/test-review-queue.mjs && node scripts/check-i18n.mjs",
     "lint:frontend": "biome lint internal/server/static/*.js internal/server/static/*.css scripts/*.mjs scripts/e2e/*.mjs scripts/e2e/lib/*.mjs",
     "format:check": "prettier --check package.json biome.json \"scripts/**/*.mjs\" \"internal/server/static/*.{js,css,html}\" README.md CHANGELOG.md \"docs/**/*.md\" \"example-knowledge/**/*.md\" \"example-knowledge/**/*.json\" \"example-knowledge/**/.kb-policy.json\"",
     "check": "npm run assets:check && npm run check:js && npm run lint:frontend && npm run format:check",

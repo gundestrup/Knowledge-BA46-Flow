@@ -73,19 +73,19 @@ Read the document relevant to the change before editing:
 
 ## Safety rules
 
-- `scan`, `analyze`, and `run` do not mutate repository files. Only `apply`
-  executes suggestions that a person explicitly accepted. The one documented
-  exception is the tool-owned `kbm` frontmatter block: `check-links` writes
-  `kbm.link_check` and `freshness` writes `kbm.freshness`, both through
-  `frontmatter.WriteManaged` (byte-preserving, `os.Root`-confined atomic
-  writes). The canonical hash excises `kbm`, so these writes are invisible
-  to change detection — never weaken that immunity or let models/proposals
-  touch `kbm`. The single
-  documented exception is the tool-owned `kbm` frontmatter block: `check-links`
-  may write `kbm.link_check` verdicts via `os.Root`-confined atomic writes.
-  The canonical content hash excludes `kbm`, so such writes must never
-  requeue analysis — keep `frontmatter.Canonical` consistent between the
-  scanner and `review`'s apply-time hash check.
+- `scan`, `analyze`, and `run` do not mutate repository files, with two
+  documented hash-neutral exceptions. Only `apply` executes suggestions that
+  a person explicitly accepted. Exception one is the tool-owned `kbm`
+  frontmatter block: `check-links` writes `kbm.link_check` and `freshness`
+  writes `kbm.freshness`, both through `frontmatter.WriteManaged`
+  (byte-preserving, `os.Root`-confined atomic writes). Exception two is
+  `document_id`: a scan inserts the protected identity UUID in place when a
+  document lacks one, via the same confined write discipline. The canonical
+  hash excises both fields, so these writes are invisible to change
+  detection — never weaken that immunity or let models/proposals touch
+  `kbm` or `document_id` (proposals preserve the live ID automatically). Keep
+  `frontmatter.Canonical` consistent between the scanner and `review`'s
+  apply-time hash check so managed writes never requeue analysis.
 - Preserve source-hash verification, `os.Root`-confined filesystem operations,
   traversal and symlink protections, no-overwrite behavior, and trash-based
   deletion. Do not replace these with unchecked `filepath.Join` writes.
@@ -125,6 +125,10 @@ Read the document relevant to the change before editing:
   Preserve provenance, lifecycle, privacy and custom fields. Body edits are
   additive and preserve code verbatim; do not weaken apply-time validation
   just because a suggestion was previously accepted.
+  The only body-replacement exception is an exact deterministic link-destination
+  repair proven by recorded renames and revalidated at apply time; an origin
+  label alone never authorizes it. Keep live `kbm` metadata independent of
+  proposal snapshots and never add document IDs during a read-only scan.
 - `apply` changes the files, not the MCP server's derived index. Document the
   need to run the MCP server's `kb reindex` workflow after applied changes.
 - Keep the HTTP server loopback-only by default; `/api/apply` is mutating.

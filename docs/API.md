@@ -45,6 +45,14 @@ Suggestions filtered by status. `status` may be `pending`, `accepted`,
 `rejected`, `applied`, `failed` or `superseded`; default is `pending`.
 `proposed_content` is omitted from list items (it can be large) — use the
 detail endpoint.
+Items include persisted `error` details and, after an apply attempt,
+`apply_batch_id`, `apply_attempted_at`, and `applied_at` on success. Older
+rows may have no apply-history fields.
+Active items also include computed `change_types`, `document_id`, `review_state`,
+`review_reason` and, for a competing accepted alternative, `accepted_id`.
+Historical expansion types are `unknown` because their original before-image
+was not archived. The UI groups by note, retaining alternatives when a
+type/origin facet matches. This is a projection, not automatic merging.
 
 ### `GET /api/suggestions/{id}`
 
@@ -61,7 +69,13 @@ equivalent of `accept ID` / `reject ID`. An optional `"note"` string stores a
 short reviewer reason on rejections; it is kept on the row (returned as
 `decision_note` by `GET /api/suggestions/{id}`) and shown back to the model as
 review feedback on later runs for that document. Returns `409` if the
-suggestion is not pending or does not exist.
+suggestion is not pending or does not exist, its source has changed, its
+expansion is invalid, or another suggestion for that document is already
+accepted. Stale sources become `superseded`; conflicting alternatives remain
+pending. Rejections do not require a readable/current source.
+`{"status":"pending"}` withdraws an existing acceptance; it is not a way to
+resurrect applied/rejected/superseded records. Permission blocks return `409`
+without accepting the proposal.
 
 ### `POST /api/apply`
 
@@ -72,12 +86,43 @@ Returns a result per suggestion:
 [{ "id": 3, "action": "move", "status": "applied", "applied": true }]
 ```
 
-Each result has `status` `applied`, `failed` or `superseded`. A source changed
+Each result has `status` `applied`, `failed`, `superseded` or `blocked`. A
+write-scope or mutation-policy block leaves the row accepted, records the
+reason, and performs no write. A source changed
 since its analysis is marked superseded and left untouched. Other suggestions
 still run (same semantics as the CLI). When `reindex_trigger_path` is
 configured and at least one suggestion applied, a final
 `{"action": "reindex-trigger", ...}` row reports the trigger-file touch for
 the MCP server's reindex watcher.
+Suggestion results also include `document_path`, `apply_batch_id`, and
+`apply_attempted_at`. The batch ID groups results from one request and is
+persisted on each attempted suggestion, including failures and supersessions.
+The dashboard exposes per-document results and does not count the
+`reindex-trigger` row as another applied/failed suggestion; trigger failures
+are reported separately. Successful writes immediately supersede other
+pending/accepted snapshots of that source's old content, with an explanation
+identifying the applied suggestion.
+
+### `GET /api/reconcile`
+
+Read-only preview of every pending/accepted proposal, including missing sources.
+Returns `token`, `write_scope`, `counts`, `retire_count`, and `items` containing
+IDs, paths, current source hashes, change types, reasons and `retire` flags.
+States are `valid`, `conflict`, `blocked`, `invalid`, `stale`, `missing` or
+`unavailable`; only invalid/stale/missing rows may be retired.
+
+### `POST /api/reconcile`
+
+Body: `{"confirm":true,"token":"PREVIEW_TOKEN"}`. Both fields are required;
+unknown fields and trailing JSON are rejected. The backend recomputes the
+preview, refuses running jobs or changed tokens (`409`), then atomically retires
+the planned rows as `superseded`. The response adds `retired` and `batch_id`.
+`review_events` records actor `system`, classification, before/after statuses,
+reason, current hash and time. Human `decision_note` is untouched.
+
+No notes, IDs, model defaults, acceptance decisions, MCP state or reindex trigger
+are changed. UUID preparation is the explicit CLI `identify` workflow; the web
+UI reviews those proposals through the normal endpoints.
 
 ## Operations (scan / analyze / run / tasks)
 

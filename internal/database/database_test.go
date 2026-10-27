@@ -1105,7 +1105,9 @@ VALUES('old.md','hash1',10,1,'analyzed','t','t')`)
 	if len(docs) != 1 || docs[0].FrontmatterJSON != `{"title":"Old"}` || docs[0].FrontmatterIssues != `["x"]` {
 		t.Fatalf("docs=%+v", docs)
 	}
-	// Unchanged rescan preserves the stored frontmatter.
+	// Hash-neutral rescan still syncs the stored frontmatter: scan-time
+	// document_id assignment and kbm writes must reach the index without
+	// requeuing analysis.
 	if _, err := db.UpsertScanned(ctx, Document{
 		Path: "old.md", SHA256: "hash2", Size: 10, TagsJSON: `["a"]`,
 		FrontmatterJSON: `{"title":"New"}`, FrontmatterIssues: `["y"]`,
@@ -1113,8 +1115,8 @@ VALUES('old.md','hash1',10,1,'analyzed','t','t')`)
 		t.Fatal(err)
 	}
 	docs, _ = db.Documents(ctx)
-	if docs[0].FrontmatterJSON != `{"title":"Old"}` {
-		t.Fatalf("frontmatter overwritten on unchanged rescan: %q", docs[0].FrontmatterJSON)
+	if docs[0].FrontmatterJSON != `{"title":"New"}` || docs[0].FrontmatterIssues != `["y"]` {
+		t.Fatalf("hash-neutral frontmatter not synced: %+v", docs[0])
 	}
 }
 
@@ -2033,7 +2035,7 @@ func TestRenameByHashPreservesLineage(t *testing.T) {
 	// The file moves to a new location with identical content.
 	moved := doc
 	moved.Path = "sub/b.md"
-	changed, err := db.UpsertScanned(ctx, moved, "scan-2")
+	changed, err := db.UpsertScanned(ctx, moved, "scan-2", func(string) bool { return true })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2137,7 +2139,7 @@ func TestRetargetPath(t *testing.T) {
 	defer db.Close()
 	seed := func(path, sha, seen string) {
 		t.Helper()
-		if _, err := db.UpsertScanned(ctx, Document{Path: path, SHA256: sha, Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}, seen); err != nil {
+		if _, err := db.UpsertScanned(ctx, Document{Path: path, SHA256: sha, Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}, seen, func(string) bool { return true }); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -2151,6 +2153,18 @@ func TestRetargetPath(t *testing.T) {
 	}
 	if got, ok := db.RetargetPath(ctx, "b.md"); !ok || got != "c.md" {
 		t.Fatalf("b.md retarget=%q,%v want c.md,true", got, ok)
+	}
+
+	// A live file without rename evidence is not a retarget.
+	seed("live.md", "live", "s3")
+	if got, ok := db.RetargetPath(ctx, "live.md"); ok || got != "" {
+		t.Fatalf("live path without a rename must not retarget: %q,%v", got, ok)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO renames(old_path,new_path,moved_at) VALUES('cycle.md','cycle.md','s3')`); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := db.RetargetPath(ctx, "cycle.md"); ok || got != "" {
+		t.Fatalf("cyclic rename must not retarget: %q,%v", got, ok)
 	}
 
 	// A renamed-then-deleted file offers no retarget.
@@ -2207,7 +2221,7 @@ func TestRenameRetargetsMergeTargets(t *testing.T) {
 	// The target file moves elsewhere unchanged.
 	moved := target
 	moved.Path = "archive/target.md"
-	if _, err := db.UpsertScanned(ctx, moved, "s2"); err != nil {
+	if _, err := db.UpsertScanned(ctx, moved, "s2", func(string) bool { return true }); err != nil {
 		t.Fatal(err)
 	}
 

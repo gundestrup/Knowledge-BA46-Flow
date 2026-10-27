@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"cmp"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -48,6 +49,10 @@ func List(ctx context.Context, db *database.DB) error {
 // y/yes = accept, n/no = reject, q = quit, anything else = skip
 // (leaves it pending for next time).
 func Interactive(ctx context.Context, db *database.DB) error {
+	return interactive(ctx, db, db.Decide)
+}
+
+func interactive(ctx context.Context, db *database.DB, decide func(context.Context, int64, string, string) error) error {
 	sugs, err := db.PendingSuggestions(ctx)
 	if err != nil {
 		return err
@@ -61,7 +66,7 @@ func Interactive(ctx context.Context, db *database.DB) error {
 		}
 		switch strings.ToLower(strings.TrimSpace(in.Text())) {
 		case "y", "yes":
-			if err = db.Decide(ctx, s.ID, "accepted", ""); err != nil {
+			if err = decide(ctx, s.ID, "accepted", ""); err != nil {
 				return err
 			}
 		case "n", "no":
@@ -70,7 +75,7 @@ func Interactive(ctx context.Context, db *database.DB) error {
 			if in.Scan() {
 				note = in.Text()
 			}
-			if err = db.Decide(ctx, s.ID, "rejected", note); err != nil {
+			if err = decide(ctx, s.ID, "rejected", note); err != nil {
 				return err
 			}
 		case "q":
@@ -95,11 +100,14 @@ func Decide(ctx context.Context, db *database.DB, idText, status, note string) e
 // filesystem operation succeeded; Error carries either that failure or a
 // failure to record the outcome in SQLite.
 type ApplyResult struct {
-	ID      int64  `json:"id"`
-	Action  string `json:"action"`
-	Status  string `json:"status"` // applied | failed | superseded
-	Applied bool   `json:"applied"`
-	Error   string `json:"error,omitempty"`
+	ID           int64  `json:"id"`
+	Action       string `json:"action"`
+	Status       string `json:"status"` // applied | failed | superseded
+	Applied      bool   `json:"applied"`
+	Error        string `json:"error,omitempty"`
+	DocumentPath string `json:"document_path,omitempty"`
+	BatchID      string `json:"apply_batch_id,omitempty"`
+	AttemptedAt  string `json:"apply_attempted_at,omitempty"`
 }
 
 // Apply executes every accepted suggestion whose source still matches the hash
@@ -112,15 +120,25 @@ func Apply(ctx context.Context, c config.Config, db *database.DB) ([]ApplyResult
 	}
 	out := make([]ApplyResult, 0, len(sugs))
 	applied := 0
+	batch := rand.Text()
 	for _, s := range sugs {
+		at := time.Now().UTC().Format(time.RFC3339Nano)
+		if err := db.RecordApplyAttempt(ctx, s.ID, batch, at); err != nil {
+			out = append(out, ApplyResult{ID: s.ID, Action: s.Action, DocumentPath: s.DocumentPath,
+				Status: "failed", Error: "could not record apply attempt: " + err.Error(), BatchID: batch, AttemptedAt: at})
+			continue
+		}
 		r := applySuggestion(ctx, c, db, s)
+		r.DocumentPath, r.BatchID, r.AttemptedAt = s.DocumentPath, batch, at
 		if r.Applied {
 			applied++
 		}
 		out = append(out, r)
 	}
 	if applied > 0 && c.ReindexTriggerPath != "" {
-		out = append(out, touchReindexTrigger(c))
+		trigger := touchReindexTrigger(c)
+		trigger.BatchID = batch
+		out = append(out, trigger)
 	}
 	return out, nil
 }
@@ -162,6 +180,19 @@ func touchReindexTrigger(c config.Config) ApplyResult {
 // in the result and do not stop the apply loop.
 func applySuggestion(ctx context.Context, c config.Config, db *database.DB, s database.Suggestion) ApplyResult {
 	r := ApplyResult{ID: s.ID, Action: s.Action, Status: "failed"}
+	current, err := db.Suggestion(ctx, s.ID)
+	if err != nil {
+		r.Error = err.Error()
+		return r
+	}
+	if current.Status == "superseded" {
+		r.Status, r.Error = "superseded", current.Error
+		return r
+	}
+	if current.Status != "accepted" {
+		r.Error = "suggestion is no longer accepted"
+		return r
+	}
 	sourceHash, err := hashSource(c.RepositoryPath, s.DocumentPath)
 	if err != nil {
 		// A vanished source is stale context, not a broken suggestion —
@@ -170,7 +201,7 @@ func applySuggestion(ctx context.Context, c config.Config, db *database.DB, s da
 		if _, statErr := os.Stat(c.RepositoryPath); os.IsNotExist(err) && statErr == nil {
 			r.Status = "superseded"
 			r.Error = "source document no longer exists; suggestion marked superseded"
-			if merr := db.MarkSuperseded(ctx, s.ID); merr != nil {
+			if merr := db.MarkSuperseded(ctx, s.ID, r.Error); merr != nil {
 				r.Error += "; also failed to mark superseded: " + merr.Error()
 			}
 			return r
@@ -180,19 +211,37 @@ func applySuggestion(ctx context.Context, c config.Config, db *database.DB, s da
 	}
 	if sourceHash != s.SourceSHA256 {
 		r.Status = "superseded"
-		r.Error = "source document changed after analysis; suggestion marked superseded"
-		if merr := db.MarkSuperseded(ctx, s.ID); merr != nil {
+		r.Error = fmt.Sprintf("source document changed after analysis (expected %s, current %s); review a new proposal", s.SourceSHA256, sourceHash)
+		if merr := db.MarkSuperseded(ctx, s.ID, r.Error); merr != nil {
 			r.Error += "; also failed to mark superseded: " + merr.Error()
 		}
 		return r
 	}
-	if err := applyOne(c, s); err != nil {
+	var applyErr error
+	if s.Origin == "identity" {
+		applyErr = validateForReview(ctx, c, db, s)
+	}
+	if applyErr == nil {
+		applyErr = applyOneValidated(c, s, suggestionValidator(ctx, c, db, s))
+	}
+	if err := applyErr; err != nil {
+		if errors.Is(err, proposal.ErrWriteScope) || errors.Is(err, ErrReviewBlocked) || errors.Is(err, mcppolicy.ErrDenied) {
+			r.Status, r.Error = "blocked", err.Error()
+			if _, recordErr := db.ExecContext(ctx, `UPDATE suggestions SET error=? WHERE id=? AND status='accepted'`, r.Error, s.ID); recordErr != nil {
+				r.Error += "; could not record block: " + recordErr.Error()
+			}
+			return r
+		}
 		r.Error = markApplyFailed(ctx, db, s.ID, err)
 		return r
 	}
 	r.Status = "applied"
 	r.Applied = true
-	if err := db.MarkApplied(ctx, s.ID); err != nil {
+	currentHash, hashErr := hashSource(c.RepositoryPath, s.DocumentPath)
+	if hashErr != nil && !errors.Is(hashErr, os.ErrNotExist) {
+		r.Error = "applied on disk but could not read updated source: " + hashErr.Error()
+	}
+	if err := db.MarkAppliedAndSupersede(ctx, s, currentHash); err != nil {
 		r.Error = "applied on disk but could not be marked in database: " + err.Error()
 	}
 	return r
@@ -218,6 +267,13 @@ func markApplyFailed(ctx context.Context, db *database.DB, id int64, err error) 
 // All file operations are rooted with os.Root so both lexical traversal and
 // symlinks pointing outside the repository are rejected by the OS boundary.
 func applyOne(c config.Config, s database.Suggestion) error {
+	return applyOneValidated(c, s, suggestionValidator(context.Background(), c, nil, s))
+}
+
+func applyOneValidated(c config.Config, s database.Suggestion, validate contentValidator) error {
+	if err := proposal.ValidateAction(c.EffectiveWriteScope(), s.Action); err != nil {
+		return err
+	}
 	src, err := paths.CleanRelative(s.DocumentPath)
 	if err != nil {
 		return err
@@ -247,7 +303,7 @@ func applyOne(c config.Config, s database.Suggestion) error {
 		if s.TargetPath != "" {
 			return fmt.Errorf("expand must have an empty target_path")
 		}
-		return applyExpand(root, src, s.ProposedContent, c)
+		return applyExpand(root, src, s.ProposedContent, c, validate)
 	case "merge":
 		return applyMerge(root, trashDir, src, s.TargetPath, s.ProposedContent, c)
 	default:
@@ -303,14 +359,15 @@ func applyDelete(root *os.Root, trashDir, src string) error {
 }
 
 // applyExpand atomically overwrites the source with the proposed content.
-func applyExpand(root *os.Root, src, proposed string, c config.Config) error {
+func applyExpand(root *os.Root, src, proposed string, c config.Config, validate contentValidator) error {
 	if err := mcppolicy.AssertMutationAllowed(root, src); err != nil {
 		return err
 	}
 	if strings.TrimSpace(proposed) == "" {
 		return fmt.Errorf("missing proposed_content")
 	}
-	if err := checkProposedContent(root, src, proposed, c); err != nil {
+	proposed, err := prepareProposedContent(root, src, proposed, c, validate)
+	if err != nil {
 		return err
 	}
 	return paths.AtomicWrite(root, src, []byte(proposed))
@@ -336,8 +393,12 @@ func applyMerge(root *os.Root, trashDir, src, target, proposed string, c config.
 		return fmt.Errorf("merge target does not exist: %w", err)
 	}
 	for _, original := range []string{src, dst} {
-		if err := checkProposedContent(root, original, proposed, c); err != nil {
+		prepared, err := prepareProposedContent(root, original, proposed, c, proposal.ValidateRewrite)
+		if err != nil {
 			return err
+		}
+		if original == dst {
+			proposed = prepared
 		}
 	}
 	trash := trashPath(trashDir, src)

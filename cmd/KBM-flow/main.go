@@ -84,7 +84,10 @@ func rootCmd() *cobra.Command {
 		reviewCmd(),
 		decideCmd("accept"),
 		decideCmd("reject"),
+		decideCmd("withdraw"),
 		applyCmd(),
+		reconcileCmd(),
+		identifyCmd(),
 		pruneCmd(),
 		serveCmd(),
 		versionCmd(),
@@ -221,6 +224,9 @@ func scanCmd() *cobra.Command {
 			defer finishJob(db, job.ID, &detail, &runErr)
 			r, err := scanner.Scan(ctx, c, db)
 			detail = fmt.Sprintf("Scanned %d markdown files; %d new/changed.", r.Seen, r.Changed)
+			if r.IDsAssigned > 0 {
+				detail += fmt.Sprintf(" %d document IDs assigned.", r.IDsAssigned)
+			}
 			if err == nil {
 				fmt.Fprintln(cmd.OutOrStdout(), detail)
 			}
@@ -391,6 +397,9 @@ func runCmd() *cobra.Command {
 
 			r, err := scanner.Scan(ctx, c, db)
 			detail = fmt.Sprintf("Scanned %d markdown files; %d new/changed.", r.Seen, r.Changed)
+			if r.IDsAssigned > 0 {
+				detail += fmt.Sprintf(" %d document IDs assigned.", r.IDsAssigned)
+			}
 			if err != nil {
 				return err
 			}
@@ -736,12 +745,12 @@ func reviewCmd() *cobra.Command {
 		Short: i18n.T("cli.review.short"),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, db, err := openAll(cmd.Context())
+			c, db, err := openAll(cmd.Context())
 			if err != nil {
 				return err
 			}
 			defer db.Close()
-			return review.Interactive(cmd.Context(), db)
+			return review.InteractiveCurrent(cmd.Context(), c, db)
 		},
 	}
 }
@@ -752,18 +761,21 @@ func decideCmd(name string) *cobra.Command {
 	if name == "reject" {
 		status = "rejected"
 	}
+	if name == "withdraw" {
+		status = "pending"
+	}
 	cmd := &cobra.Command{
 		Use:   name + " ID",
 		Short: i18n.T("cli.decide.short", map[string]any{"Action": name}),
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, db, err := openAll(cmd.Context())
+			c, db, err := openAll(cmd.Context())
 			if err != nil {
 				return err
 			}
 			defer db.Close()
 			note, _ := cmd.Flags().GetString("note")
-			return review.Decide(cmd.Context(), db, args[0], status, note)
+			return review.DecideCurrent(cmd.Context(), c, db, args[0], status, note)
 		},
 	}
 	if status == "rejected" {
@@ -789,6 +801,10 @@ func applyCmd() *cobra.Command {
 				return err
 			}
 			for _, r := range results {
+				if r.Status == "blocked" {
+					fmt.Printf("BLOCKED #%d: %s\n", r.ID, r.Error)
+					continue
+				}
 				if r.Status == "superseded" {
 					fmt.Printf("SKIPPED #%d: %s\n", r.ID, r.Error)
 					continue

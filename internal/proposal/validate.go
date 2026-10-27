@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"knowledge-ba46-flow/internal/frontmatter"
+	"knowledge-ba46-flow/internal/links"
 	"knowledge-ba46-flow/internal/paths"
 )
 
@@ -46,6 +47,18 @@ func ValidateMove(source, target string) error {
 // Whitespace reflow is allowed outside code; existing words must remain in
 // order and code spans/blocks must survive verbatim (apart from CRLF).
 func ValidateRewrite(original, proposed string) error {
+	return validateRewrite(original, proposed, nil)
+}
+
+// ValidateLinkRepair allows only an unchanged body or the exact local repair
+// justified by recorded renames. Origin alone never authorizes a body rewrite.
+func ValidateLinkRepair(docPath, original, proposed string, retarget func(string) (string, bool), exists func(string) bool) error {
+	return validateRewrite(original, proposed, func(oldBody, newBody string) bool {
+		return newBody == oldBody || newBody == links.Retarget(docPath, oldBody, retarget, exists)
+	})
+}
+
+func validateRewrite(original, proposed string, repair func(string, string) bool) error {
 	if strings.TrimSpace(proposed) == "" {
 		return fmt.Errorf("missing proposed_content")
 	}
@@ -73,7 +86,11 @@ func ValidateRewrite(original, proposed string) error {
 			return fmt.Errorf("protected frontmatter field %q must not be added", key)
 		}
 	}
-	if !retainsWords(oldBody, newBody) {
+	if repair != nil {
+		if !repair(oldBody, newBody) {
+			return fmt.Errorf("proposed body is not an exact verified link repair")
+		}
+	} else if !retainsWords(oldBody, newBody) {
 		return fmt.Errorf("proposed content removes or changes existing body text; only additive edits are supported")
 	}
 	oldBody = strings.ReplaceAll(oldBody, "\r\n", "\n")

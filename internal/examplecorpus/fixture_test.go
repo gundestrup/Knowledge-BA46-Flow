@@ -52,6 +52,7 @@ func TestExampleCorporaAgainstGoldStandards(t *testing.T) {
 
 			c := config.Config{
 				RepositoryPath:     repository,
+				WriteScope:         "all",
 				PromptDirectory:    filepath.Join(projectRoot(), "prompts"),
 				MCPServer:          config.MCPServerKnowledgeBase,
 				Extensions:         []string{".md", ".markdown"},

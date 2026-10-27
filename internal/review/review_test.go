@@ -66,7 +66,7 @@ func captureStdout(t *testing.T, fn func() error) (string, error) {
 
 func TestApplyExpandMoveAndDelete(t *testing.T) {
 	repo := t.TempDir()
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}
 	p := filepath.Join(repo, "a.md")
 	os.WriteFile(p, []byte("old"), 0644)
 	if err := applyOne(c, database.Suggestion{Action: "expand", DocumentPath: "a.md", ProposedContent: "old new"}); err != nil {
@@ -108,7 +108,7 @@ func TestSafePathRejectsTraversal(t *testing.T) {
 
 func TestMergeWritesTargetAndTrashesSource(t *testing.T) {
 	repo := t.TempDir()
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}
 	os.WriteFile(filepath.Join(repo, "source.md"), []byte("source"), 0644)
 	os.WriteFile(filepath.Join(repo, "target.md"), []byte("target"), 0644)
 	err := applyOne(c, database.Suggestion{Action: "merge", DocumentPath: "source.md", TargetPath: "target.md", ProposedContent: "source target combined"})
@@ -131,7 +131,7 @@ func TestApplyHonorsMCPWritePolicy(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(repo, ".kb-policy.json"), []byte(`{"mutations":"deny"}`), 0600); err != nil {
 			t.Fatal(err)
 		}
-		err := applyOne(config.Config{RepositoryPath: repo}, database.Suggestion{
+		err := applyOne(config.Config{RepositoryPath: repo, WriteScope: "all"}, database.Suggestion{
 			Action: "expand", DocumentPath: "note.md", ProposedContent: "# replacement\n",
 		})
 		if err == nil || !strings.Contains(err.Error(), "denies mutations") {
@@ -157,7 +157,7 @@ func TestApplyHonorsMCPWritePolicy(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(repo, "beta", ".kb-policy.json"), []byte(`{"mutations":"deny"}`), 0600); err != nil {
 			t.Fatal(err)
 		}
-		err := applyOne(config.Config{RepositoryPath: repo}, database.Suggestion{
+		err := applyOne(config.Config{RepositoryPath: repo, WriteScope: "all"}, database.Suggestion{
 			Action: "move", DocumentPath: "alpha/note.md", TargetPath: "beta/note.md",
 		})
 		if err == nil || !strings.Contains(err.Error(), "beta/.kb-policy.json") {
@@ -180,7 +180,7 @@ func TestApplyHonorsMCPWritePolicy(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(repo, ".kb-policy.json"), []byte(`{"mutations":"deny"}`), 0600); err != nil {
 			t.Fatal(err)
 		}
-		err := applyOne(config.Config{RepositoryPath: repo}, database.Suggestion{
+		err := applyOne(config.Config{RepositoryPath: repo, WriteScope: "all"}, database.Suggestion{
 			Action: "delete", DocumentPath: "note.md",
 		})
 		if err == nil || !strings.Contains(err.Error(), "denies mutations") {
@@ -208,7 +208,7 @@ func TestApplyHonorsMCPWritePolicy(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(targetDir, ".kb-policy.json"), []byte(`{"mutations":"deny"}`), 0600); err != nil {
 			t.Fatal(err)
 		}
-		err := applyOne(config.Config{RepositoryPath: repo}, database.Suggestion{
+		err := applyOne(config.Config{RepositoryPath: repo, WriteScope: "all"}, database.Suggestion{
 			Action: "merge", DocumentPath: "source.md", TargetPath: "beta/target.md",
 			ProposedContent: "# combined\n",
 		})
@@ -230,7 +230,7 @@ func TestApplyHonorsMCPWritePolicy(t *testing.T) {
 		if err := os.WriteFile(policyPath, []byte(original), 0600); err != nil {
 			t.Fatal(err)
 		}
-		err := applyOne(config.Config{RepositoryPath: repo}, database.Suggestion{
+		err := applyOne(config.Config{RepositoryPath: repo, WriteScope: "all"}, database.Suggestion{
 			Action: "expand", DocumentPath: ".kb-policy.json", ProposedContent: `{"mutations":"deny"}`,
 		})
 		if err == nil || !strings.Contains(err.Error(), "managed policy") {
@@ -245,7 +245,7 @@ func TestApplyHonorsMCPWritePolicy(t *testing.T) {
 
 func TestApplyRejectsExistingMoveTarget(t *testing.T) {
 	repo := t.TempDir()
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}
 	source := filepath.Join(repo, "source.md")
 	target := filepath.Join(repo, "target.md")
 	if err := os.WriteFile(source, []byte("source"), 0644); err != nil {
@@ -273,7 +273,7 @@ func TestApplyRejectsExistingMoveTarget(t *testing.T) {
 
 func TestApplyRejectsInvalidSuggestions(t *testing.T) {
 	repo := t.TempDir()
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}
 	if err := os.WriteFile(filepath.Join(repo, "source.md"), []byte("source"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestApplyCannotEscapeRepositoryThroughSymlinkedParent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "source.md"), []byte("source"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}
 
 	err := applyOne(c, database.Suggestion{
 		Action: "merge", DocumentPath: "source.md", TargetPath: "outside/external.md", ProposedContent: "overwritten",
@@ -335,7 +335,7 @@ func TestExpandPreservesFilePermissions(t *testing.T) {
 	if err := os.WriteFile(path, []byte("old"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}
 	if err := applyOne(c, database.Suggestion{Action: "expand", DocumentPath: "private.md", ProposedContent: "old new"}); err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +353,7 @@ func TestExpandRejectsNonRegularTargets(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repo, "folder"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}
 	err := applyOne(c, database.Suggestion{
 		Action: "expand", DocumentPath: "folder", ProposedContent: "not a file",
 	})
@@ -365,7 +365,7 @@ func TestExpandRejectsNonRegularTargets(t *testing.T) {
 func TestApplyMarksFailuresAndContinues(t *testing.T) {
 	ctx := context.Background()
 	repo := t.TempDir()
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}
 	fileContents := map[string]string{
 		"source.md": "source",
 		"target.md": "keep",
@@ -468,7 +468,7 @@ func TestApplySupersedesSuggestionIfSourceChangedAfterReview(t *testing.T) {
 	if err := os.WriteFile(path, changed, 0644); err != nil {
 		t.Fatal(err)
 	}
-	results, err := Apply(ctx, config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}, db)
+	results, err := Apply(ctx, config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}, db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -655,7 +655,7 @@ func TestApplySupersedesWhenSourceFileDisappeared(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, err := Apply(ctx, config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}, db)
+	results, err := Apply(ctx, config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}, db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -684,7 +684,7 @@ func TestApplyPropagatesDatabaseErrors(t *testing.T) {
 
 func TestMoveAndMergeRejectIdenticalSourceAndTarget(t *testing.T) {
 	repo := t.TempDir()
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}
 	if err := os.WriteFile(filepath.Join(repo, "a.md"), []byte("a"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -698,7 +698,7 @@ func TestMoveAndMergeRejectIdenticalSourceAndTarget(t *testing.T) {
 
 func TestMergeRequiresExistingTarget(t *testing.T) {
 	repo := t.TempDir()
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}
 	if err := os.WriteFile(filepath.Join(repo, "source.md"), []byte("source"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -715,7 +715,7 @@ func TestMergeRequiresExistingTarget(t *testing.T) {
 
 func TestExpandRejectsMissingAndSymlinkedFiles(t *testing.T) {
 	repo := t.TempDir()
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}
 	if err := applyOne(c, database.Suggestion{Action: "expand", DocumentPath: "missing.md", ProposedContent: "x"}); err == nil {
 		t.Fatal("expected expanding a missing file to fail")
 	}
@@ -743,7 +743,7 @@ func TestDeleteUsesDefaultTrashDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Empty trash_directory falls back to .kbm-trash inside applyOne.
-	c := config.Config{RepositoryPath: repo}
+	c := config.Config{RepositoryPath: repo, WriteScope: "all"}
 	if err := applyOne(c, database.Suggestion{Action: "delete", DocumentPath: "old.md"}); err != nil {
 		t.Fatal(err)
 	}
@@ -762,7 +762,7 @@ func TestMoveCannotEscapeThroughSymlinkedParent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "a.md"), []byte("a"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}
 	err := applyOne(c, database.Suggestion{Action: "move", DocumentPath: "a.md", TargetPath: "outside/evil.md"})
 	if err == nil {
 		t.Fatal("expected a move through a symlinked parent to be rejected")
@@ -785,7 +785,7 @@ func TestDeleteCannotReachThroughSymlinkedParent(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(repo, "outside")); err != nil {
 		t.Skipf("symlink creation unavailable: %v", err)
 	}
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}
 	err := applyOne(c, database.Suggestion{Action: "delete", DocumentPath: "outside/secret.md"})
 	if err == nil {
 		t.Fatal("expected a delete through a symlinked parent to be rejected")
@@ -817,7 +817,7 @@ func TestExpandLeavesNoTemporaryFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "a.md"), []byte("old"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}
 	if err := applyOne(c, database.Suggestion{Action: "expand", DocumentPath: "a.md", ProposedContent: "old new"}); err != nil {
 		t.Fatal(err)
 	}
@@ -832,7 +832,7 @@ func TestExpandLeavesNoTemporaryFiles(t *testing.T) {
 
 func TestApplyOneIsSafeForConcurrentCalls(t *testing.T) {
 	repo := t.TempDir()
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}
 	const n = 8
 	var wg sync.WaitGroup
 	errs := make(chan error, n)
@@ -925,7 +925,7 @@ func TestApplyRejectsMalformedProposedFrontmatter(t *testing.T) {
 	if err := db.Decide(ctx, sugs[0].ID, "accepted", ""); err != nil {
 		t.Fatal(err)
 	}
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}
 	results, err := Apply(ctx, c, db)
 	if err != nil {
 		t.Fatal(err)
@@ -958,7 +958,7 @@ func TestPurgeTrashRemovesOnlyOldEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", WriteScope: "all"}
 	removed, err := PurgeTrash(c, time.Now().AddDate(0, 0, -30))
 	if err != nil || removed != 1 {
 		t.Fatalf("removed=%d err=%v", removed, err)
@@ -1005,7 +1005,7 @@ func TestApplyTouchesReindexTriggerAfterSuccess(t *testing.T) {
 		}
 	}
 
-	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", ReindexTriggerPath: ".reindex-trigger"}
+	c := config.Config{RepositoryPath: repo, TrashDirectory: ".kbm-trash", ReindexTriggerPath: ".reindex-trigger", WriteScope: "all"}
 	results, err := Apply(ctx, c, db)
 	if err != nil {
 		t.Fatal(err)

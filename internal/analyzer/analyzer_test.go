@@ -11,6 +11,7 @@ import (
 
 	"knowledge-ba46-flow/internal/config"
 	"knowledge-ba46-flow/internal/database"
+	"knowledge-ba46-flow/internal/frontmatter"
 	"knowledge-ba46-flow/internal/scanner"
 	"knowledge-ba46-flow/internal/similarity"
 )
@@ -54,6 +55,7 @@ func setup(t *testing.T) (config.Config, *database.DB) {
 	t.Cleanup(func() { db.Close() })
 	c := config.Config{
 		RepositoryPath:   repo,
+		WriteScope:       "all",
 		PromptDirectory:  promptDir,
 		MCPServer:        config.MCPServerKnowledgeBase,
 		Extensions:       []string{".md"},
@@ -962,7 +964,7 @@ func TestNewNamedEvidenceReanalyzesUnchangedSource(t *testing.T) {
 		t.Fatalf("unchanged source was presented %d times, want one evidence refresh", sourcePrompts)
 	}
 	unchanged, err := os.ReadFile(source)
-	if err != nil || string(unchanged) != sourceText {
+	if err != nil || frontmatter.Canonical(string(unchanged)) != frontmatter.Canonical(sourceText) {
 		t.Fatalf("evidence refresh mutated source: %q error=%v", unchanged, err)
 	}
 }
@@ -1010,7 +1012,8 @@ func TestChangedEvidenceRefreshesSourcePendingOnlyForEnrichment(t *testing.T) {
 	if sourcePrompts != 1 {
 		t.Fatalf("source with a successful old analysis was not refreshed after new evidence: %v", secondAnalysis.prompts)
 	}
-	if original, err := os.ReadFile(source); err != nil || string(original) != sourceText {
+	if original, err := os.ReadFile(source); err != nil ||
+		frontmatter.Canonical(string(original)) != frontmatter.Canonical(sourceText) {
 		t.Fatalf("dependency refresh changed source: %q error=%v", original, err)
 	}
 }

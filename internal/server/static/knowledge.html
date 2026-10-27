@@ -561,6 +561,49 @@
               x-text="notice"
             ></div>
           </template>
+          <details class="box" x-show="applyResults.length" x-cloak>
+            <summary
+              x-text="t('ui.kb.apply_details', 'Apply results by document')"
+            ></summary>
+            <div class="table-container mt-3">
+              <table class="table is-fullwidth">
+                <thead>
+                  <tr>
+                    <th scope="col">#</th>
+                    <th scope="col" x-text="t('ui.kb.file_label', 'File')"></th>
+                    <th
+                      scope="col"
+                      x-text="t('ui.kb.apply_outcome', 'Outcome')"
+                    ></th>
+                    <th
+                      scope="col"
+                      x-text="t('ui.kb.apply_reason', 'Details')"
+                    ></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template
+                    x-for="result in applyResults"
+                    :key="result.id || result.action"
+                  >
+                    <tr>
+                      <td
+                        class="is-mono"
+                        x-text="result.id ? '#' + result.id : result.action"
+                      ></td>
+                      <td>
+                        <code
+                          x-text="result.document_path || result.action"
+                        ></code>
+                      </td>
+                      <td x-text="result.status"></td>
+                      <td x-text="result.error || ''"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </details>
 
           <div class="columns is-variable is-4 mb-2">
             <div class="column">
@@ -699,6 +742,44 @@
                   <span class="kbm-icon icon-check" aria-hidden="true"></span>
                   <span x-text="applyLabel()"></span>
                 </button>
+                <button
+                  type="button"
+                  class="button is-small mr-2"
+                  :disabled="busy || applying || reconciling"
+                  @click="previewReconciliation()"
+                  x-text="t('ui.kb.reconcile_preview', 'Revalidate queue')"
+                ></button>
+                <div class="select mr-2">
+                  <select
+                    :aria-label="t('ui.kb.type_filter', 'Filter notes by change type')"
+                    x-model="typeFilter"
+                  >
+                    <option
+                      value="all"
+                      x-text="t('ui.kb.type_all', 'All change types')"
+                    ></option>
+                    <option
+                      value="frontmatter"
+                      x-text="changeTypeLabel('frontmatter')"
+                    ></option>
+                    <option
+                      value="links"
+                      x-text="changeTypeLabel('links')"
+                    ></option>
+                    <option
+                      value="body"
+                      x-text="changeTypeLabel('body')"
+                    ></option>
+                    <option
+                      value="identity"
+                      x-text="changeTypeLabel('identity')"
+                    ></option>
+                    <option
+                      value="file"
+                      x-text="changeTypeLabel('file')"
+                    ></option>
+                  </select>
+                </div>
                 <div class="select mr-2">
                   <select
                     :aria-label="t('ui.kb.origin_filter_aria', 'Filter by origin')"
@@ -727,6 +808,10 @@
                     <option
                       value="freshness"
                       x-text="t('ui.kb.origin_freshness', 'Freshness')"
+                    ></option>
+                    <option
+                      value="identity"
+                      x-text="changeTypeLabel('identity')"
                     ></option>
                   </select>
                 </div>
@@ -765,6 +850,44 @@
               </div>
             </header>
             <div class="card-content">
+              <p
+                class="help mb-4"
+                x-text="t('ui.kb.note_group_help', 'Review by note. Filters select notes; all matching-note alternatives remain visible. Accept one full-file proposal, not independent fragments.')"
+              ></p>
+              <div class="notification is-light" x-show="queuePlan" x-cloak>
+                <p class="mb-2">
+                  <strong
+                    x-text="t('ui.kb.reconcile_scope', 'Write scope:')"
+                  ></strong>
+                  <code x-text="queuePlan && queuePlan.write_scope"></code>
+                </p>
+                <div class="tags">
+                  <template x-for="count in queueCounts()" :key="count.state">
+                    <span
+                      class="tag"
+                      x-text="count.state + ': ' + count.count"
+                    ></span>
+                  </template>
+                </div>
+                <details class="mb-3">
+                  <summary
+                    x-text="t('ui.kb.reconcile_details', 'Proposals to retire (no note edits)')"
+                  ></summary>
+                  <template x-for="item in retireItems()" :key="item.id">
+                    <p
+                      class="help"
+                      x-text="'#' + item.id + ' ' + item.document_path + ' — ' + item.state + ': ' + item.reason"
+                    ></p>
+                  </template>
+                </details>
+                <button
+                  type="button"
+                  class="button is-warning is-small"
+                  :disabled="busy || applying || reconciling || !queuePlan || queuePlan.retire_count === 0"
+                  @click="confirmReconciliation()"
+                  x-text="t('ui.kb.reconcile_retire', 'Confirm retirement of obsolete proposals')"
+                ></button>
+              </div>
               <template x-if="filteredSuggestions().length === 0">
                 <div class="notification is-light">
                   <span
@@ -773,171 +896,235 @@
                 </div>
               </template>
 
-              <template
-                x-for="suggestion in filteredSuggestions()"
-                :key="suggestion.id"
-              >
-                <article
-                  class="card suggestion-card mb-4"
-                  :class="suggestion.status === 'failed' ? 'is-danger-card' : ''"
-                >
-                  <div class="card-content">
-                    <div class="level is-mobile mb-3">
-                      <div class="level-left">
-                        <div class="tags">
-                          <span class="tag is-success is-light">
-                            <span
-                              class="kbm-icon"
-                              :class="actionIcon(suggestion.action)"
-                              aria-hidden="true"
-                            ></span>
-                            <span x-text="suggestion.action"></span>
-                          </span>
-                          <span
-                            class="tag is-light"
-                            x-text="confidenceLabel(suggestion)"
-                          ></span>
-                          <span
-                            class="tag is-info is-light"
-                            x-show="suggestion.origin && suggestion.origin !== 'analysis'"
-                            x-text="suggestion.origin"
-                          ></span>
-                          <span
-                            class="tag is-light"
-                            x-text="suggestion.status"
-                          ></span>
-                        </div>
-                      </div>
-                      <div class="level-right">
-                        <span
-                          class="is-mono has-text-grey"
-                          x-text="'#' + suggestion.id"
-                        ></span>
-                      </div>
-                    </div>
-                    <p class="mb-2 suggestion-path">
-                      <strong x-text="t('ui.kb.file_label', 'File')"></strong>
-                      <code
-                        class="ml-2"
-                        x-text="suggestion.document_path"
-                      ></code>
-                    </p>
-                    <p
-                      class="mb-2 suggestion-path"
-                      x-show="suggestion.target_path"
-                    >
-                      <strong
-                        x-text="t('ui.kb.target_label', 'Target')"
-                      ></strong>
-                      <code class="ml-2" x-text="suggestion.target_path"></code>
-                    </p>
-                    <p class="mb-4">
-                      <strong
-                        x-text="t('ui.kb.reason_label', 'Reason')"
-                      ></strong>
-                      <span x-text="suggestion.reason"></span>
-                    </p>
-
-                    <template
-                      x-if="suggestion.action === 'merge' || suggestion.action === 'expand'"
-                    >
-                      <div class="mb-4">
-                        <button
-                          type="button"
-                          class="button is-small is-light"
-                          @click="toggleProposal(suggestion.id)"
-                        >
-                          <span
-                            class="kbm-icon icon-eye"
-                            aria-hidden="true"
-                          ></span>
-                          <span
-                            x-text="proposalOpen[suggestion.id] ? t('ui.kb.hide_proposal', 'Hide proposed content') : t('ui.kb.inspect_proposal', 'Inspect proposed content')"
-                          ></span>
-                        </button>
-                        <div x-show="proposalOpen[suggestion.id]" x-cloak>
-                          <div
-                            class="buttons has-addons mb-2 mt-3"
-                            x-show="proposalHasDiff(proposals[suggestion.id])"
-                          >
-                            <button
-                              type="button"
-                              class="button is-small"
-                              :class="{ 'is-link is-selected': proposalView[suggestion.id] !== 'full' }"
-                              @click="proposalView[suggestion.id] = 'diff'"
-                              x-text="t('ui.kb.diff_view', 'Diff')"
-                            >
-                              Diff
-                            </button>
-                            <button
-                              type="button"
-                              class="button is-small"
-                              :class="{ 'is-link is-selected': proposalView[suggestion.id] === 'full' }"
-                              @click="proposalView[suggestion.id] = 'full'"
-                              x-text="t('ui.kb.full_view', 'Full text')"
-                            >
-                              Full text
-                            </button>
+              <template x-for="note in noteGroups()" :key="note.path">
+                <section class="box mb-5">
+                  <template
+                    x-for="suggestion in note.suggestions"
+                    :key="suggestion.id"
+                  >
+                    <div class="kbm-note-proposal">
+                      <h3
+                        class="title is-6 mb-2"
+                        x-show="suggestion.first_in_note"
+                      >
+                        <code x-text="note.path"></code>
+                      </h3>
+                      <p
+                        class="help mb-2"
+                        x-show="suggestion.first_in_note && note.documentId"
+                        x-text="note.documentId"
+                      ></p>
+                      <p
+                        class="help mb-3"
+                        x-show="suggestion.first_in_note && note.suggestions.length > 1"
+                        x-text="t('ui.kb.note_alternatives', 'Alternative snapshots for this note. Choose one; applying it retires proposals based on the old version.')"
+                      ></p>
+                      <article
+                        class="card suggestion-card mb-4"
+                        :class="suggestion.status === 'failed' ? 'is-danger-card' : ''"
+                      >
+                        <div class="card-content">
+                          <div class="level is-mobile mb-3">
+                            <div class="level-left">
+                              <div class="tags">
+                                <span class="tag is-success is-light">
+                                  <span
+                                    class="kbm-icon"
+                                    :class="actionIcon(suggestion.action)"
+                                    aria-hidden="true"
+                                  ></span>
+                                  <span x-text="suggestion.action"></span>
+                                </span>
+                                <span
+                                  class="tag is-light"
+                                  x-text="confidenceLabel(suggestion)"
+                                ></span>
+                                <span
+                                  class="tag is-info is-light"
+                                  x-show="suggestion.origin && suggestion.origin !== 'analysis'"
+                                  x-text="suggestion.origin"
+                                ></span>
+                                <span
+                                  class="tag is-light"
+                                  x-text="suggestion.status"
+                                ></span>
+                              </div>
+                            </div>
+                            <div class="level-right">
+                              <span
+                                class="is-mono has-text-grey"
+                                x-text="'#' + suggestion.id"
+                              ></span>
+                            </div>
                           </div>
-                          <div
-                            class="proposal-diff mt-3"
-                            x-show="proposalHasDiff(proposals[suggestion.id]) && proposalView[suggestion.id] !== 'full'"
+                          <p class="mb-2 suggestion-path">
+                            <strong
+                              x-text="t('ui.kb.file_label', 'File')"
+                            ></strong>
+                            <code
+                              class="ml-2"
+                              x-text="suggestion.document_path"
+                            ></code>
+                          </p>
+                          <p
+                            class="mb-2 suggestion-path"
+                            x-show="suggestion.target_path"
                           >
-                            <div
-                              class="dl dl-note"
-                              x-show="proposals[suggestion.id] && proposals[suggestion.id].unchanged"
-                              x-text="t('ui.kb.no_changes', 'No changes vs the current file')"
-                            ></div>
+                            <strong
+                              x-text="t('ui.kb.target_label', 'Target')"
+                            ></strong>
+                            <code
+                              class="ml-2"
+                              x-text="suggestion.target_path"
+                            ></code>
+                          </p>
+                          <p class="mb-4">
+                            <strong
+                              x-text="t('ui.kb.reason_label', 'Reason')"
+                            ></strong>
+                            <span x-text="suggestion.reason"></span>
+                          </p>
+                          <p
+                            class="notification is-warning is-light"
+                            x-show="suggestion.error"
+                            x-text="suggestion.error"
+                          ></p>
+                          <div class="tags mb-2">
                             <template
-                              x-for="(op, idx) in proposalDiffOps(proposals[suggestion.id])"
-                              :key="idx"
+                              x-for="kind in suggestion.change_types || []"
+                              :key="kind"
                             >
-                              <div
-                                class="dl"
-                                :class="'dl-' + op.t"
-                                x-text="op.s || ' '"
-                              ></div>
+                              <span
+                                class="tag is-light"
+                                x-text="changeTypeLabel(kind)"
+                              ></span>
                             </template>
+                            <span
+                              class="tag"
+                              x-show="suggestion.status === 'pending' || suggestion.status === 'accepted'"
+                              x-text="suggestion.review_state"
+                            ></span>
                           </div>
-                          <pre
-                            class="proposal-content mt-3"
-                            x-show="!proposalHasDiff(proposals[suggestion.id]) || proposalView[suggestion.id] === 'full'"
-                            x-text="proposalText(proposals[suggestion.id])"
-                          ></pre>
-                        </div>
-                      </div>
-                    </template>
+                          <p
+                            class="help mb-3"
+                            x-show="suggestion.review_reason && (suggestion.status === 'pending' || suggestion.status === 'accepted')"
+                            x-text="suggestion.review_reason"
+                          ></p>
+                          <button
+                            type="button"
+                            class="button is-small mb-3"
+                            x-show="suggestion.status === 'accepted' || suggestion.accepted_id"
+                            :disabled="busy || applying || reconciling"
+                            @click="decide(suggestion.accepted_id || suggestion.id, 'pending')"
+                            x-text="t('ui.kb.withdraw', 'Withdraw acceptance')"
+                          ></button>
 
-                    <div
-                      class="buttons mb-0"
-                      x-show="suggestion.status === 'pending'"
-                    >
-                      <button
-                        type="button"
-                        class="button is-success is-light"
-                        :disabled="busy || applying"
-                        @click="decide(suggestion.id, 'accepted')"
-                      >
-                        <span
-                          class="kbm-icon icon-check"
-                          aria-hidden="true"
-                        ></span>
-                        <span
-                          x-text="t('ui.kb.accept_suggestion', 'Accept suggestion')"
-                        ></span>
-                      </button>
-                      <button
-                        type="button"
-                        class="button is-danger is-light"
-                        :disabled="busy || applying"
-                        @click="decide(suggestion.id, 'rejected')"
-                      >
-                        <span class="kbm-icon icon-x" aria-hidden="true"></span>
-                        <span x-text="t('ui.kb.reject', 'Reject')"></span>
-                      </button>
+                          <template
+                            x-if="suggestion.action === 'merge' || suggestion.action === 'expand'"
+                          >
+                            <div class="mb-4">
+                              <button
+                                type="button"
+                                class="button is-small is-light"
+                                @click="toggleProposal(suggestion.id)"
+                              >
+                                <span
+                                  class="kbm-icon icon-eye"
+                                  aria-hidden="true"
+                                ></span>
+                                <span
+                                  x-text="proposalOpen[suggestion.id] ? t('ui.kb.hide_proposal', 'Hide proposed content') : t('ui.kb.inspect_proposal', 'Inspect proposed content')"
+                                ></span>
+                              </button>
+                              <div x-show="proposalOpen[suggestion.id]" x-cloak>
+                                <div
+                                  class="buttons has-addons mb-2 mt-3"
+                                  x-show="proposalHasDiff(proposals[suggestion.id])"
+                                >
+                                  <button
+                                    type="button"
+                                    class="button is-small"
+                                    :class="{ 'is-link is-selected': proposalView[suggestion.id] !== 'full' }"
+                                    @click="proposalView[suggestion.id] = 'diff'"
+                                    x-text="t('ui.kb.diff_view', 'Diff')"
+                                  >
+                                    Diff
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="button is-small"
+                                    :class="{ 'is-link is-selected': proposalView[suggestion.id] === 'full' }"
+                                    @click="proposalView[suggestion.id] = 'full'"
+                                    x-text="t('ui.kb.full_view', 'Full text')"
+                                  >
+                                    Full text
+                                  </button>
+                                </div>
+                                <div
+                                  class="proposal-diff mt-3"
+                                  x-show="proposalHasDiff(proposals[suggestion.id]) && proposalView[suggestion.id] !== 'full'"
+                                >
+                                  <div
+                                    class="dl dl-note"
+                                    x-show="proposals[suggestion.id] && proposals[suggestion.id].unchanged"
+                                    x-text="t('ui.kb.no_changes', 'No changes vs the current file')"
+                                  ></div>
+                                  <template
+                                    x-for="(op, idx) in proposalDiffOps(proposals[suggestion.id])"
+                                    :key="idx"
+                                  >
+                                    <div
+                                      class="dl"
+                                      :class="'dl-' + op.t"
+                                      x-text="op.s || ' '"
+                                    ></div>
+                                  </template>
+                                </div>
+                                <pre
+                                  class="proposal-content mt-3"
+                                  x-show="!proposalHasDiff(proposals[suggestion.id]) || proposalView[suggestion.id] === 'full'"
+                                  x-text="proposalText(proposals[suggestion.id])"
+                                ></pre>
+                              </div>
+                            </div>
+                          </template>
+
+                          <div
+                            class="buttons mb-0"
+                            x-show="suggestion.status === 'pending'"
+                          >
+                            <button
+                              type="button"
+                              class="button is-success is-light"
+                              :disabled="busy || applying || reconciling || suggestion.review_state !== 'valid'"
+                              @click="decide(suggestion.id, 'accepted')"
+                            >
+                              <span
+                                class="kbm-icon icon-check"
+                                aria-hidden="true"
+                              ></span>
+                              <span
+                                x-text="t('ui.kb.accept_suggestion', 'Accept suggestion')"
+                              ></span>
+                            </button>
+                            <button
+                              type="button"
+                              class="button is-danger is-light"
+                              :disabled="busy || applying"
+                              @click="decide(suggestion.id, 'rejected')"
+                            >
+                              <span
+                                class="kbm-icon icon-x"
+                                aria-hidden="true"
+                              ></span>
+                              <span x-text="t('ui.kb.reject', 'Reject')"></span>
+                            </button>
+                          </div>
+                        </div>
+                      </article>
                     </div>
-                  </div>
-                </article>
+                  </template>
+                </section>
               </template>
             </div>
           </section>

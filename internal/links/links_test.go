@@ -117,19 +117,59 @@ Link in inline code stays: ` + "`[x](old.md)`" + `.
 
 [external](https://example.com/old.md) [anchor](#here) [dup](old.md)
 `
-	got := Retarget("sub/doc.md", body, retarget)
+	exists := func(path string) bool {
+		return slices.Contains([]string{"archive/old.md", "b.md", "sub/keep.md"}, path)
+	}
+	got := Retarget("sub/doc.md", body, retarget, exists)
 	want := `# Doc
 
-See [old note](archive/old.md) and [root link](b.md#section) and [live](keep.md).
+See [old note](../archive/old.md) and [root link](../b.md#section) and [live](keep.md).
 Link in inline code stays: ` + "`[x](old.md)`" + `.
 
 ` + "```" + `
 [code link](old.md)
 ` + "```" + `
 
-[external](https://example.com/old.md) [anchor](#here) [dup](archive/old.md)
+[external](https://example.com/old.md) [anchor](#here) [dup](../archive/old.md)
 `
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRetargetPreservesLiveAndIdentityLinks(t *testing.T) {
+	body := "[catalog](../frameworks/css/README.md) [local](README.md)\n"
+	for _, live := range []bool{true, false} {
+		got := Retarget("languages/scss.md", body, func(path string) (string, bool) {
+			return path, true
+		}, func(string) bool { return live })
+		if got != body {
+			t.Fatalf("live=%v: unchanged paths must not be rewritten: %q", live, got)
+		}
+	}
+	// A live relative link takes precedence over a historical root fallback.
+	got := Retarget("sub/doc.md", "[live](old.md)", func(string) (string, bool) {
+		return "archive/new.md", true
+	}, func(path string) bool { return path == "sub/old.md" || path == "archive/new.md" })
+	if got != "[live](old.md)" {
+		t.Fatalf("live relative link changed: %s", got)
+	}
+}
+
+func TestRetargetPreservesSuffixAndRejectsUnsafeEndpoint(t *testing.T) {
+	for next, want := range map[string]string{
+		"archive/new.md":      "[note](../archive/new.md?view=1#part)",
+		"../outside.md":       "[note](old.md?view=1#part)",
+		"archive/new note.md": "[note](../archive/new%20note.md?view=1#part)",
+	} {
+		got := Retarget("sub/doc.md", "[note](old.md?view=1#part)", func(string) (string, bool) {
+			return next, true
+		}, func(path string) bool { return path == next })
+		if got != want {
+			t.Fatalf("next=%q got=%q want=%q", next, got, want)
+		}
+	}
+	if got := InternalCandidates("sub/doc.md", "../archive/new%20note.md#part"); got[0] != "archive/new note.md" {
+		t.Fatalf("escaped destination no longer resolves: %v", got)
 	}
 }

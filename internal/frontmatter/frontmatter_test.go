@@ -1,9 +1,38 @@
 package frontmatter
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestPreserveManaged(t *testing.T) {
+	for _, tt := range []struct {
+		name, original, proposed string
+	}{
+		{"new verdict", "---\ntags: [go]\nkbm:\n  freshness: {verdict: current}\n---\nbody\n", "---\ntags: [go, tool]\n---\nbody\n"},
+		{"old verdict", "---\ntags: [go]\nkbm:\n  freshness: {verdict: current}\n---\nbody\n", "---\ntags: [go, tool]\nkbm:\n  freshness: {verdict: stale}\n---\nbody\n"},
+		{"no live block", "---\ntags: [go]\n---\nbody\n", "---\ntags: [go, tool]\nkbm: {injected: true}\n---\nbody\n"},
+		{"empty live block", "---\nkbm: {}\n---\nbody\n", "body\n"},
+		{"only managed metadata", "---\nkbm: {freshness: {verdict: current}}\n---\nbody\n", "body\n"},
+		{"unchanged", "---\nkbm: {link_check: {dead: []}}\n---\nbody\n", "---\nkbm: {link_check: {dead: []}}\n---\nbody\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := PreserveManaged(tt.original, tt.proposed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, _, _ := Parse(tt.original)
+			after, _, err := Parse(got)
+			if err != nil || !reflect.DeepEqual(before[ManagedKey], after[ManagedKey]) {
+				t.Fatalf("managed block changed: %v -> %v, err=%v", before, after, err)
+			}
+			if Canonical(got) != Canonical(tt.proposed) {
+				t.Fatalf("proposal's canonical bytes changed: %q -> %q", tt.proposed, got)
+			}
+		})
+	}
+}
 
 func TestParseNoFrontmatter(t *testing.T) {
 	for _, in := range []string{"", "# Title\n\nbody", "  ---\nnot: fence", "---no-space\n---\n"} {

@@ -52,6 +52,7 @@ type Config struct {
 	Exclude                  []string            `json:"exclude"`                    // repository-root-anchored paths/patterns skipped during the walk; '*', '?' and '[...]' work per segment, a whole '**' segment matches any depth
 	ExcludeExtensions        []string            `json:"exclude_extensions"`         // extensions removed from the extensions allowlist (case-insensitive, leading '.' required)
 	TrashDirectory           string              `json:"trash_directory"`            // deletions are moved here, inside the repository; default .kbm-trash
+	WriteScope               string              `json:"write_scope"`                // metadata-links (default), content, or all; checked during generation, review and apply
 	HTTPAddr                 string              `json:"http_addr"`                  // listen address for `KBM-flow serve`; default 127.0.0.1:8080
 	LogFile                  string              `json:"log_file"`                   // optional: also write logs to this file (appended); relative paths resolve against the config dir
 	LogLevel                 string              `json:"log_level"`                  // "info" (default) or "debug" — debug adds per-request HTTP lines and job lifecycle detail
@@ -382,6 +383,7 @@ func Load(path string) (Config, error) {
 	if c.TrashDirectory == "" {
 		c.TrashDirectory = ".kbm-trash"
 	}
+	c.WriteScope = c.EffectiveWriteScope()
 	if c.HTTPAddr == "" {
 		// Localhost-only default: /api/apply mutates the filesystem, so binding
 		// wider than loopback must be a deliberate choice.
@@ -432,6 +434,11 @@ func resolveRelativePaths(c *Config, path string) {
 // validateOptionalFields checks the fields that need value validation rather
 // than a default, after Load has applied defaults.
 func validateOptionalFields(c *Config) error {
+	switch c.EffectiveWriteScope() {
+	case "metadata-links", "content", "all":
+	default:
+		return fmt.Errorf("invalid write_scope %q: use metadata-links, content or all", c.WriteScope)
+	}
 	if c.EnrichmentTimeoutSeconds < 0 || c.EnrichmentMaxTokens < 0 {
 		return fmt.Errorf("enrichment_timeout_seconds and enrichment_max_tokens must be positive, or 0 for defaults")
 	}
@@ -477,6 +484,14 @@ func validateOptionalFields(c *Config) error {
 		return fmt.Errorf("validate.exempt: %w", err)
 	}
 	return validateExcludeExtensions(c)
+}
+
+// EffectiveWriteScope keeps zero-value configs as restrictive as loaded configs.
+func (c Config) EffectiveWriteScope() string {
+	if c.WriteScope == "" {
+		return "metadata-links"
+	}
+	return c.WriteScope
 }
 
 // validateExcludeExtensions checks the exclude_extensions entries and that

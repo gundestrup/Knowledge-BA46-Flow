@@ -27,6 +27,7 @@ import (
 	"knowledge-ba46-flow/internal/logging"
 	"knowledge-ba46-flow/internal/paths"
 	repositoryreport "knowledge-ba46-flow/internal/report"
+	"knowledge-ba46-flow/internal/review"
 )
 
 //go:embed static/index.html
@@ -86,11 +87,13 @@ func NewMux(c config.Config, db *database.DB, stop chan<- struct{}) http.Handler
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/documents", documents(db))
 	mux.HandleFunc("GET /api/models", modelsData(c, db))
-	mux.HandleFunc("GET /api/suggestions", suggestions(db))
+	mux.HandleFunc("GET /api/suggestions", suggestions(c, db))
 	mux.HandleFunc("GET /api/suggestions/{id}", suggestion(c, db))
 	o := &ops{c: c, db: db}
 	mux.HandleFunc("POST /api/suggestions/{id}/decide", o.decide)
 	mux.HandleFunc("POST /api/apply", o.applyAccepted)
+	mux.HandleFunc("GET /api/reconcile", o.previewReconcile)
+	mux.HandleFunc("POST /api/reconcile", o.confirmReconcile)
 	mux.HandleFunc("POST /api/ops", o.create)
 	mux.HandleFunc("GET /api/ops", o.listJobs)
 	mux.HandleFunc("GET /api/ops/{id}", o.get)
@@ -209,7 +212,7 @@ func documents(db *database.DB) http.HandlerFunc {
 
 // suggestions lists suggestions filtered by ?status= (default "pending").
 // proposed_content is stripped — it can be huge; GET /api/suggestions/{id} has it.
-func suggestions(db *database.DB) http.HandlerFunc {
+func suggestions(c config.Config, db *database.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		status := r.URL.Query().Get("status")
 		if status == "" {
@@ -220,7 +223,30 @@ func suggestions(db *database.DB) http.HandlerFunc {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
+		queue, err := db.ActiveSuggestions(r.Context())
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		accepted := map[string]int64{}
+		for _, s := range queue {
+			if s.Status == "accepted" {
+				accepted[s.DocumentPath] = s.ID
+			}
+		}
 		for i := range sugs {
+			if status == "pending" || status == "accepted" {
+				a := review.Assess(r.Context(), c, db, sugs[i], accepted)
+				sugs[i].ReviewState, sugs[i].ReviewReason = a.State, a.Reason
+				sugs[i].ChangeTypes, sugs[i].DocumentID, sugs[i].AcceptedID = a.ChangeTypes, a.DocumentID, a.AcceptedID
+			} else {
+				// The original before-image is not archived. Do not invent
+				// historical change types by comparing against today's note.
+				sugs[i].ChangeTypes = []string{"unknown"}
+				if sugs[i].Action != "expand" {
+					sugs[i].ChangeTypes = []string{"file"}
+				}
+			}
 			sugs[i].ProposedContent = ""
 		}
 		writeJSON(w, http.StatusOK, sugs)
@@ -289,18 +315,18 @@ type decideBody struct {
 
 // decide transitions a pending suggestion to accepted/rejected — the HTTP
 // equivalent of `KBM-flow accept|reject ID`.
-func decide(db *database.DB) http.HandlerFunc {
+func decide(c config.Config, db *database.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var b decideBody
 		if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 			writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid JSON body: %w", err))
 			return
 		}
-		if b.Status != "accepted" && b.Status != "rejected" {
-			writeErr(w, http.StatusBadRequest, fmt.Errorf("status must be 'accepted' or 'rejected'"))
+		if b.Status != "accepted" && b.Status != "rejected" && b.Status != "pending" {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("status must be 'accepted', 'rejected', or 'pending' (withdraw acceptance)"))
 			return
 		}
-		if err := db.Decide(r.Context(), pathID(r), b.Status, b.Note); err != nil {
+		if err := review.DecideCurrent(r.Context(), c, db, strconv.FormatInt(pathID(r), 10), b.Status, b.Note); err != nil {
 			writeErr(w, http.StatusConflict, err) // already decided or unknown id
 			return
 		}

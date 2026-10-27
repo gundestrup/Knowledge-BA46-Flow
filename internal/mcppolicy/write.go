@@ -21,11 +21,18 @@ const (
 	maxWritePolicyBytes = 16 * 1024
 )
 
+var ErrDenied = errors.New("repository mutation policy blocks this write")
+
 // AssertMutationAllowed checks the write policy for the repository root and
 // each top-level shelf touched by the operation. This supports configuring
 // repository_path as either one shelf or the MCP server's shelves directory.
 // Missing policy files allow writes; malformed policies fail closed.
-func AssertMutationAllowed(root *os.Root, targets ...string) error {
+func AssertMutationAllowed(root *os.Root, targets ...string) (err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("%w: %w", ErrDenied, err)
+		}
+	}()
 	scopes := map[string]bool{".": true}
 	normalized := make([]string, 0, len(targets))
 	for _, raw := range targets {

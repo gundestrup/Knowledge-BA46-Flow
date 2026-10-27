@@ -15,6 +15,7 @@ import (
 
 	"knowledge-ba46-flow/internal/config"
 	"knowledge-ba46-flow/internal/database"
+	"knowledge-ba46-flow/internal/frontmatter"
 	"knowledge-ba46-flow/internal/ollama"
 )
 
@@ -211,7 +212,7 @@ func TestCloudEmbeddingConsentDoesNotChangeLocalGenerationLane(t *testing.T) {
 		t.Fatalf("embedding consent changed generation provenance: %+v error=%v", docs, err)
 	}
 	after, err := os.ReadFile(filepath.Join(c.RepositoryPath, "a.md"))
-	if err != nil || string(original) != string(after) {
+	if err != nil || frontmatter.Canonical(string(original)) != frontmatter.Canonical(string(after)) {
 		t.Fatal("run applied unaccepted suggestions")
 	}
 }

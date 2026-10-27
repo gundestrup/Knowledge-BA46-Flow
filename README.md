@@ -47,7 +47,8 @@ make example-check
 ```
 
 To exercise the CLI scanner separately, use the starter shelf. It writes its
-SQLite state under ignored `data/`; it does not write the Markdown files:
+SQLite state under ignored `data/`; the only Markdown change it makes is the
+hash-neutral `document_id` UUID inserted once per document:
 
 ```bash
 go run ./cmd/KBM-flow scan --config example-configs/config.example-data.json
@@ -68,7 +69,8 @@ remain pending and `apply` is never called.
    configured `exclude_directories`, `exclude` paths/patterns and
    `exclude_extensions`.
 2. Computes a canonical SHA-256 — the document minus the tool-owned `kbm`
-   frontmatter block — plus a content-similarity sketch, and stores path,
+   frontmatter block and the identity `document_id` — plus a content-similarity
+   sketch, and stores path,
    size, mtime, tags, frontmatter findings and internal body-link findings
    (`link_issues`) in SQLite.
 3. Compares `sha256` with `analyzed_sha256`, so only new or changed files are sent to Ollama.
@@ -103,14 +105,28 @@ findings, Sonar gate issues, or combinations of those signals. See
 - `delete` moves the file to `<repo>/.kbm-trash/<timestamp>/` — not a permanent deletion.
 - `move` is rejected if the destination file already exists.
 - `apply` checks the source SHA-256 again and supersedes suggestions if the file changed after analysis.
+- Acceptance checks the live source and rejects invalid expansions or a second accepted alternative for the same document. Successful applies immediately retire other old snapshots; per-document errors and apply-batch history remain available in the dashboard/API.
+- Link repairs require recorded renames and preserve document-relative Markdown links. Existing valid links are left untouched; repairing a link does not rename a document.
 - `merge` and `expand` require complete `proposed_content` from Ollama.
 - File operations are rooted to the repository and reject traversal or symlink escapes.
 - `apply` honors the Knowledge Base MCP Server's `.kb-policy.json`; deny or invalid policies block mutations, and the policy file itself is protected.
 - Frontmatter `kb_policy.no_llm_context: true` keeps that document out of Ollama prompts; invalid `kb_policy` values also fail closed.
 - A `stub` tag — or a body of at most `stub_max_body_lines` non-empty lines (default 5) — marks a placeholder: it stays a valid link target and candidate but every generation stage skips it.
-- Every scan runs the internal link check (no model): `](...)` body targets that resolve neither to a document nor an existing file land in `link_issues`. `KBM-flow check-links` — CLI or dashboard button — additionally probes external `http(s)` URLs over the network and records the verdict in each note's `kbm.link_check` block; `KBM-flow freshness` similarly records a heuristic currentness verdict in `kbm.freshness`. The `kbm` block is tool-owned operational metadata; it is the only file content written outside `apply`, and the canonical hash ignores it so a check never requeues analysis.
+- Every scan runs the internal link check (no model): `](...)` body targets that resolve neither to a document nor an existing file land in `link_issues`. `KBM-flow check-links` — CLI or dashboard button — additionally probes external `http(s)` URLs over the network and records the verdict in each note's `kbm.link_check` block; `KBM-flow freshness` similarly records a heuristic currentness verdict in `kbm.freshness`. The `kbm` block is tool-owned operational metadata and, together with `document_id`, the only file content written outside `apply`; the canonical hash ignores both so a check or ID assignment never requeues analysis.
 - If the repository root contains `taxonomy.yaml`, new tag values are constrained to its approved vocabulary during analysis and revalidated at apply time.
 - Take a backup or commit the repository to Git before `apply`.
+
+Scanning writes one frontmatter field itself: when a document lacks
+`document_id`, the scan inserts a generated UUID in place (byte-preserving,
+`os.Root`-confined). The field is hash-neutral — assignment never invalidates
+pending proposals — and protected from proposals, which keep the live ID
+automatically. IDs enable rename-plus-edit tracking and fast inbound-link
+repair; the MCP server accepts the unknown string field but does not treat it
+as native identity, and the ID never replaces source-version checks.
+`identify` inspects identity state and `identify --prepare` migrates databases
+populated before scan-time assignment. KBM preserves unknown/custom fields.
+Tool-owned `kbm` operational metadata is kept from the live file when approved
+content changes are applied.
 
 ## Local usage
 

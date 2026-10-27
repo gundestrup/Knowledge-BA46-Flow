@@ -44,6 +44,7 @@
   "// exclude_extensions": "removes entries from the extensions allowlist — here .markdown is ignored",
   "exclude_extensions": [".markdown"],
   "trash_directory": ".kbm-trash",
+  "write_scope": "metadata-links",
 
   "// server + logging": "loopback-only HTTP; log_file tees stderr to a file, log_level 'debug' adds request/job lines",
   "http_addr": "127.0.0.1:8080",

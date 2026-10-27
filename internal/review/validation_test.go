@@ -83,7 +83,7 @@ func TestApplyRevalidatesUnsafePreviouslyAcceptedSuggestions(t *testing.T) {
 			if err := db.Decide(t.Context(), pending[0].ID, "accepted", ""); err != nil {
 				t.Fatal(err)
 			}
-			results, err := Apply(t.Context(), config.Config{RepositoryPath: repo}, db)
+			results, err := Apply(t.Context(), config.Config{RepositoryPath: repo, WriteScope: "all"}, db)
 			if err != nil || len(results) != 1 || results[0].Applied || results[0].Status != "failed" {
 				t.Fatalf("results=%+v error=%v", results, err)
 			}
@@ -111,7 +111,7 @@ func TestApplyAllowsSafeMetadataPatchAndAdditiveBody(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := applyOne(config.Config{RepositoryPath: repo}, database.Suggestion{
+	if err := applyOne(config.Config{RepositoryPath: repo, WriteScope: "all"}, database.Suggestion{
 		Action: "expand", DocumentPath: "source.md", ProposedContent: proposed,
 	}); err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ function: [testing]
 	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
 		t.Fatal(err)
 	}
-	err := applyOne(config.Config{RepositoryPath: repo}, database.Suggestion{
+	err := applyOne(config.Config{RepositoryPath: repo, WriteScope: "all"}, database.Suggestion{
 		Action: "expand", DocumentPath: "source.md", ProposedContent: proposed,
 	})
 	if err == nil || !strings.Contains(err.Error(), "invented") {
@@ -161,7 +161,7 @@ func TestApplyRejectsLinkThroughExternalSymlink(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "source.md"), []byte("# Note"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	err := applyOne(config.Config{RepositoryPath: repo}, database.Suggestion{
+	err := applyOne(config.Config{RepositoryPath: repo, WriteScope: "all"}, database.Suggestion{
 		Action: "expand", DocumentPath: "source.md",
 		ProposedContent: "---\nrelated: [outside/private.md]\n---\n# Note",
 	})
@@ -184,7 +184,7 @@ func TestMergeRejectsTargetChangedAfterAnalysis(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "target.md"), []byte(currentTarget), 0644); err != nil {
 		t.Fatal(err)
 	}
-	err := applyOne(config.Config{RepositoryPath: repo}, database.Suggestion{
+	err := applyOne(config.Config{RepositoryPath: repo, WriteScope: "all"}, database.Suggestion{
 		Action: "merge", DocumentPath: "source.md", TargetPath: "target.md", ProposedContent: proposed,
 	})
 	if err == nil {

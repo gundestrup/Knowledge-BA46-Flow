@@ -7,6 +7,7 @@ package frontmatter
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -66,7 +67,12 @@ func Parse(content string) (map[string]any, string, error) {
 }
 
 // Canonical returns the content used for change detection: the input with the
-// tool-owned `kbm` top-level frontmatter mapping excised byte-for-byte.
+// tool-owned `kbm` top-level frontmatter mapping excised byte-for-byte, and
+// the top-level `document_id` line excised. Identity is not content: assigning
+// or repairing a UUID never changes the hash, so adding IDs to an existing
+// corpus never invalidates a pending proposal and never requeues analysis.
+// The stored frontmatter_json carries the real ID for identity checks, so an
+// unexpected ID change is still visible — it just is not a content edit.
 // Because the rest of the document is preserved verbatim, a document without
 // the block hashes exactly as its raw bytes did — adding or updating `kbm`
 // never changes the hash, so operational bookkeeping never requeues analysis.
@@ -112,6 +118,14 @@ func CanonicalParts(content string) (fm, body string) {
 		case strings.HasPrefix(trim, ManagedKey+":"):
 			// Top-level key (column 0): the managed block starts here.
 			inKBM, found = true, true
+		case strings.HasPrefix(trim, "document_id:"):
+			// Top-level identity line: excluded from the content hash so
+			// assigning a UUID does not look like a document edit. It also
+			// ends an open kbm block (column-0 key) but deliberately leaves
+			// afterKBM alone — the trailing-newline trim must still match a
+			// file whose frontmatter ends right after kbm.
+			inKBM = false
+			found = true
 		case inKBM && trim != "" && trim[0] != ' ' && trim[0] != '\t' && trim[0] != '#':
 			// A column-0, non-comment line ends the block.
 			inKBM = false
@@ -191,13 +205,63 @@ func SetManaged(content, key string, value any) (string, error) {
 	} else {
 		kbm[key] = value
 	}
+	if len(kbm) == 0 {
+		kbm = nil
+	}
+	out, err := setManagedBlock(content, kbm)
+	if err != nil {
+		return "", err
+	}
+	return out, verifyManagedWrite(content, key, value, out)
+}
 
-	var block []byte
-	if len(kbm) > 0 {
-		block, err = yaml.Marshal(map[string]any{ManagedKey: kbm})
-		if err != nil {
-			return "", fmt.Errorf("marshal kbm block: %w", err)
+// PreserveManaged replaces a proposal's operational metadata with the live
+// file's block. A proposal can neither restore old verdicts nor author kbm.
+func PreserveManaged(original, proposed string) (string, error) {
+	before, _, err := Parse(original)
+	if err != nil {
+		return "", err
+	}
+	after, _, err := Parse(proposed)
+	if err != nil {
+		return "", err
+	}
+	value, present := before[ManagedKey]
+	if reflect.DeepEqual(value, after[ManagedKey]) && present == hasKey(after, ManagedKey) {
+		return proposed, nil
+	}
+	var managed map[string]any
+	if present {
+		var ok bool
+		managed, ok = value.(map[string]any)
+		if !ok {
+			return "", fmt.Errorf("live kbm must be a mapping")
 		}
+	}
+	out, err := setManagedBlock(proposed, managed)
+	if err != nil {
+		return "", err
+	}
+	fields, _, err := Parse(out)
+	if err != nil || !reflect.DeepEqual(fields[ManagedKey], value) ||
+		hasKey(fields, ManagedKey) != present || Canonical(out) != Canonical(proposed) {
+		return "", fmt.Errorf("cannot preserve live kbm without changing proposed content")
+	}
+	return out, nil
+}
+
+func hasKey(fields map[string]any, key string) bool {
+	_, ok := fields[key]
+	return ok
+}
+
+func setManagedBlock(content string, kbm map[string]any) (string, error) {
+	if kbm == nil {
+		return Canonical(content), nil
+	}
+	block, err := yaml.Marshal(map[string]any{ManagedKey: kbm})
+	if err != nil {
+		return "", fmt.Errorf("marshal kbm block: %w", err)
 	}
 
 	trimmed := strings.TrimPrefix(content, "\uFEFF")
@@ -254,7 +318,7 @@ func SetManaged(content, key string, value any) (string, error) {
 		}
 		out = bom + trimmed[:open[1]] + newFM + trimmed[open[1]+close[0]:open[1]+close[1]] + trimmed[open[1]+close[1]:]
 	}
-	return out, verifyManagedWrite(content, key, value, out)
+	return out, nil
 }
 
 // verifyManagedWrite is the splice's self-check: it assumes a column-0
@@ -318,6 +382,9 @@ func init() {
 // `related` is an extra key this tool curates; the MCP server ignores it.
 func Validate(fields map[string]any) []string {
 	issues := []string{} // non-nil so JSON encodes [] rather than null
+	if _, err := DocumentID(fields); err != nil {
+		issues = append(issues, err.Error())
+	}
 	for key, value := range fields {
 		switch {
 		case key == "tags":

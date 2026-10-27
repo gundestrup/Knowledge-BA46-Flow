@@ -49,7 +49,7 @@ func setup(t *testing.T) (config.Config, *database.DB, *httptest.Server) {
 		t.Fatal(err)
 	}
 	// Fields normally defaulted by config.Load must be set explicitly here.
-	c := config.Config{RepositoryPath: repo, Extensions: []string{".md"}, TrashDirectory: ".kbm-trash", OllamaModel: "test-model"}
+	c := config.Config{RepositoryPath: repo, Extensions: []string{".md"}, TrashDirectory: ".kbm-trash", OllamaModel: "test-model", WriteScope: "all"}
 	return c, db, httptest.NewServer(NewMux(c, db, nil))
 }
 
@@ -728,7 +728,7 @@ func TestDecideRejectsMalformedBodyAndStatus(t *testing.T) {
 	for _, body := range []string{"not-json", `{"status":"maybe"}`} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/api/suggestions/1/decide", strings.NewReader(body))
-		decide(db).ServeHTTP(recorder, request)
+		decide(config.Config{}, db).ServeHTTP(recorder, request)
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("body=%q status=%d", body, recorder.Code)
 		}

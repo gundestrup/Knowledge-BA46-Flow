@@ -59,10 +59,14 @@ window.knowledgeDashboard = () => ({
   proposalView: {},
   statusFilter: "pending",
   originFilter: "all",
+  typeFilter: "all",
+  queuePlan: null,
+  reconciling: false,
   pendingCount: 0,
   acceptedCount: 0,
   busy: false,
   applying: false,
+  applyResults: [],
   reanalyze: false,
   external: false,
   allowCloud: false,
@@ -571,10 +575,114 @@ window.knowledgeDashboard = () => ({
   },
 
   filteredSuggestions() {
-    if (this.originFilter === "all") return this.suggestions;
     return this.suggestions.filter(
-      (s) => (s.origin || "analysis") === this.originFilter,
+      (s) =>
+        (this.originFilter === "all" ||
+          (s.origin || "analysis") === this.originFilter) &&
+        (this.typeFilter === "all" ||
+          (s.change_types || []).includes(this.typeFilter)),
     );
+  },
+
+  noteGroups() {
+    const matches = new Set(this.filteredSuggestions().map((s) => s.id));
+    const notes = new Map();
+    for (const suggestion of this.suggestions) {
+      const path = suggestion.document_path;
+      if (!notes.has(path)) {
+        notes.set(path, {
+          path,
+          documentId: suggestion.document_id || "",
+          suggestions: [],
+          matched: false,
+        });
+      }
+      const note = notes.get(path);
+      suggestion.first_in_note = note.suggestions.length === 0;
+      note.suggestions.push(suggestion);
+      note.matched ||= matches.has(suggestion.id);
+    }
+    // Filters select notes, not isolated payload fragments. Keep alternatives
+    // visible so selecting a "frontmatter" facet never hides a conflicting edit.
+    return [...notes.values()]
+      .filter((note) => note.matched)
+      .sort((a, b) => a.path.localeCompare(b.path));
+  },
+
+  changeTypeLabel(kind) {
+    switch (kind) {
+      case "frontmatter":
+        return this.t("ui.kb.type_frontmatter", "Frontmatter");
+      case "links":
+        return this.t("ui.kb.type_links", "Links");
+      case "body":
+        return this.t("ui.kb.type_body", "Body");
+      case "identity":
+        return this.t("ui.kb.type_identity", "Identity");
+      case "file":
+        return this.t("ui.kb.type_file", "File operations");
+      default:
+        return this.t("ui.kb.type_unknown", "Unclassified");
+    }
+  },
+
+  async previewReconciliation() {
+    this.error = "";
+    this.reconciling = true;
+    try {
+      this.queuePlan = await this.requestJSON("/api/reconcile");
+    } catch (error) {
+      this.error = error.message;
+    } finally {
+      this.reconciling = false;
+    }
+  },
+
+  retireItems() {
+    return (this.queuePlan?.items || []).filter((item) => item.retire);
+  },
+
+  queueCounts() {
+    return Object.entries(this.queuePlan?.counts || {}).map(
+      ([state, count]) => ({
+        state,
+        count,
+      }),
+    );
+  },
+
+  async confirmReconciliation() {
+    if (!this.queuePlan || this.queuePlan.retire_count === 0) return;
+    if (
+      !(await this.confirmDialog(
+        this.t(
+          "ui.kb.reconcile_confirm",
+          "Retire {{.Count}} obsolete proposals? Notes and valid/blocked proposals will not change.",
+          { Count: this.queuePlan.retire_count },
+        ),
+      ))
+    ) {
+      return;
+    }
+    this.error = "";
+    this.reconciling = true;
+    try {
+      const result = await this.postJSON("/api/reconcile", {
+        confirm: true,
+        token: this.queuePlan.token,
+      });
+      this.queuePlan = null;
+      this.notice = this.t(
+        "ui.kb.reconcile_finished",
+        "Retired {{.Count}} obsolete proposals. No notes were changed.",
+        { Count: result.retired },
+      );
+      await this.refreshData();
+    } catch (error) {
+      this.error = error.message;
+    } finally {
+      this.reconciling = false;
+    }
   },
 
   async loadSuggestions() {
@@ -818,6 +926,7 @@ window.knowledgeDashboard = () => ({
     }
     try {
       await this.postJSON(`/api/suggestions/${id}/decide`, { status, note });
+      this.queuePlan = null;
       this.notice = this.t(
         "ui.kb.suggestion_decided",
         "Suggestion #{{.Id}} {{.Status}}.",
@@ -843,27 +952,53 @@ window.knowledgeDashboard = () => ({
       return;
     }
     this.error = "";
+    this.applyResults = [];
     this.applying = true;
     try {
       const results = await this.requestJSON("/api/apply", { method: "POST" });
-      const applied = results.filter((result) => result.applied).length;
-      const failed = results.filter(
-        (result) => result.status === "failed",
-      ).length;
-      const superseded = results.filter(
-        (result) => result.status === "superseded",
-      ).length;
+      this.applyResults = results;
+      const { applied, failed, superseded, blocked } =
+        this.applySummary(results);
       this.notice = this.t(
         "ui.kb.apply_finished",
-        "Apply finished: {{.Applied}} applied, {{.Failed}} failed, {{.Superseded}} superseded.",
-        { Applied: applied, Failed: failed, Superseded: superseded },
+        "Apply finished: {{.Applied}} applied, {{.Failed}} failed, {{.Superseded}} superseded, {{.Blocked}} blocked.",
+        {
+          Applied: applied,
+          Failed: failed,
+          Superseded: superseded,
+          Blocked: blocked,
+        },
       );
+      const trigger = results.find(
+        (result) => result.action === "reindex-trigger",
+      );
+      if (trigger && !trigger.applied) {
+        this.error = this.t(
+          "ui.kb.apply_reindex_failed",
+          "Suggestions were applied, but the reindex trigger failed: {{.Error}}",
+          { Error: trigger.error },
+        );
+      }
       await this.refreshData();
     } catch (error) {
       this.error = error.message;
     } finally {
       this.applying = false;
     }
+  },
+
+  applySummary(results) {
+    const suggestions = results.filter(
+      (result) => result.action !== "reindex-trigger",
+    );
+    return {
+      applied: suggestions.filter((result) => result.applied).length,
+      failed: suggestions.filter((result) => result.status === "failed").length,
+      superseded: suggestions.filter((result) => result.status === "superseded")
+        .length,
+      blocked: suggestions.filter((result) => result.status === "blocked")
+        .length,
+    };
   },
 
   applyLabel() {

@@ -47,6 +47,20 @@ cp config.json config.local.json   # config.local.json is gitignored
 | `log_file`                | string   | empty (stderr only)                  | Also write logs to this file, appended — useful for `serve` left running. Relative paths resolve against the config file's directory. Browser-side errors (uncaught exceptions, unhandled rejections) are relayed to `POST /api/client-log` and land here too.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `log_level`               | string   | `info`                               | `debug` adds one line per HTTP request (method, path, status, duration — `/static/` hits excluded) plus job start/finish detail. Anything else is rejected.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
+## Write permissions
+
+`write_scope` defaults to `metadata-links`: allowlisted frontmatter and exact,
+verified rename-link repairs only. It blocks body additions, moves, merges and
+deletes, including old accepted suggestions. Use `content` to enable validated
+additive body edits without file operations; `all` separately enables reviewed
+move/merge/trash actions. Unknown values fail configuration validation. No mode
+bypasses source hashes, protected fields or `.kb-policy.json`.
+
+Blocked accepted suggestions remain accepted and can be withdrawn. Existing
+configs that omit the field receive the restrictive default after restart.
+See [review and migration handling](REVIEW.md) before reconciling an old queue
+or preparing document IDs.
+
 ## Model stages and validation
 
 Optional-stage limits are independent of the full-analysis request timeout:

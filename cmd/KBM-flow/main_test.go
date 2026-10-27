@@ -297,7 +297,7 @@ func TestAcceptRejectAndApplyEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	databasePath := filepath.Join(dir, "data", "knowledge.db")
-	configPath := writeCLIConfig(t, dir, nil)
+	configPath := writeCLIConfig(t, dir, map[string]any{"write_scope": "all"})
 
 	// #1: a move we accept — apply must rename the file.
 	seedDocument(t, repo, databasePath, "a.md", "# A", database.Suggestion{Action: "move", TargetPath: "moved/a.md", Reason: "better"})
@@ -305,7 +305,8 @@ func TestAcceptRejectAndApplyEndToEnd(t *testing.T) {
 	seedDocument(t, repo, databasePath, "b.md", "# B", database.Suggestion{Action: "expand", Reason: "more", ProposedContent: "# B expanded"})
 	// #3: never decided — apply must leave it pending.
 	seedDocument(t, repo, databasePath, "c.md", "# C", database.Suggestion{Action: "move", TargetPath: "b.md", Reason: "collision"})
-	// #4: a move onto an existing file we accept — apply must fail it and keep the target.
+	// #4: an unsafe move is refused on acceptance. A legacy acceptance must
+	// still fail at apply without overwriting the target.
 	if err := os.WriteFile(filepath.Join(repo, "target.md"), []byte("# keep"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +321,17 @@ func TestAcceptRejectAndApplyEndToEnd(t *testing.T) {
 	if err := runCLI("reject", "2", "--config", configPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := runCLI("accept", "4", "--config", configPath); err != nil {
+	if err := runCLI("accept", "4", "--config", configPath); err == nil {
+		t.Fatal("acceptance must refuse an existing move destination")
+	}
+	legacy, err := database.Open(t.Context(), databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Decide(t.Context(), 4, "accepted", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := runCLI("accept", "bogus", "--config", configPath); err == nil {

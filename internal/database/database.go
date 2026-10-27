@@ -89,25 +89,34 @@ type Document struct {
 // (computed in Go without a model) — each stage supersedes only the pending
 // suggestions it regenerates, so a re-run of one pass can't wipe the other's.
 type Suggestion struct {
-	ID              int64   `json:"id"`
-	DocumentPath    string  `json:"document_path"`
-	SourceSHA256    string  `json:"source_sha256,omitempty"`
-	Action          string  `json:"action"`
-	TargetPath      string  `json:"target_path"`
-	Reason          string  `json:"reason"`
-	ProposedContent string  `json:"proposed_content,omitempty"`
-	Status          string  `json:"status"`
-	Confidence      float64 `json:"confidence"`
-	Origin          string  `json:"origin"`
-	CreatedAt       string  `json:"created_at"`
+	ID               int64   `json:"id"`
+	DocumentPath     string  `json:"document_path"`
+	SourceSHA256     string  `json:"source_sha256,omitempty"`
+	Action           string  `json:"action"`
+	TargetPath       string  `json:"target_path"`
+	Reason           string  `json:"reason"`
+	ProposedContent  string  `json:"proposed_content,omitempty"`
+	Status           string  `json:"status"`
+	Confidence       float64 `json:"confidence"`
+	Origin           string  `json:"origin"`
+	CreatedAt        string  `json:"created_at"`
+	Error            string  `json:"error,omitempty"`
+	AppliedAt        string  `json:"applied_at,omitempty"`
+	ApplyBatchID     string  `json:"apply_batch_id,omitempty"`
+	ApplyAttemptedAt string  `json:"apply_attempted_at,omitempty"`
 	// DecisionNote carries the reviewer's "why" on reject/accept decisions —
 	// the ground-truth feedback the analysis prompt shows back to the model.
 	DecisionNote string `json:"decision_note,omitempty"`
 	// CurrentContent/CurrentContentError are populated only by
 	// GET /api/suggestions/{id} for the review diff view — the file on disk
 	// now, or why it could not be read. Never persisted.
-	CurrentContent      string `json:"current_content,omitempty"`
-	CurrentContentError string `json:"current_content_error,omitempty"`
+	CurrentContent      string   `json:"current_content,omitempty"`
+	CurrentContentError string   `json:"current_content_error,omitempty"`
+	ReviewState         string   `json:"review_state,omitempty"`
+	ReviewReason        string   `json:"review_reason,omitempty"`
+	ChangeTypes         []string `json:"change_types,omitempty"`
+	DocumentID          string   `json:"document_id,omitempty"`
+	AcceptedID          int64    `json:"accepted_id,omitempty"`
 }
 
 // KnowledgeDashboard summarizes current analysis work and the most recent
@@ -153,7 +162,7 @@ func Open(ctx context.Context, path string) (*DB, error) {
 // schemaVersion stamps the shape migrate() produces — bump it on every schema
 // change. A database stamped newer than this build is refused at Open so an
 // old binary cannot silently half-migrate a future layout.
-const schemaVersion = 11
+const schemaVersion = 13
 
 func (d *DB) migrate(ctx context.Context) error {
 	var stamped int
@@ -208,7 +217,7 @@ CREATE TABLE IF NOT EXISTS suggestions (
  reason TEXT NOT NULL,
  confidence REAL NOT NULL DEFAULT 0,
  proposed_content TEXT NOT NULL DEFAULT '',
- origin TEXT NOT NULL DEFAULT 'analysis' CHECK(origin IN ('analysis','enrich','deterministic','expand','freshness')),
+ origin TEXT NOT NULL DEFAULT 'analysis' CHECK(origin IN ('analysis','enrich','deterministic','expand','freshness','identity')),
  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','rejected','applied','failed','superseded')),
  created_at TEXT NOT NULL,
  decided_at TEXT,
@@ -268,10 +277,19 @@ CREATE TABLE IF NOT EXISTS repo_report_history (
 	if err := d.upgradeSuggestionColumns(ctx); err != nil {
 		return err
 	}
+	if err := d.upgradeApplyColumns(ctx); err != nil {
+		return err
+	}
 	if err := d.upgradeTaskConstraints(ctx); err != nil {
 		return err
 	}
 	if _, err := d.ExecContext(ctx, stageResultsSchema); err != nil {
+		return err
+	}
+	if _, err := d.ExecContext(ctx, queueSchema); err != nil {
+		return err
+	}
+	if err := d.upgradeIdentitySchema(ctx); err != nil {
 		return err
 	}
 	// v11: decided_at means "left the review queue" — rows superseded or failed
@@ -453,7 +471,7 @@ func (d *DB) rebuildJobsForOp(ctx context.Context, marker, opCSV string, withHea
 // the marker: it appears in neither legacy CHECK, while 'expand' already sits
 // in the suggestions.action list.
 func (d *DB) upgradeTaskConstraints(ctx context.Context) error {
-	err := d.rebuildTable(ctx, "suggestions", "'freshness'", `CREATE TABLE suggestions_rebuild (
+	err := d.rebuildTable(ctx, "suggestions", "'identity'", `CREATE TABLE suggestions_rebuild (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  document_path TEXT NOT NULL,
  source_sha256 TEXT NOT NULL,
@@ -462,15 +480,17 @@ func (d *DB) upgradeTaskConstraints(ctx context.Context) error {
  reason TEXT NOT NULL,
  confidence REAL NOT NULL DEFAULT 0,
  proposed_content TEXT NOT NULL DEFAULT '',
- origin TEXT NOT NULL DEFAULT 'analysis' CHECK(origin IN ('analysis','enrich','deterministic','expand','freshness')),
+ origin TEXT NOT NULL DEFAULT 'analysis' CHECK(origin IN ('analysis','enrich','deterministic','expand','freshness','identity')),
  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','rejected','applied','failed','superseded')),
  created_at TEXT NOT NULL,
  decided_at TEXT,
  decision_note TEXT NOT NULL DEFAULT '',
  applied_at TEXT,
  error TEXT NOT NULL DEFAULT '',
+ apply_batch_id TEXT NOT NULL DEFAULT '',
+ apply_attempted_at TEXT NOT NULL DEFAULT '',
  FOREIGN KEY(document_path) REFERENCES documents(path) ON UPDATE CASCADE ON DELETE CASCADE
-);`, "id,document_path,source_sha256,action,target_path,reason,confidence,proposed_content,origin,status,created_at,decided_at,decision_note,applied_at,error",
+);`, "id,document_path,source_sha256,action,target_path,reason,confidence,proposed_content,origin,status,created_at,decided_at,decision_note,applied_at,error,apply_batch_id,apply_attempted_at",
 		`CREATE INDEX IF NOT EXISTS idx_suggestions_status ON suggestions(status);`)
 	if err != nil {
 		return err
@@ -543,10 +563,10 @@ func (d *DB) rebuildTable(ctx context.Context, table, marker, create, cols, post
 // When the sha256 changed (or the row is new): tags are replaced, status resets
 // to 'pending', last_error clears, and pending or accepted suggestions for that
 // document are marked 'superseded' — they were generated from stale content.
-// A new path whose hash matches exactly one not-seen-this-scan row is a
-// rename: that row is re-keyed instead (renameByHash) and reports unchanged.
+// A unique UUID (or exact hash without one) plus observed filesystem absence
+// can identify a rename. Without absence evidence no rename is inferred.
 // Returns whether the file was new or changed (i.e. needs re-analysis).
-func (d *DB) UpsertScanned(ctx context.Context, doc Document, seen string) (bool, error) {
+func (d *DB) UpsertScanned(ctx context.Context, doc Document, seen string, absence ...func(string) bool) (bool, error) {
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
@@ -561,15 +581,19 @@ func (d *DB) UpsertScanned(ctx context.Context, doc Document, seen string) (bool
 		return false, err
 	}
 	if newPath {
-		// No row at this path — identical content elsewhere may be a rename:
-		// re-key that row so its analysis lineage, embedding and suggestions
-		// (document_path FK cascades) follow instead of re-analyzing.
-		renamed, rerr := renameByHash(ctx, tx, doc, seen)
+		var absent func(string) bool
+		if len(absence) != 0 {
+			absent = absence[0]
+		}
+		renamed, rerr := renameObserved(ctx, tx, doc, seen, absent)
 		if rerr != nil {
 			return false, rerr
 		}
 		if renamed {
-			changed = false // the entity moved; its content did not change
+			if err := tx.QueryRowContext(ctx, `SELECT sha256 FROM documents WHERE path=?`, doc.Path).Scan(&old); err != nil {
+				return false, err
+			}
+			changed = old != doc.SHA256 // stable identity does not make an edit fresh.
 		}
 	}
 	// The CASE expressions preserve tags/status/last_error/frontmatter when the
@@ -578,8 +602,8 @@ func (d *DB) UpsertScanned(ctx context.Context, doc Document, seen string) (bool
 VALUES(?,?,?,?,?,?,?,?,'pending',?,?,?,?)
 ON CONFLICT(path) DO UPDATE SET sha256=excluded.sha256,fm_sha256=excluded.fm_sha256,body_sha256=excluded.body_sha256,size=excluded.size,modified_unix=excluded.modified_unix,
 tags_json=CASE WHEN documents.sha256<>excluded.sha256 THEN excluded.tags_json ELSE documents.tags_json END,
-frontmatter_json=CASE WHEN documents.sha256<>excluded.sha256 THEN excluded.frontmatter_json ELSE documents.frontmatter_json END,
-frontmatter_issues=CASE WHEN documents.sha256<>excluded.sha256 THEN excluded.frontmatter_issues ELSE documents.frontmatter_issues END,
+frontmatter_json=excluded.frontmatter_json,
+frontmatter_issues=excluded.frontmatter_issues,
 sig=CASE WHEN documents.sha256<>excluded.sha256 THEN excluded.sig ELSE documents.sig END,
 embedding=CASE WHEN documents.sha256<>excluded.sha256 THEN NULL ELSE documents.embedding END,
 last_seen_at=excluded.last_seen_at,
@@ -590,7 +614,9 @@ last_error=CASE WHEN documents.sha256<>excluded.sha256 THEN '' ELSE documents.la
 		return false, err
 	}
 	if changed {
-		if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded',decided_at=COALESCE(decided_at,?) WHERE document_path=? AND status IN ('pending','accepted')`, time.Now().UTC().Format(time.RFC3339), doc.Path); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded',error='source content changed during scan; review a new proposal',
+decided_at=COALESCE(decided_at,?) WHERE document_path=? AND status IN ('pending','accepted') AND source_sha256<>?`,
+			time.Now().UTC().Format(time.RFC3339), doc.Path, doc.SHA256); err != nil {
 			return false, err
 		}
 	}
@@ -598,48 +624,6 @@ last_error=CASE WHEN documents.sha256<>excluded.sha256 THEN '' ELSE documents.la
 		return false, err
 	}
 	return changed, nil
-}
-
-// renameByHash detects a moved file inside upsertScanned's transaction: the
-// same canonical hash shows up at a new path while exactly one row carrying
-// that hash was not visited this scan. That row is re-keyed — the FK cascade
-// re-paths its suggestions — so stamps, embeddings and review decisions
-// survive the move. Ambiguous matches (several vanished files with identical
-// content) and live duplicates (the old path still exists) return false and
-// the caller inserts a fresh row instead.
-func renameByHash(ctx context.Context, tx *sql.Tx, doc Document, seen string) (bool, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT path FROM documents WHERE sha256=? AND path<>? AND last_seen_at<>?`, doc.SHA256, doc.Path, seen)
-	if err != nil {
-		return false, err
-	}
-	var paths []string
-	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
-			_ = rows.Close()
-			return false, err
-		}
-		paths = append(paths, p)
-	}
-	_ = rows.Close() // rows.Err() below is the meaningful signal
-	if err := rows.Err(); err != nil || len(paths) != 1 {
-		return false, err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE documents SET path=? WHERE path=?`, doc.Path, paths[0]); err != nil {
-		return false, err
-	}
-	// Remember the move so links elsewhere pointing at the old path can be
-	// retargeted deterministically — no model needed. Latest move wins.
-	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO renames(old_path,new_path,moved_at) VALUES(?,?,?)`, paths[0], doc.Path, seen); err != nil {
-		return false, err
-	}
-	// A live merge into the renamed file follows it — the target names the
-	// entity, which now lives at the new path. Move destinations stay: the
-	// vacated slot remains a legitimate place to land.
-	if _, err := tx.ExecContext(ctx, `UPDATE suggestions SET target_path=? WHERE target_path=? AND action='merge' AND status IN ('pending','accepted')`, doc.Path, paths[0]); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 // Renames returns every recorded move as old_path → new_path — the prefilter
@@ -666,23 +650,59 @@ func (d *DB) Renames(ctx context.Context) (map[string]string, error) {
 // the trail ends at a missing or unknown document — a deleted file offers no
 // retarget. Bounded hops keep a corrupted map from looping forever.
 func (d *DB) RetargetPath(ctx context.Context, path string) (string, bool) {
+	target, _, ok := d.RetargetEvidence(ctx, path)
+	return target, ok
+}
+
+// RetargetEvidence also returns the UUID recorded at the move. Callers must
+// check that identity against the live target, not trust a stale scan alone.
+func (d *DB) RetargetEvidence(ctx context.Context, path string) (string, string, bool) {
+	var originalStatus string
+	err := d.QueryRowContext(ctx, `SELECT status FROM documents WHERE path=?`, path).Scan(&originalStatus)
+	if err == nil && originalStatus != "missing" {
+		return "", "", false
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", "", false
+	}
 	cur := path
+	expectedID := ""
+	seen := make(map[string]bool)
 	// Follow the renames map to the end of the chain — intermediate hops no
 	// longer exist as document rows (the row was re-keyed onward), so only
 	// the final endpoint is checked for liveness. The hop bound protects
 	// against a corrupted cyclic map.
 	for i := 0; i < 8; i++ {
-		var next string
-		if err := d.QueryRowContext(ctx, `SELECT new_path FROM renames WHERE old_path=?`, cur).Scan(&next); err != nil {
-			break
+		if seen[cur] {
+			return "", "", false
+		}
+		seen[cur] = true
+		var next, id string
+		if err := d.QueryRowContext(ctx, `SELECT new_path,document_id FROM renames WHERE old_path=?`, cur).Scan(&next, &id); err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return "", "", false
+			}
+			if cur == path {
+				return "", "", false
+			}
+			var status string
+			if err := d.QueryRowContext(ctx, `SELECT status FROM documents WHERE path=?`, cur).Scan(&status); err != nil || status == "missing" {
+				return "", "", false
+			}
+			if expectedID != "" && !d.uniqueIdentityAt(ctx, cur, expectedID) {
+				return "", "", false
+			}
+			return cur, expectedID, true
+		}
+		if id != "" {
+			if expectedID != "" && expectedID != id {
+				return "", "", false
+			}
+			expectedID = id
 		}
 		cur = next
 	}
-	var status string
-	if err := d.QueryRowContext(ctx, `SELECT status FROM documents WHERE path=?`, cur).Scan(&status); err != nil || status == "missing" {
-		return "", false
-	}
-	return cur, true
+	return "", "", false
 }
 
 // SaveLinkFix records deterministic rename-retarget repairs without stamping
@@ -971,6 +991,9 @@ func (d *DB) CandidatePaths(ctx context.Context, exclude string, limit int) ([]s
 // missing backlinks. The LIKE prefilter may over-match; the Go verification
 // on the parsed frontmatter keeps only exact list entries.
 func (d *DB) InboundLinks(ctx context.Context, path string) ([]string, error) {
+	if indexed, ready, err := d.IndexedInboundLinks(ctx, path); err != nil || ready {
+		return indexed, err
+	}
 	rows, err := d.QueryContext(ctx, `SELECT path,frontmatter_json FROM documents
 WHERE status<>'missing' AND path<>? AND frontmatter_json LIKE '%' || ? || '%'`, path, path)
 	if err != nil {
@@ -1254,8 +1277,8 @@ func (d *DB) Suggestions(ctx context.Context, status string) ([]Suggestion, erro
 // Returns sql.ErrNoRows if the id does not exist.
 func (d *DB) Suggestion(ctx context.Context, id int64) (Suggestion, error) {
 	var s Suggestion
-	err := d.QueryRowContext(ctx, `SELECT id,document_path,source_sha256,action,target_path,reason,confidence,proposed_content,status,origin,created_at,decision_note FROM suggestions WHERE id=?`, id).
-		Scan(&s.ID, &s.DocumentPath, &s.SourceSHA256, &s.Action, &s.TargetPath, &s.Reason, &s.Confidence, &s.ProposedContent, &s.Status, &s.Origin, &s.CreatedAt, &s.DecisionNote)
+	err := d.QueryRowContext(ctx, `SELECT id,document_path,source_sha256,action,target_path,reason,confidence,proposed_content,status,origin,created_at,decision_note,error,COALESCE(applied_at,''),apply_batch_id,apply_attempted_at,COALESCE((SELECT lower(json_extract(d.frontmatter_json,'$.document_id')) FROM documents d WHERE d.path=suggestions.document_path AND json_valid(d.frontmatter_json)),'') FROM suggestions WHERE id=?`, id).
+		Scan(&s.ID, &s.DocumentPath, &s.SourceSHA256, &s.Action, &s.TargetPath, &s.Reason, &s.Confidence, &s.ProposedContent, &s.Status, &s.Origin, &s.CreatedAt, &s.DecisionNote, &s.Error, &s.AppliedAt, &s.ApplyBatchID, &s.ApplyAttemptedAt, &s.DocumentID)
 	return s, err
 }
 
@@ -1300,12 +1323,12 @@ ORDER BY id DESC LIMIT 1
 }
 
 // suggestions is the shared query helper behind PendingSuggestions and
-// Accepted. Suggestions whose source document is missing are excluded —
+// Accepted. Active suggestions whose source document is missing are excluded —
 // MarkMissing retires the document row but keeps it (and its suggestions)
 // for resurrection, so a vanished file must not keep feeding the review and
 // apply queues. If the file reappears its suggestions resurface still valid.
 func (d *DB) suggestions(ctx context.Context, status string) ([]Suggestion, error) {
-	rows, err := d.QueryContext(ctx, `SELECT id,document_path,source_sha256,action,target_path,reason,confidence,proposed_content,status,origin,created_at,decision_note FROM suggestions WHERE status=? AND EXISTS(SELECT 1 FROM documents d WHERE d.path=suggestions.document_path AND d.status<>'missing') ORDER BY id`, status)
+	rows, err := d.QueryContext(ctx, `SELECT id,document_path,source_sha256,action,target_path,reason,confidence,proposed_content,status,origin,created_at,decision_note,error,COALESCE(applied_at,''),apply_batch_id,apply_attempted_at,COALESCE((SELECT lower(json_extract(d.frontmatter_json,'$.document_id')) FROM documents d WHERE d.path=suggestions.document_path AND json_valid(d.frontmatter_json)),'') FROM suggestions WHERE status=? AND (? NOT IN ('pending','accepted') OR EXISTS(SELECT 1 FROM documents d WHERE d.path=suggestions.document_path AND d.status<>'missing')) ORDER BY id`, status, status)
 	if err != nil {
 		return nil, err
 	}
@@ -1313,7 +1336,7 @@ func (d *DB) suggestions(ctx context.Context, status string) ([]Suggestion, erro
 	out := []Suggestion{} // non-nil so JSON responses are [] rather than null
 	for rows.Next() {
 		var s Suggestion
-		if err := rows.Scan(&s.ID, &s.DocumentPath, &s.SourceSHA256, &s.Action, &s.TargetPath, &s.Reason, &s.Confidence, &s.ProposedContent, &s.Status, &s.Origin, &s.CreatedAt, &s.DecisionNote); err != nil {
+		if err := rows.Scan(&s.ID, &s.DocumentPath, &s.SourceSHA256, &s.Action, &s.TargetPath, &s.Reason, &s.Confidence, &s.ProposedContent, &s.Status, &s.Origin, &s.CreatedAt, &s.DecisionNote, &s.Error, &s.AppliedAt, &s.ApplyBatchID, &s.ApplyAttemptedAt, &s.DocumentID); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -1365,8 +1388,12 @@ func (d *DB) MarkApplyFailed(ctx context.Context, id int64, msg string) error {
 
 // MarkSuperseded prevents an accepted suggestion from applying after its source
 // document has changed since the analysis was generated.
-func (d *DB) MarkSuperseded(ctx context.Context, id int64) error {
-	_, err := d.ExecContext(ctx, `UPDATE suggestions SET status='superseded',decided_at=COALESCE(decided_at,?) WHERE id=? AND status IN ('pending','accepted')`, time.Now().UTC().Format(time.RFC3339), id)
+func (d *DB) MarkSuperseded(ctx context.Context, id int64, reasons ...string) error {
+	reason := "source document changed after analysis; review a new proposal"
+	if len(reasons) > 0 {
+		reason = reasons[0]
+	}
+	_, err := d.ExecContext(ctx, `UPDATE suggestions SET status='superseded',error=CASE WHEN error='' THEN ? ELSE error END,decided_at=COALESCE(decided_at,?) WHERE id=? AND status IN ('pending','accepted')`, reason, time.Now().UTC().Format(time.RFC3339), id)
 	return err
 }
 

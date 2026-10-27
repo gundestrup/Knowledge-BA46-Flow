@@ -23,6 +23,7 @@ import (
 	"knowledge-ba46-flow/internal/frontmatter"
 	"knowledge-ba46-flow/internal/links"
 	"knowledge-ba46-flow/internal/prompts"
+	"knowledge-ba46-flow/internal/proposal"
 	"knowledge-ba46-flow/internal/scanner"
 	"knowledge-ba46-flow/internal/similarity"
 	"knowledge-ba46-flow/internal/taxonomy"
@@ -1001,6 +1002,13 @@ func (p *pipeline) analyzeDoc(doc database.Document, fm map[string]any, candidat
 		overlapContext(ranked),
 		renderCandidates(ranked))
 	contextText += mergeText
+	contextText += fmt.Sprintf("\nWrite scope: %s. Do not propose document_id changes. ", p.c.EffectiveWriteScope())
+	switch p.c.EffectiveWriteScope() {
+	case "metadata-links":
+		contextText += "Propose frontmatter patches only; do not propose body additions, moves, merges or deletions. Verified rename-link repairs are handled locally.\n"
+	case "content":
+		contextText += "Additive body edits are allowed, but moves, merges and deletions are forbidden.\n"
+	}
 	prompt, err := prompts.Compose(p.c.PromptDirectory, p.mcpServer, contextText, content)
 	if err != nil {
 		// Missing prompt files are a systemic problem — abort the run.
@@ -1061,7 +1069,8 @@ func (p *pipeline) analyzeDoc(doc database.Document, fm map[string]any, candidat
 // retarget resolves a moved document path through the renames map — the
 // deterministic link repair's lookup into RetargetPath.
 func (p *pipeline) retarget(path string) (string, bool) {
-	return p.db.RetargetPath(p.ctx, path)
+	target, ok, _ := scanner.ObservedRetarget(p.ctx, p.c, p.db, path)
+	return target, ok
 }
 
 // relinkMoved is deterministic maintenance that runs before the generation
@@ -1074,11 +1083,23 @@ func (p *pipeline) relinkMoved(out *Result) error {
 	if len(p.renames) == 0 {
 		return nil
 	}
+	indexed := map[string]bool{}
+	for old, target := range p.renames {
+		for _, path := range []string{old, target} {
+			inbound, err := p.db.InboundLinks(p.ctx, path)
+			if err != nil {
+				return err
+			}
+			for _, source := range inbound {
+				indexed[source] = true
+			}
+		}
+	}
 	for _, doc := range p.knownDocs {
 		if err := p.ctx.Err(); err != nil {
 			return err
 		}
-		if !referencesMoved(doc, p.renames) {
+		if !indexed[doc.Path] && !referencesMoved(doc, p.renames) {
 			continue
 		}
 		content, err := scanner.ReadDocument(p.c, doc.Path)
@@ -1142,9 +1163,6 @@ func referencesMoved(doc database.Document, renames map[string]string) bool {
 // (including policy-excluded ones — linking to a private document is
 // legitimate). retarget resolves a moved path to its new live location.
 func deterministicFix(docPath, content string, fm map[string]any, knownDocs []database.Document, retarget func(string) (string, bool)) (database.Suggestion, bool) {
-	if len(fm) == 0 {
-		return database.Suggestion{}, false
-	}
 	known := map[string]bool{docPath: true}
 	for _, c := range knownDocs {
 		known[c.Path] = true
@@ -1180,15 +1198,26 @@ func deterministicFix(docPath, content string, fm map[string]any, knownDocs []da
 	}
 	// Body links to a moved file are retargeted the same way — before the
 	// frontmatter rewrite, so one suggestion carries both repairs.
-	relinked := links.Retarget(docPath, content, retarget)
-	if relinked != content {
+	_, body, err := frontmatter.Parse(content)
+	if err != nil {
+		return database.Suggestion{}, false
+	}
+	exists := func(path string) bool { return known[path] }
+	relinked := links.Retarget(docPath, body, retarget, exists)
+	if relinked != body {
 		retargeted = append(retargeted, "body link(s)")
 	}
 	if len(removed) == 0 && len(retargeted) == 0 {
 		return database.Suggestion{}, false
 	}
-	proposed, err := frontmatter.Rewrite(relinked, fixed)
+	proposed, err := frontmatter.Render(fixed, relinked)
 	if err != nil {
+		return database.Suggestion{}, false
+	}
+	if err := proposal.ValidateLinkRepair(docPath, content, proposed, retarget, exists); err != nil {
+		return database.Suggestion{}, false
+	}
+	if err := proposal.ValidateLinks(proposed, documentLookup(docPath, knownDocs)); err != nil {
 		return database.Suggestion{}, false
 	}
 	var parts []string

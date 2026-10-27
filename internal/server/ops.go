@@ -134,6 +134,7 @@ func (o *ops) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if o.conflict(w) {
+		o.end()
 		return
 	}
 	c, err := modelselection.Prepare(r.Context(), o.c, b.Op, modelselection.Options{
@@ -192,6 +193,7 @@ func (o *ops) createReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if o.conflict(w) {
+		o.end()
 		return
 	}
 	j, err := o.db.CreateJob(r.Context(), "report")
@@ -235,7 +237,7 @@ func (o *ops) decide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer o.end()
-	decide(o.db).ServeHTTP(w, r)
+	decide(o.c, o.db).ServeHTTP(w, r)
 }
 
 func (o *ops) begin() bool {
@@ -291,16 +293,14 @@ func (o *ops) shutdown(stop chan<- struct{}) http.HandlerFunc {
 }
 
 // conflict reports 409 when a job from another process (e.g. a CLI command or
-// a previous server run) is live. Call only while holding begin(); it releases
-// the guard on conflict so the caller can return immediately.
+// a previous server run) is live. Call only while holding begin(); the caller
+// owns releasing the guard, including on a conflict.
 func (o *ops) conflict(w http.ResponseWriter) bool {
 	running, ok, err := o.db.RunningJob(context.Background())
 	switch {
 	case err != nil:
-		o.end()
 		writeErr(w, http.StatusInternalServerError, err)
 	case ok:
-		o.end()
 		writeErr(w, http.StatusConflict, fmt.Errorf("job #%d (%s) is already running", running.ID, running.Op))
 	}
 	return err != nil || ok

@@ -298,8 +298,11 @@ func TestScanStoresFrontmatterAndIssues(t *testing.T) {
 	if !strings.Contains(byPath["broken.md"].FrontmatterIssues, "malformed") {
 		t.Fatalf("broken.md issues=%q", byPath["broken.md"].FrontmatterIssues)
 	}
-	if byPath["plain.md"].FrontmatterJSON != "" || byPath["plain.md"].FrontmatterIssues != "[]" {
-		t.Fatalf("plain.md fm=%q issues=%q", byPath["plain.md"].FrontmatterJSON, byPath["plain.md"].FrontmatterIssues)
+	// Scan-time identity assignment adds only document_id; no other fields.
+	plain := byPath["plain.md"].FrontmatterJSON
+	if !strings.Contains(plain, `"document_id"`) || !strings.HasPrefix(plain, "{") ||
+		strings.Contains(plain, "title") || byPath["plain.md"].FrontmatterIssues != "[]" {
+		t.Fatalf("plain.md fm=%q issues=%q", plain, byPath["plain.md"].FrontmatterIssues)
 	}
 }
 

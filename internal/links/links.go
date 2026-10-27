@@ -6,9 +6,13 @@
 package links
 
 import (
+	"net/url"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
+
+	"knowledge-ba46-flow/internal/paths"
 )
 
 var (
@@ -106,6 +110,9 @@ func InternalCandidates(docPath, target string) []string {
 	if t == "" {
 		return nil
 	}
+	if decoded, err := url.PathUnescape(t); err == nil {
+		t = decoded
+	}
 	out := []string{}
 	if dir := path.Dir(docPath); dir != "." {
 		out = append(out, path.Join(dir, t))
@@ -125,11 +132,12 @@ func IsDocumentTarget(target string) bool {
 // Retarget rewrites markdown link destinations whose target resolves to a
 // path that no longer exists but whose document moved — retarget maps a
 // resolved old path to its new live path. The replacement destination is the
-// new repository-relative path (every candidate resolver accepts root-
-// relative targets), with the original #fragment or ?query preserved.
+// new document-relative path, with the original #fragment or ?query preserved.
+// A currently resolving link is never rewritten, even if an old rename shares
+// one of its fallback candidates.
 // Fenced code blocks and inline code spans are left untouched, matching the
 // extractors. Returns the (possibly unchanged) body.
-func Retarget(docPath, body string, retarget func(oldPath string) (string, bool)) string {
+func Retarget(docPath, body string, retarget func(oldPath string) (string, bool), exists func(string) bool) string {
 	var b strings.Builder
 	fenced := false
 	var fence string
@@ -149,7 +157,7 @@ func Retarget(docPath, body string, retarget func(oldPath string) (string, bool)
 			b.WriteString(line)
 			continue
 		}
-		b.WriteString(retargetLine(docPath, line, retarget))
+		b.WriteString(retargetLine(docPath, line, retarget, exists))
 	}
 	return b.String()
 }
@@ -158,7 +166,7 @@ func Retarget(docPath, body string, retarget func(oldPath string) (string, bool)
 // code spans are blanked with length-preserving spaces so match offsets stay
 // valid for splicing into the original line (replacements applied
 // right-to-left).
-func retargetLine(docPath, line string, retarget func(string) (string, bool)) string {
+func retargetLine(docPath, line string, retarget func(string) (string, bool), exists func(string) bool) string {
 	if !strings.Contains(line, "](") {
 		return line
 	}
@@ -180,12 +188,32 @@ func retargetLine(docPath, line string, retarget func(string) (string, bool)) st
 		// Fragments and queries ride along to the new location.
 		stem := strings.SplitN(strings.SplitN(target, "#", 2)[0], "?", 2)[0]
 		suffix := target[len(stem):]
-		for _, candidate := range InternalCandidates(docPath, target) {
+		candidates := InternalCandidates(docPath, target)
+		live := false
+		for _, candidate := range candidates {
+			if exists(candidate) {
+				live = true
+				break
+			}
+		}
+		if live {
+			continue
+		}
+		for _, candidate := range candidates {
 			next, ok := retarget(candidate)
-			if !ok {
+			if !ok || next == candidate || !exists(next) {
 				continue
 			}
-			splices = append(splices, splice{m[2], m[3], next + suffix})
+			local, err := paths.CleanRelative(next)
+			if err != nil {
+				continue
+			}
+			relative, err := filepath.Rel(filepath.FromSlash(path.Dir(docPath)), local)
+			if err != nil {
+				continue
+			}
+			destination := (&url.URL{Path: filepath.ToSlash(relative)}).EscapedPath()
+			splices = append(splices, splice{m[2], m[3], destination + suffix})
 			break
 		}
 	}

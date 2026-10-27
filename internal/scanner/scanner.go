@@ -19,16 +19,17 @@ import (
 	"knowledge-ba46-flow/internal/config"
 	"knowledge-ba46-flow/internal/database"
 	"knowledge-ba46-flow/internal/frontmatter"
-	"knowledge-ba46-flow/internal/links"
 	"knowledge-ba46-flow/internal/paths"
 	"knowledge-ba46-flow/internal/similarity"
 )
 
 // Result summarises a scan: Seen = markdown files found,
-// Changed = files that are new or whose sha256 differs from what SQLite has.
+// Changed = files that are new or whose sha256 differs from what SQLite has,
+// IDsAssigned = files that received a new document_id this scan.
 type Result struct {
-	Seen    int
-	Changed int
+	Seen        int
+	Changed     int
+	IDsAssigned int
 }
 
 // Scan walks c.RepositoryPath recursively, hashes every file matching
@@ -57,8 +58,13 @@ func Scan(ctx context.Context, c config.Config, db *database.DB) (Result, error)
 	if err != nil {
 		return Result{}, err
 	}
+	root, err := os.OpenRoot(c.RepositoryPath)
+	if err != nil {
+		return Result{}, err
+	}
+	defer root.Close()
 
-	w := repoWalker{ctx: ctx, c: c, db: db, seen: seen, excludes: excludes, exts: exts, exclude: patterns, paths: map[string]bool{}}
+	w := repoWalker{ctx: ctx, c: c, db: db, root: root, seen: seen, excludes: excludes, exts: exts, exclude: patterns, paths: map[string]bool{}}
 	err = filepath.WalkDir(c.RepositoryPath, w.visit)
 	if err != nil {
 		return w.result, err
@@ -78,6 +84,7 @@ type repoWalker struct {
 	ctx      context.Context
 	c        config.Config
 	db       *database.DB
+	root     *os.Root
 	seen     string
 	excludes map[string]bool
 	exts     map[string]bool
@@ -150,7 +157,18 @@ func (w *repoWalker) indexFile(path, rel string, e os.DirEntry) error {
 	if err != nil {
 		return err
 	}
-	hashes, sig, err := hashAndSignature(path)
+	local, err := paths.CleanRelative(rel)
+	if err != nil {
+		return err
+	}
+	raw, err := w.root.ReadFile(local)
+	if err != nil {
+		return err
+	}
+	// Identity assignment is a tool-owned, hash-neutral frontmatter write: it
+	// runs before hashing so the stored parse always reflects the file on disk.
+	content, idIssue := w.ensureDocumentID(rel, local, string(raw))
+	hashes, sig, err := hashAndSignatureContent(content)
 	if err != nil {
 		return err
 	}
@@ -159,9 +177,12 @@ func (w *repoWalker) indexFile(path, rel string, e os.DirEntry) error {
 	b, _ := json.Marshal(tags)
 	// Local frontmatter curation: parse + validate against the
 	// knowledge-base-mcp-server whitelist; issues are stored, not fatal.
-	fmJSON, fmIssues, err := inspect(path)
+	fmJSON, fmIssues, err := inspectContent(content)
 	if err != nil {
 		return err
+	}
+	if idIssue != "" {
+		fmIssues = appendIssue(fmIssues, idIssue)
 	}
 	// UpsertScanned reports whether the row is new or the hash changed; a change
 	// also resets status to 'pending' and supersedes stale suggestions.
@@ -176,7 +197,14 @@ func (w *repoWalker) indexFile(path, rel string, e os.DirEntry) error {
 		FrontmatterJSON:   fmJSON,
 		FrontmatterIssues: fmIssues,
 		Signature:         similarity.Marshal(sig),
-	}, w.seen)
+	}, w.seen, func(previous string) bool {
+		local, err := paths.CleanRelative(previous)
+		if err != nil {
+			return false
+		}
+		_, err = w.root.Lstat(local)
+		return os.IsNotExist(err)
+	})
 	if err != nil {
 		return err
 	}
@@ -184,54 +212,6 @@ func (w *repoWalker) indexFile(path, rel string, e os.DirEntry) error {
 	w.paths[rel] = true
 	if changed {
 		w.result.Changed++
-	}
-	return nil
-}
-
-// checkInternalLinks is the mandatory, always-local link check: for every
-// document it resolves markdown body link targets against the scanned
-// document set (markdown targets) or the repository filesystem (asset
-// targets) and stores the findings as a JSON array in link_issues. Nothing
-// here mutates files or needs a model.
-func (w *repoWalker) checkInternalLinks() error {
-	root, err := os.OpenRoot(w.c.RepositoryPath)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	for rel := range w.paths {
-		raw, err := os.ReadFile(filepath.Join(w.c.RepositoryPath, filepath.FromSlash(rel)))
-		if err != nil {
-			continue // race: file removed between walk and check — next scan catches it
-		}
-		_, body, err := frontmatter.Parse(string(raw))
-		if err != nil {
-			continue // parse failure is already a stored frontmatter issue
-		}
-		issues := []string{} // non-nil so the stored JSON is [] rather than null
-		for _, target := range links.InternalTargets(body) {
-			resolved := false
-			for _, candidate := range links.InternalCandidates(rel, target) {
-				if links.IsDocumentTarget(target) {
-					if w.paths[candidate] {
-						resolved = true
-						break
-					}
-				} else if local, err := paths.CleanRelative(candidate); err == nil {
-					if _, err := root.Stat(local); err == nil {
-						resolved = true
-						break
-					}
-				}
-			}
-			if !resolved {
-				issues = append(issues, "unresolved link target: "+target)
-			}
-		}
-		j, _ := json.Marshal(issues)
-		if err := w.db.SetLinkIssues(w.ctx, rel, string(j)); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -300,23 +280,13 @@ func MCPExcludedPath(relative string) bool {
 		strings.HasSuffix(strings.ToLower(base), ":zone.identifier")
 }
 
-// inspect reads the top of a file, parses its YAML frontmatter and validates it
-// against the frontmatter whitelist. Return values are JSON encodings for the
-// documents table: ” when the file has no frontmatter, '[]' when no issues.
-// A malformed block (unclosed fence, bad YAML) is reported as one issue.
-func inspect(path string) (string, string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", "", err
+// inspectContent is inspect on already-read content — indexFile has the file
+// in memory after the identity step, so re-reading is pointless.
+func inspectContent(raw string) (string, string, error) {
+	if len(raw) > 16384 {
+		raw = raw[:16384]
 	}
-	defer f.Close()
-	// Frontmatter must close within the first 8 KiB; 16 KiB covers every valid
-	// block with room to spare and bounds the read for large files.
-	b, err := io.ReadAll(io.LimitReader(f, 16384))
-	if err != nil {
-		return "", "", err
-	}
-	fields, _, perr := frontmatter.Parse(string(b))
+	fields, _, perr := frontmatter.Parse(raw)
 	if perr != nil {
 		issues, _ := json.Marshal([]string{perr.Error()})
 		return "", string(issues), nil
@@ -348,7 +318,11 @@ func hashAndSignature(path string) (canonicalHashes, []uint64, error) {
 	if err != nil {
 		return canonicalHashes{}, nil, err
 	}
-	fm, body := frontmatter.CanonicalParts(string(raw))
+	return hashAndSignatureContent(string(raw))
+}
+
+func hashAndSignatureContent(raw string) (canonicalHashes, []uint64, error) {
+	fm, body := frontmatter.CanonicalParts(raw)
 	content := fm + body
 	h := sha256.New()
 	sk := similarity.NewSketcher()
@@ -408,12 +382,16 @@ func ReadDocument(c config.Config, rel string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	b, err := io.ReadAll(io.LimitReader(f, c.MaxDocumentBytes+1))
+	maxBytes := c.MaxDocumentBytes
+	if maxBytes <= 0 {
+		maxBytes = 200000
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
 	if err != nil {
 		return "", err
 	}
-	if int64(len(b)) > c.MaxDocumentBytes {
-		return "", fmt.Errorf("document exceeds max_document_bytes (%d)", c.MaxDocumentBytes)
+	if int64(len(b)) > maxBytes {
+		return "", fmt.Errorf("document exceeds max_document_bytes (%d)", maxBytes)
 	}
 	return string(b), nil
 }

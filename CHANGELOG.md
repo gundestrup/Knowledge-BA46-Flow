@@ -9,8 +9,42 @@ tag is prepared.
 
 ## [Unreleased]
 
+### Fixed
+
+- Deterministic link repair no longer treats an unchanged live document as a
+  rename or rewrites valid relative links into incorrect repository paths.
+  Genuine repairs retain document-relative Markdown destinations and are
+  validated against rename evidence before review and again before apply.
+- Apply preserves the latest tool-owned `kbm` metadata instead of rejecting
+  otherwise valid proposals after link-check/freshness updates.
+- CLI/HTTP acceptance checks current sources, invalid expansion content and
+  already-accepted alternatives. Successful applies immediately supersede
+  other old source snapshots with an inspectable reason.
+- Apply outcomes persist batch IDs and attempt timestamps, expose per-document
+  errors, and report reindex-trigger failures separately instead of counting
+  the trigger touch as another applied suggestion.
+
 ### Added
 
+- Restrictive `write_scope` policy (`metadata-links` by default; explicit
+  `content`/`all` opt-ins) enforced during generation, acceptance and apply,
+  including legacy acceptances. Permission-blocked rows retain their decision.
+- Dry-run `reconcile` / `/api/reconcile` with current-preview confirmation,
+  atomic machine retirement reasons and durable `review_events`; valid,
+  conflicting, blocked and validation-unavailable proposals remain preserved.
+- Note-grouped review with change-type/origin facets and visible alternatives;
+  `withdraw` returns an acceptance to pending without losing its audit.
+- Stable `document_id` UUIDs, assigned in place by scans when a document lacks
+  one (hash-neutral like `kbm`, so pending proposals keep their lineage).
+  `identify` previews identity state and `identify --prepare` migrates
+  pre-assignment databases through reviewed proposals. Unique IDs support
+  observed rename-plus-edit tracking and versioned reverse references;
+  repairs recheck live UUIDs and duplicates fail closed. Proposals never
+  author or alter `document_id` — the live ID is preserved automatically.
+- Opt-in offline production snapshot replay through `KBM_REPLAY_CONFIG`:
+  read-only SQLite online backup (including WAL), private repository copies,
+  preserved mutation policies, separate pending/historical validation results,
+  and sandbox-only application of one valid expansion per document.
 - `--allow-remote` / `allow_remote: true` remote-consent flag: permits
   cloud/remote execution for whatever models a run resolves — configured task
   defaults or explicit overrides — on every lane WITHOUT switching to the

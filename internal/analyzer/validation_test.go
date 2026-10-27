@@ -49,7 +49,8 @@ func TestAnalysisMetadataPatchPreservesBodyAndProvenance(t *testing.T) {
 	if err != nil || body != originalBody || fields["custom"] != "keep" || fields["published"] == nil {
 		t.Fatalf("metadata=%v body=%q error=%v", fields, body, err)
 	}
-	if got, err := os.ReadFile(filepath.Join(c.RepositoryPath, "a.md")); err != nil || string(got) != original {
+	if got, err := os.ReadFile(filepath.Join(c.RepositoryPath, "a.md")); err != nil ||
+		frontmatter.Canonical(string(got)) != frontmatter.Canonical(original) {
 		t.Fatalf("analysis changed source: %q error=%v", got, err)
 	}
 }
