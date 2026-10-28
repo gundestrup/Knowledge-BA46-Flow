@@ -188,14 +188,23 @@ try {
   await page.eval(
     `[...document.querySelectorAll("button")].find(b=>/scan/i.test(b.textContent))?.click()`,
   );
-  await pause(6000);
+  await pause(1500);
+  step("scan-scroll");
+  await page.eval(
+    `window.scrollTo({ top: document.body.scrollHeight / 2, behavior: "smooth" })`,
+  );
+  await pause(5000);
+  await page.eval(
+    `window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" })`,
+  );
+  await pause(4000);
   step("report");
   await goto("/report");
   step("report-run");
   await page.eval(
     `[...document.querySelectorAll("button")].find(b=>b.querySelector(".icon-refresh-cw"))?.click()`,
   );
-  await pause(15000);
+  await pause(20000);
   await goto("/knowledge");
   await pause(1500);
 
