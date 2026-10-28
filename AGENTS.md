@@ -84,6 +84,13 @@ Read the document relevant to the change before editing:
   task fingerprints. Never let proposals edit `document_id` or `kbm`, and
   preserve the live ID/`kbm` block when applying proposals. Keep full source
   hash checks aligned between scanning and apply.
+- When a hash or fingerprint recipe changes — algorithm (sha256→sha512),
+  canonicalization, or fingerprint inputs — migrate by _recalculating stored
+  stamp values_ under the new recipe, never by re-running analysis. Verify
+  content identity with the old recipe before re-stamping; only genuine
+  content changes may re-enter the pending queue. See
+  `lessons-learned/kbm-fingerprint-recipe-changes-need-hash-migration.md` in
+  engineering-memory.
 - Preserve source-hash verification, `os.Root`-confined filesystem operations,
   traversal and symlink protections, no-overwrite behavior, and trash-based
   deletion. Do not replace these with unchecked `filepath.Join` writes.
