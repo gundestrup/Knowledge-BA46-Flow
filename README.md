@@ -148,18 +148,25 @@ remain pending and `apply` is never called.
 8. Lets the user accept or reject suggestions.
 9. Executes only accepted suggestions via `KBM-flow apply`.
 
-The landing page at `/` links to the knowledge workflow at `/knowledge` and
-the fleet report at `/report`. `KBM-flow report` refreshes local repository
-checks, remote GitHub/Forgejo/scanner results, and Ruby gem-fleet analysis from
-`repos.yml` and `policy.yml`, including Node/npm dependency drift and outdated
-versions. Remote checks default on when the report registry is configured; use
-`--no-remote` for a local-only refresh. The report never runs `kb-sync` or
-changes registered repositories. Optional
-`report.comparison_path` data remains a read-only Ruby-output reference for
-validation. The report table is sortable and can filter by open PRs, Semgrep
-findings, Sonar gate issues, or combinations of those signals. See
-`docs/REPORT.md` and the sample YAML files in
-`example-configs/`.
+## Repository report — a second, independent workspace
+
+`KBM-flow report` maintains a **read-only fleet report** of your registered
+repositories, configured via `repos.yml` + `policy.yml` and reached at
+`/report` (alongside `/knowledge` on the landing page). It collects:
+
+- **Local checks** — path presence, git drift vs a pinned commit, dirty
+  working trees, declared scanners
+- **Remote signals** — GitHub/Forgejo PRs and CI, Sonar gate, Codecov,
+  CodeFactor, Semgrep findings (needs tokens; `--no-remote` for local-only)
+- **Fleet drift** — Ruby gem and npm dependency versions vs policy and
+  latest releases, including Node version drift
+- **Policy comparison** — sortable table, filters for open PRs, Semgrep
+  findings, Sonar issues, and combinations
+
+It never runs `kb-sync` or mutates registered repositories — a pure
+observability dashboard whose jobs also surface in the shared
+"Background work" card. Report jobs stay separate from knowledge-review
+operations. See `docs/REPORT.md` and the samples in `example-configs/`.
 
 ## Safety
 
