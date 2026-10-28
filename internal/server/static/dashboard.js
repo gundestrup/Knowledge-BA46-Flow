@@ -53,6 +53,7 @@ window.knowledgeDashboard = () => ({
   documents: [],
   suggestions: [],
   jobs: [],
+  reportJobs: [],
   progressDays: [],
   proposals: {},
   proposalOpen: {},
@@ -857,8 +858,22 @@ window.knowledgeDashboard = () => ({
     }
   },
 
+  // runningJobs merges knowledge ops (/api/ops) and report jobs
+  // (/api/report/jobs) — the ops manager is single-slot, so a running
+  // report job blocks knowledge ops and must stay visible here.
   runningJobs() {
-    return (this.jobs || []).filter((j) => j.status === "running");
+    return [...(this.jobs || []), ...(this.reportJobs || [])].filter(
+      (j) => j.status === "running",
+    );
+  },
+
+  // jobPhase parses the inner N/M of a phase-qualified detail for the
+  // current-operation bar — see report.js for the same helper.
+  jobPhase(job) {
+    const m = (job?.detail || "").match(/\d+\/\d+/g);
+    if (!m || m.length < 2) return null;
+    const [a, b] = m[1].split("/").map(Number);
+    return b ? Math.round((a / b) * 100) : null;
   },
 
   jobPercent(job) {
@@ -868,9 +883,16 @@ window.knowledgeDashboard = () => ({
 
   async refreshJobs() {
     try {
-      this.jobs = await this.requestJSON("/api/ops");
+      const [jobs, reportJobs] = await Promise.all([
+        this.requestJSON("/api/ops"),
+        this.requestJSON("/api/report/jobs"),
+      ]);
+      this.jobs = jobs;
+      this.reportJobs = reportJobs;
       const wasBusy = this.busy;
-      this.busy = this.jobs.some((job) => job.status === "running");
+      this.busy = [...jobs, ...reportJobs].some(
+        (job) => job.status === "running",
+      );
       // While an op runs, keep documents/suggestions live so progress shows
       // up per document instead of only after the job finishes. The busy→
       // idle transition refreshes once more and clears the op notice —

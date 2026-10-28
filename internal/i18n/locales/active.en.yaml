@@ -45,6 +45,8 @@ ui.kb.estimate_docs_queued:
 ui.kb.estimate_empty: "Nothing queued for this selection."
 ui.kb.estimate_title: "Estimate how many documents this selection would queue — no models run, nothing changes"
 ui.kb.jobs_running: "Background work"
+ui.kb.job_total: "Total"
+ui.kb.job_current: "Current"
 ui.kb.jobs_idle: "Idle — no jobs running"
 ui.kb.nav_operations: "Operations"
 ui.kb.nav_graph: "Graph"

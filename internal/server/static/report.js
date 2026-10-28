@@ -31,10 +31,13 @@ window.repoReportDashboard = () => ({
     try {
       this.snapshot = await this.requestJSON("/api/report");
       this.jobs = await this.requestJSON("/api/report/jobs");
+      this.opsJobs = await this.requestJSON("/api/ops");
       this.reportHistory =
         (await this.requestJSON("/api/report/history")).points || [];
       const wasBusy = this.busy;
-      this.busy = this.jobs.some((job) => job.status === "running");
+      this.busy = [...this.jobs, ...(this.opsJobs || [])].some(
+        (job) => job.status === "running",
+      );
       if (wasBusy && !this.busy) this.notice = "";
       this.schedulePoll();
       this.renderHistoryChart();
@@ -80,8 +83,11 @@ window.repoReportDashboard = () => ({
     }
   },
 
+  // Knowledge ops block report runs too (single job slot) — show both.
   runningJobs() {
-    return (this.jobs || []).filter((j) => j.status === "running");
+    return [...(this.jobs || []), ...(this.opsJobs || [])].filter(
+      (j) => j.status === "running",
+    );
   },
 
   jobPercent(job) {
