@@ -1,0 +1,46 @@
+name: Release
+
+# Tag push builds cross-platform KBM-flow binaries and publishes them on
+# the matching GitHub release. Tag must satisfy make release-check (see
+# release-check.yml), which runs in parallel.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build release binaries
+        run: |
+          mkdir -p dist
+          version="${GITHUB_REF_NAME#v}"
+          for t in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64; do
+            GOOS="${t%-*}" GOARCH="${t#*-}" go build \
+              -trimpath -buildvcs=false \
+              -ldflags "-s -w -X knowledge-ba46-flow/internal/version.Version=${version}" \
+              -o "dist/KBM-flow-${t}" ./cmd/KBM-flow
+          done
+      - name: Publish release with binaries and changelog notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          notes=$(awk -v ver="${GITHUB_REF_NAME#v}" '
+            $0 ~ "^## \\[" ver "\\]" {flag=1; next}
+            /^## \[/ && flag {flag=0}
+            flag' CHANGELOG.md)
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/KBM-flow-* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" --title "${GITHUB_REF_NAME#v}" \
+              --notes "$notes" dist/KBM-flow-*
+          fi
