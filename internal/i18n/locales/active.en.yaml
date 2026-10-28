@@ -276,6 +276,8 @@ ui.report.remote_not_refreshed: "Remote checks were not refreshed on this run. A
 ui.report.remote_run: "Remote check run · {{.Time}}"
 ui.report.repo_count: "{{.Shown}} / {{.Total}} repos"
 ui.report.report_started: "{{.Scope}} report started{{.Target}}."
+ui.report.jobs_running: "Background work"
+ui.report.jobs_idle: "Idle — no jobs running"
 ui.report.repos_reported:
   one: "{{.Count}} repository reported"
   other: "{{.Count}} repositories reported"

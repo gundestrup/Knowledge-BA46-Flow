@@ -33,7 +33,9 @@ window.repoReportDashboard = () => ({
       this.jobs = await this.requestJSON("/api/report/jobs");
       this.reportHistory =
         (await this.requestJSON("/api/report/history")).points || [];
+      const wasBusy = this.busy;
       this.busy = this.jobs.some((job) => job.status === "running");
+      if (wasBusy && !this.busy) this.notice = "";
       this.schedulePoll();
       this.renderHistoryChart();
     } catch (error) {
@@ -76,6 +78,15 @@ window.repoReportDashboard = () => ({
     } catch (error) {
       this.error = error.message;
     }
+  },
+
+  runningJobs() {
+    return (this.jobs || []).filter((j) => j.status === "running");
+  },
+
+  jobPercent(job) {
+    const m = /(\d+)\/(\d+)/.exec(job?.detail || "");
+    return m ? Math.round((+m[1] / +m[2]) * 100) : null;
   },
 
   schedulePoll() {

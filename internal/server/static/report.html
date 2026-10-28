@@ -241,6 +241,43 @@
         </div>
       </section>
       <main class="kbm-main-section">
+        <section class="card mb-4">
+          <div class="card-content">
+            <div class="kbm-tile-row">
+              <span class="icon is-large kbm-icon-badge"
+                ><span
+                  class="kbm-icon icon-scan-search"
+                  aria-hidden="true"
+                ></span
+              ></span>
+              <div class="is-flex-grow-1">
+                <p
+                  class="stat-label"
+                  x-text="t('ui.report.jobs_running', 'Background work')"
+                ></p>
+                <p
+                  class="is-size-7 has-text-grey"
+                  x-show="!runningJobs().length"
+                  x-text="t('ui.report.jobs_idle', 'Idle — no jobs running')"
+                ></p>
+                <template x-for="job in runningJobs()" :key="job.id">
+                  <div class="mb-1">
+                    <p
+                      class="is-size-7"
+                      x-text="job.op + ': ' + (job.detail || job.status)"
+                    ></p>
+                    <progress
+                      class="progress is-small is-info mb-0"
+                      :value="jobPercent(job)"
+                      :max="100"
+                    ></progress>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <div class="container dashboard">
           <template x-if="error">
             <article class="message is-danger" role="alert">
