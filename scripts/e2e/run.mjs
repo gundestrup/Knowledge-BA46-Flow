@@ -44,7 +44,7 @@ async function freePort() {
 }
 
 function git(args, cwd) {
-  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+  const result = spawnSync("git", args, { cwd, encoding: "utf8" }); // NOSONAR — test runner resolves tools via PATH
   if (result.status !== 0) {
     throw new Error(`git ${args.join(" ")} failed: ${result.stderr.trim()}`);
   }
@@ -180,6 +180,7 @@ async function main() {
 
     console.log("fixture:", tmp);
     const build = spawnSync("go", ["build", "-o", binary, "./cmd/KBM-flow"], {
+      // NOSONAR — test runner resolves tools via PATH
       cwd: root,
       encoding: "utf8",
     });
@@ -192,6 +193,7 @@ async function main() {
       throw new Error(`scan failed: ${scan.stderr}${scan.stdout}`);
 
     const seed = spawnSync(
+      // NOSONAR — test runner resolves tools via PATH
       "go",
       ["run", "./scripts/e2e/seed", "-db", dbPath, "-repo", repoDir],
       {

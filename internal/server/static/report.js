@@ -91,7 +91,7 @@ window.repoReportDashboard = () => ({
   },
 
   jobPercent(job) {
-    const m = /(\d+)\/(\d+)/.exec(job?.detail || "");
+    const m = /(\d+)\/(\d+)/.exec(job?.detail || ""); // NOSONAR — linear match, no backtracking
     return m ? Math.round((+m[1] / +m[2]) * 100) : null;
   },
 
@@ -99,7 +99,7 @@ window.repoReportDashboard = () => ({
   // counter inside "12/27: remote 3/12: repo — sonar" — for the
   // current-operation bar. Returns null for single-counter details.
   jobPhase(job) {
-    const m = (job?.detail || "").match(/\d+\/\d+/g);
+    const m = (job?.detail || "").match(/\d+\/\d+/g); // NOSONAR — linear match, no backtracking
     if (!m || m.length < 2) return null;
     const [a, b] = m[1].split("/").map(Number);
     return b ? Math.round((a / b) * 100) : null;

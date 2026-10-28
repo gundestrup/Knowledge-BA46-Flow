@@ -10,6 +10,7 @@ export function evalComponent(fileName) {
   const context = { window: {} };
   for (const name of ["common.js", fileName]) {
     vm.runInNewContext(
+      // NOSONAR — intentional sandbox for evaluating vendored components
       readFileSync(
         new URL(`../internal/server/static/${name}`, import.meta.url),
         "utf8",

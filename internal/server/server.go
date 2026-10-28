@@ -75,7 +75,7 @@ func Listen(ctx context.Context, c config.Config, db *database.DB) error {
 		}
 		return err
 	}
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // NOSONAR — request ctx may be cancelled; shutdown needs its own
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
 }

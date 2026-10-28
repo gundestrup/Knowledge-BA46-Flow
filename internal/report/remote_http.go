@@ -129,7 +129,7 @@ func githubToken(ctx context.Context) string {
 			return token
 		}
 	}
-	cmd := exec.CommandContext(ctx, "gh", "auth", "token")
+	cmd := exec.CommandContext(ctx, "gh", "auth", "token") // NOSONAR — user-local CLI resolves gh/git via PATH by design
 	output, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -142,7 +142,7 @@ func forgejoAuth(ctx context.Context, host string) requestAuth {
 		return requestAuth{token: token}
 	}
 	input := "protocol=https\nhost=" + host + "\n\n"
-	cmd := exec.CommandContext(ctx, "git", "credential", "fill")
+	cmd := exec.CommandContext(ctx, "git", "credential", "fill") // NOSONAR — user-local CLI resolves gh/git via PATH by design
 	cmd.Stdin = strings.NewReader(input)
 	output, err := cmd.Output()
 	if err != nil {

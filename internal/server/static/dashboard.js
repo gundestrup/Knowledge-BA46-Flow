@@ -870,14 +870,14 @@ window.knowledgeDashboard = () => ({
   // jobPhase parses the inner N/M of a phase-qualified detail for the
   // current-operation bar — see report.js for the same helper.
   jobPhase(job) {
-    const m = (job?.detail || "").match(/\d+\/\d+/g);
+    const m = (job?.detail || "").match(/\d+\/\d+/g); // NOSONAR — linear match, no backtracking
     if (!m || m.length < 2) return null;
     const [a, b] = m[1].split("/").map(Number);
     return b ? Math.round((a / b) * 100) : null;
   },
 
   jobPercent(job) {
-    const m = /(\d+)\/(\d+)/.exec(job?.detail || "");
+    const m = /(\d+)\/(\d+)/.exec(job?.detail || ""); // NOSONAR — linear match, no backtracking
     return m ? Math.round((+m[1] / +m[2]) * 100) : null;
   },
 

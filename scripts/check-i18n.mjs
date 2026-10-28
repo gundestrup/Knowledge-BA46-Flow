@@ -26,7 +26,7 @@ const loadCatalog = (path) => {
   let cur = null;
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (!line.trim() || line.startsWith("#")) continue;
-    const top = /^(\S[^:]*):\s*(.*)$/.exec(line);
+    const top = /^(\S[^:]*):\s*(.*)$/.exec(line); // NOSONAR — linear match on short key lines
     if (top) {
       cur = top[1];
       keys.set(cur, top[2].trim() ? "str" : "pending");

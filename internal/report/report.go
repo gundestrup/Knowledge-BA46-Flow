@@ -515,7 +515,7 @@ func semgrepProblem(findings SemgrepFindings) string {
 
 func git(ctx context.Context, dir string, args ...string) (string, error) {
 	commandArgs := append([]string{"--no-optional-locks", "-C", dir}, args...)
-	cmd := exec.CommandContext(ctx, "git", commandArgs...)
+	cmd := exec.CommandContext(ctx, "git", commandArgs...) // NOSONAR — user-local CLI resolves git via PATH by design
 	cmd.Env = withoutOptionalGitLocks(os.Environ())
 	output, err := cmd.Output()
 	if err != nil {

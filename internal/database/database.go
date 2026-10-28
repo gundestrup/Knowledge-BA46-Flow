@@ -578,13 +578,13 @@ func (d *DB) rebuildTable(ctx context.Context, table, marker, create, cols, post
 		return err
 	}
 	// #nosec G202 -- cols is a compile-time constant from the callers
-	if _, err := tx.ExecContext(ctx, `INSERT INTO `+table+`_rebuild(`+cols+`) SELECT `+cols+` FROM `+table); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO `+table+`_rebuild(`+cols+`) SELECT `+cols+` FROM `+table); err != nil { // NOSONAR — table/cols are compile-time constants
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DROP TABLE `+table); err != nil {
+	if _, err := tx.ExecContext(ctx, `DROP TABLE `+table); err != nil { // NOSONAR — table is a compile-time constant
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `ALTER TABLE `+table+`_rebuild RENAME TO `+table); err != nil {
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE `+table+`_rebuild RENAME TO `+table); err != nil { // NOSONAR — table is a compile-time constant
 		return err
 	}
 	if post != "" {
@@ -1390,7 +1390,7 @@ func (d *DB) saveAnalysis(ctx context.Context, doc Document, shaCol, modelCol, s
 	if inputSHA == "" {
 		inputSHA = fallbackSemanticSHA(doc)
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE documents SET `+shaCol+`=?,`+modelCol+`=?,`+semanticCol+`=?,title=?,summary=?,tags_json=?,status='analyzed',last_error='',analyzed_at=?,seen_fm_sha256=?,seen_body_sha256=? WHERE path=?`, // #nosec G202 -- columns are compile-time constants, never user input
+	if _, err = tx.ExecContext(ctx, `UPDATE documents SET `+shaCol+`=?,`+modelCol+`=?,`+semanticCol+`=?,title=?,summary=?,tags_json=?,status='analyzed',last_error='',analyzed_at=?,seen_fm_sha256=?,seen_body_sha256=? WHERE path=?`, // #nosec G202 NOSONAR -- columns are compile-time constants, never user input
 		inputSHA, model, fallbackSemanticSHA(doc), title, summary, string(tj), time.Now().UTC().Format(time.RFC3339), doc.FmSHA256, doc.BodySHA256, doc.Path); err != nil {
 		return err
 	}
