@@ -20,3 +20,4 @@ config.local.json
 
 # OS noise
 .DS_Store
+/dist/
