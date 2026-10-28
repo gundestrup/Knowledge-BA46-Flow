@@ -229,3 +229,21 @@ a.report-scanner:hover,
   position: relative;
   height: 260px;
 }
+
+/* Text-inside-progress overlay — the native <progress> element cannot
+   render content, so a label is absolutely positioned over the bar. */
+.kbm-progress-wrap {
+  position: relative;
+}
+.kbm-progress-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  line-height: 1;
+  color: #fff;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}

@@ -261,16 +261,31 @@
                   x-text="t('ui.report.jobs_idle', 'Idle — no jobs running')"
                 ></p>
                 <template x-for="job in runningJobs()" :key="job.id">
-                  <div class="mb-1">
+                  <div class="mb-2">
                     <p
                       class="is-size-7"
                       x-text="job.op + ': ' + (job.detail || job.status)"
                     ></p>
-                    <progress
-                      class="progress is-small is-info mb-0"
-                      :value="jobPercent(job)"
-                      :max="100"
-                    ></progress>
+                    <p
+                      class="is-size-7 has-text-grey mb-0"
+                      x-text="t('ui.report.job_total', 'Total')"
+                    ></p>
+                    <div class="kbm-progress-wrap">
+                      <progress
+                        class="progress is-info mb-0"
+                        :value="jobPercent(job)"
+                        :max="100"
+                      ></progress>
+                      <span
+                        class="kbm-progress-text"
+                        x-text="jobPercent(job) !== null ? jobPercent(job) + '%' : job.status"
+                      ></span>
+                    </div>
+                    <p
+                      class="is-size-7 has-text-grey mb-0 mt-1"
+                      x-show="jobPhase(job) !== null"
+                      x-text="t('ui.report.job_current', 'Current')"
+                    ></p>
                     <progress
                       class="progress is-small is-link mb-0"
                       x-show="jobPhase(job) !== null"
