@@ -1,0 +1,11 @@
+# CodeFactor exclusions — aligned with .semgrepignore.
+# Vendored minified assets, test fixtures and runtime state are not
+# authored code: keep them out of style/duplication analysis.
+exclude:
+  - internal/server/static/vendor/**
+  - example-knowledge/**
+  - example-knowledge-real-test/**
+  - data/**
+  - node_modules/**
+  - coverage/**
+  - "**/*.min.js"
