@@ -41,6 +41,9 @@ func RunWithOptions(ctx context.Context, cfg config.ReportConfig, db *database.D
 			return Snapshot{}, fmt.Errorf("unknown repository %q", options.Repository)
 		}
 	}
+	if options.Progress != nil {
+		options.Progress("resolving policy channels")
+	}
 	resolved, pins := resolvePolicyVersions(ctx, newRemoteHTTP(), policy, previousPolicyPins(old), options.Remote, options.Force)
 	effective := policy
 	applyResolvedVersions(&effective, resolved)
@@ -62,6 +65,9 @@ func RunWithOptions(ctx context.Context, cfg config.ReportConfig, db *database.D
 
 	if err := refreshRemoteSnapshot(ctx, cfg, &snapshot, registry, oldRepos, effective, options); err != nil {
 		return Snapshot{}, err
+	}
+	if options.Progress != nil {
+		options.Progress("building fleet summary")
 	}
 	snapshot.Fleet = buildFleet(snapshot.Repos, effective, snapshot.GemLatest, time.Now())
 	snapshot.Fleet.NPM = buildNPMFleet(snapshot.Repos, effective, snapshot.NPMLatest, snapshot.NodeReleases)

@@ -6,6 +6,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"sync/atomic"
 
 	"golang.org/x/sync/errgroup"
 
@@ -33,6 +34,8 @@ func refreshRemoteData(
 
 	var group errgroup.Group
 	group.SetLimit(min(4, len(snapshot.Repos)))
+	var remoteDone atomic.Int64
+	total := len(snapshot.Repos)
 	for index := range snapshot.Repos {
 		if err := ctx.Err(); err != nil {
 			_ = group.Wait()
@@ -41,12 +44,18 @@ func refreshRemoteData(
 		repo := &snapshot.Repos[index]
 		group.Go(func() error {
 			refreshRemoteRepositoryForRepo(ctx, client, repo, registryDir, registry, oldRepos, token, options)
+			if options.Progress != nil {
+				options.Progress(fmt.Sprintf("remote %d/%d: %s", remoteDone.Add(1), total, repo.Name))
+			}
 			return nil
 		})
 	}
 	_ = group.Wait()
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if options.Progress != nil {
+		options.Progress("semgrep refresh")
 	}
 	refreshSemgrepData(ctx, client, snapshot, registry)
 	return ctx.Err()
