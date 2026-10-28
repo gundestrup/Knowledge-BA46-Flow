@@ -27,11 +27,11 @@
     "e2e": "node scripts/e2e/run.mjs"
   },
   "devDependencies": {
-    "@alpinejs/csp": "3.17.4",
+    "@alpinejs/csp": "3.17.5",
     "@biomejs/biome": "2.5.15",
     "@creativebulma/bulma-tooltip": "1.2.0",
     "bulma": "1.0.4",
-    "chart.js": "4.4.9",
+    "chart.js": "4.5.1",
     "flag-icons": "7.6.0",
     "prettier": "3.9.10"
   }

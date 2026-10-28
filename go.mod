@@ -8,10 +8,10 @@ require (
 	github.com/aquasecurity/go-version v0.0.1
 	github.com/nicksnyder/go-i18n/v2 v2.6.1
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.9
+	github.com/spf13/pflag v1.0.10
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/sync v0.24.0
-	golang.org/x/text v0.42.0
+	golang.org/x/text v0.43.0
 	modernc.org/sqlite v1.60.1
 	resty.dev/v3 v3.0.0-rc.4
 )
