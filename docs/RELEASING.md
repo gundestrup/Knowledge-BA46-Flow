@@ -36,9 +36,13 @@ release:
 5. Commit and push the release tree, then create and push the annotated `vX.Y.Z`
    tag on that commit.
 
-The `release-check` workflow rejects a tag unless its version matches `VERSION`
-and a dated changelog section exists. It validates releases; it does not
-publish a binary or image. Add GoReleaser or an image-publishing workflow only
+Two workflows run on `v*` tag pushes. `release-check` rejects a tag unless
+its version matches `VERSION` and a dated changelog section exists — it is
+the version-consistency gate. `release` cross-compiles the four
+darwin/linux amd64+arm64 binaries (same ldflags version stamp as `make
+build`), extracts the tag's changelog section for notes, and creates the
+GitHub release with binaries attached — or `--clobber`s onto an existing
+release on re-runs. Add GoReleaser or an image-publishing workflow only
 when you decide to distribute release artifacts.
 
 The initial `VERSION` is `0.1.0`; the repository currently has no release tags.
