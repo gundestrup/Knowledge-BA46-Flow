@@ -4,10 +4,10 @@ The web UI embeds these locally served assets; no browser CDN request is
 required:
 
 - Bulma v1.0.4, from https://github.com/jgthms/bulma
-- Alpine.js v3.17.4 (`@alpinejs/csp` build), from
+- Alpine.js v3.17.5 (`@alpinejs/csp` build), from
   https://github.com/alpinejs/alpine
 - Alpine.js bundles Vue `@vue/shared` and `@vue/reactivity` v3.5.41
-- Chart.js v4.4.9 (UMD build), from https://github.com/chartjs/Chart.js
+- Chart.js v4.5.1 (UMD build), from https://github.com/chartjs/Chart.js
 - flag-icons v7.6.0 (`gb.svg` and `dk.svg` language-picker flags), from
   https://github.com/lipis/flag-icons
 - bulma-tooltip v1.2.0 (`@creativebulma/bulma-tooltip` CSS-only extension),

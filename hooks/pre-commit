@@ -14,7 +14,7 @@ if [ -n "$go_files" ]; then
   go vet ./... || fail "go vet failed"
 fi
 
-ui_files=$(printf '%s\n' "$staged" | grep -E '\.(js|mjs|css|html|yaml|yml|json|md)$' | grep -v '^docs/USAGE.md$' || true)
+ui_files=$(printf '%s\n' "$staged" | grep -E '\.(js|mjs|css|html|yaml|yml|json|md)$' | grep -v '^docs/USAGE.md$' | grep -v '^internal/server/static/vendor/' || true)
 if [ -n "$ui_files" ]; then
   npx prettier --check $ui_files || fail "prettier --check failed"
 fi
@@ -22,7 +22,8 @@ fi
 # Semgrep on staged files only — needs network to semgrep.dev.
 # SEMGREP_SKIP=1 to bypass when offline; CI is the authoritative gate.
 if command -v semgrep >/dev/null && [ -z "$SEMGREP_SKIP" ]; then
-  semgrep scan --config p/golang --config p/security-audit --metrics=off \
+  scan_files=$(printf '%s\n' "$staged" | grep -v '^internal/server/static/vendor/' || true)
+  [ -n "$scan_files" ] && semgrep scan --config p/golang --config p/security-audit --metrics=off \
     --error --exclude-rule java.lang.security.audit.xss.jsf.autoescape-disabled.autoescape-disabled \
-    $staged || fail "semgrep findings on staged files"
+    $scan_files || fail "semgrep findings on staged files"
 fi

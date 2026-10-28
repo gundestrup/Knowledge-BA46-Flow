@@ -252,8 +252,8 @@ and the independent repository report is at `/report`. Both workspaces use
 the same local server and database, but report jobs and report data remain
 separate from knowledge-review operations.
 
-The dashboard embeds Bulma v1.0.4, the Alpine.js v3.17.4 CSP build
-(`@alpinejs/csp`), Chart.js v4.4.9 for progress charts,
+The dashboard embeds Bulma v1.0.4, the Alpine.js v3.17.5 CSP build
+(`@alpinejs/csp`), Chart.js v4.5.1 for progress charts,
 bulma-tooltip v1.2.0 for CSS-only tooltips, and
 flag-icons v7.6.0 (`gb`/`dk` flags) for the language picker — all local, for
 offline use — the CSP build evaluates directives without
