@@ -1,6 +1,6 @@
 module knowledge-ba46-flow
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/aquasecurity/go-gem-version v0.0.0-20201115065557-8eed6fe000ce

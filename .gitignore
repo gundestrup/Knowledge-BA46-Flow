@@ -13,7 +13,7 @@ knowledge/
 *.db-wal
 *.db-shm
 config.local.json
-node_modules/
+/node_modules/
 
 # Local test corpus copied from a real knowledge base — never commit
 /example-knowledge-real-test/
