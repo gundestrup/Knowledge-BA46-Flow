@@ -7,7 +7,7 @@ tag is prepared.
 <!-- markdownlint-disable MD024 -->
 <!-- Added/Changed/Security headings intentionally repeat for each changelog version. -->
 
-## [Unreleased]
+## [0.1.0] - 2026-10-28
 
 ### Added
 
