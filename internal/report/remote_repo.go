@@ -137,7 +137,13 @@ func refreshRemoteRepository(
 	old *Repository,
 	ghToken string,
 	unchanged bool,
+	progress func(string),
 ) {
+	emit := func(check string) {
+		if progress != nil {
+			progress(check)
+		}
+	}
 	address, hasAddress := splitRepoRemote(entry.URL)
 	githubSlug := ""
 	switch {
@@ -162,9 +168,11 @@ func refreshRemoteRepository(
 			repo.GitHub = carryGitHubStale(nil, previous)
 			repo.GitHub.AuthUnavailable = true
 		default:
+			emit("github")
 			repo.GitHub = carryGitHubStale(client.githubInfo(ctx, address.Owner, address.Name, ghToken), previous)
 			repo.GitHub.AuthUnavailable = false
 		}
+		emit("codefactor")
 		if grade := client.codeFactor(ctx, address.Owner, address.Name); grade != nil {
 			repo.CodeFactor = grade
 			repo.CodeFactorStale = false
@@ -176,6 +184,7 @@ func refreshRemoteRepository(
 		if repo.GitHub != nil && repo.GitHub.DefaultBranch != nil {
 			branch = *repo.GitHub.DefaultBranch
 		}
+		emit("codecov")
 		if coverage, err := client.codecovCoverage(ctx, address.Owner, address.Name, branch); err != nil {
 			if old != nil {
 				repo.Codecov = old.Codecov
@@ -209,6 +218,7 @@ func refreshRemoteRepository(
 				repo.Forgejo = carryForgejoStale(nil, previous)
 				repo.Forgejo.AuthUnavailable = true
 			default:
+				emit("forgejo")
 				repo.Forgejo = carryForgejoStale(client.forgejoInfo(ctx, base, address.Owner, address.Name, auth), previous)
 				repo.Forgejo.AuthUnavailable = false
 			}
@@ -222,6 +232,7 @@ func refreshRemoteRepository(
 		repo.CodecovStale = false
 	}
 
+	emit("sonar")
 	if sonar := client.sonarStatus(ctx, dir, githubSlug); sonar != nil {
 		repo.SonarCloud = stringPointer(sonar.Status)
 		repo.SonarFailures = append([]string{}, sonar.Failures...)

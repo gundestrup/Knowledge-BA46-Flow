@@ -170,7 +170,7 @@ func TestUnavailableGitHubDoesNotAbortReportAndKeepsStaleData(t *testing.T) {
 	refreshRemoteRepository(
 		context.Background(), client, &repo, t.TempDir(),
 		repositoryEntry{URL: "https://github.com/example/project.git"},
-		old, "mock-token", false,
+		old, "mock-token", false, nil,
 	)
 	if repo.GitHub == nil || repo.GitHub.OpenPRs == nil || *repo.GitHub.OpenPRs != 4 ||
 		!contains(repo.GitHub.StaleFields, "open_prs") {
@@ -427,7 +427,7 @@ func TestRefreshRemoteRepositoryForRepoHonoursSelectionFilter(t *testing.T) {
 	repo := Repository{Name: "skipped", CodeFactor: stringPointer("A"), CodeFactorStale: true}
 	registry := map[string]repositoryEntry{"skipped": {Path: "repo"}}
 	refreshRemoteRepositoryForRepo(t.Context(), client, &repo, t.TempDir(), registry, nil, "",
-		RunOptions{Repository: "other"})
+		RunOptions{Repository: "other"}, nil)
 	// A filtered repo is left completely untouched.
 	if repo.CodeFactor == nil || !repo.CodeFactorStale {
 		t.Fatalf("filtered repo should be untouched: %+v", repo)
@@ -448,7 +448,7 @@ func TestRefreshRemoteRepositoryForRepoClearsRemotelessEntries(t *testing.T) {
 	registry := map[string]repositoryEntry{"local-only": {Path: "repo"}}
 	// No remote URL: the default branch clears all remote-derived state, and
 	// sonar falls back to the previous snapshot's values (marked stale).
-	refreshRemoteRepositoryForRepo(t.Context(), client, &repo, t.TempDir(), registry, old, "", RunOptions{})
+	refreshRemoteRepositoryForRepo(t.Context(), client, &repo, t.TempDir(), registry, old, "", RunOptions{}, nil)
 	if repo.GitHub != nil || repo.Forgejo != nil || repo.CodeFactor != nil || repo.CodeFactorStale {
 		t.Fatalf("remoteless repo should have cleared remote state: %+v", repo)
 	}

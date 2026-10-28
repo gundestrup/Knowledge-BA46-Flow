@@ -42,8 +42,14 @@ func refreshRemoteData(
 			return err
 		}
 		repo := &snapshot.Repos[index]
+		pos := index + 1
+		checkProgress := func(check string) {
+			if options.Progress != nil {
+				options.Progress(fmt.Sprintf("remote %d/%d: %s — %s", pos, total, repo.Name, check))
+			}
+		}
 		group.Go(func() error {
-			refreshRemoteRepositoryForRepo(ctx, client, repo, registryDir, registry, oldRepos, token, options)
+			refreshRemoteRepositoryForRepo(ctx, client, repo, registryDir, registry, oldRepos, token, options, checkProgress)
 			if options.Progress != nil {
 				options.Progress(fmt.Sprintf("remote %d/%d: %s", remoteDone.Add(1), total, repo.Name))
 			}
@@ -73,6 +79,7 @@ func refreshRemoteRepositoryForRepo(
 	oldRepos map[string]*Repository,
 	token string,
 	options RunOptions,
+	progress func(string),
 ) {
 	if ctx.Err() != nil {
 		return
@@ -89,7 +96,7 @@ func refreshRemoteRepositoryForRepo(
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(registryDir, dir)
 	}
-	refreshRemoteRepository(ctx, client, repo, dir, entry, previous, token, unchanged)
+	refreshRemoteRepository(ctx, client, repo, dir, entry, previous, token, unchanged, progress)
 }
 
 // refreshSemgrepData refreshes Semgrep findings when a token is configured;
