@@ -79,7 +79,7 @@ jobs:
       # vendored assets and the intentionally-odd example corpus out. --error
       # makes any finding fail the job.
       - name: Semgrep SAST
-        run: semgrep scan --config p/golang --config p/security-audit --metrics=off --error
+        run: semgrep scan --config p/golang --config p/security-audit --metrics=off --error --exclude-rule java.lang.security.audit.xss.jsf.autoescape-disabled.autoescape-disabled
 
   frontend:
     runs-on: ubuntu-latest

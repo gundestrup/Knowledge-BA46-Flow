@@ -1655,7 +1655,7 @@ func TestOpenRejectsNewerSchemaVersion(t *testing.T) {
 	if err := raw.QueryRow(`PRAGMA user_version`).Scan(&current); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := raw.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion+1)); err != nil {
+	if _, err := raw.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion+1)); err != nil { // nosemgrep: go.lang.security.audit.sqli.gosql-sqli.gosql-sqli — PRAGMA takes no bind params; int interpolation
 		t.Fatal(err)
 	}
 	if err := raw.Close(); err != nil {

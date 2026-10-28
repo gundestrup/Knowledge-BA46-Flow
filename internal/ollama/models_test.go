@@ -145,7 +145,7 @@ func TestMetadataFailuresAndModelNames(t *testing.T) {
 		t.Run(tc.body, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tc.code)
-				w.Write([]byte(tc.body))
+				w.Write([]byte(tc.body)) // nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter — test fixture response
 			}))
 			defer srv.Close()
 			client := New(srv.URL, "", 2, 0, false, "")

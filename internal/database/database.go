@@ -1875,7 +1875,7 @@ func (d *DB) KnowledgeProgress(ctx context.Context) ([]KnowledgeProgressDay, err
 		{`SELECT substr(applied_at,1,10) AS day,COUNT(*) FROM suggestions WHERE applied_at IS NOT NULL AND applied_at<>'' GROUP BY day`,
 			func(p *KnowledgeProgressDay, n int) { p.Applied = n }},
 	}
-	days := map[string]*KnowledgeProgressDay{}
+	days := map[string]*KnowledgeProgressDay{} // nosemgrep: trailofbits.go.iterate-over-empty-map.iterate-over-empty-map — progressDayCounts fills it
 	for _, item := range series {
 		if err := d.progressDayCounts(ctx, item.query, days, item.set); err != nil {
 			return nil, err

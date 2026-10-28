@@ -642,7 +642,7 @@ func TestShippedYAMLExamplesCoverAllSchemaKeys(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		keys := map[string]bool{}
+		keys := map[string]bool{} // nosemgrep: trailofbits.go.iterate-over-empty-map.iterate-over-empty-map — yamlKeySet fills it
 		yamlKeySet(tc.schema, keys)
 		var missing []string
 		for key := range keys {
