@@ -190,21 +190,20 @@ try {
   );
   await pause(1500);
   step("scan-scroll");
-  await page.eval(
-    `window.scrollTo({ top: document.body.scrollHeight / 2, behavior: "smooth" })`,
-  );
-  await pause(5000);
-  await page.eval(
-    `window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" })`,
-  );
-  await pause(4000);
+  for (let i = 0; i < 12; i++) {
+    await page.eval(
+      `(() => { const el = document.querySelector("#suggestions"); const target = el ? el.offsetTop : document.body.scrollHeight; window.scrollTo(0, target * ${i + 1} / 12); })()`,
+    );
+    await pause(400);
+  }
+  await pause(6000);
   step("report");
   await goto("/report");
   step("report-run");
   await page.eval(
     `[...document.querySelectorAll("button")].find(b=>b.querySelector(".icon-refresh-cw"))?.click()`,
   );
-  await pause(20000);
+  await pause(25000);
   await goto("/knowledge");
   await pause(1500);
 
