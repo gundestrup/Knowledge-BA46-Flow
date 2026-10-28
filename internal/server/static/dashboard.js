@@ -869,11 +869,15 @@ window.knowledgeDashboard = () => ({
   async refreshJobs() {
     try {
       this.jobs = await this.requestJSON("/api/ops");
+      const wasBusy = this.busy;
       this.busy = this.jobs.some((job) => job.status === "running");
       // While an op runs, keep documents/suggestions live so progress shows
-      // up per document instead of only after the job finishes.
-      if (this.busy) {
+      // up per document instead of only after the job finishes. The busy→
+      // idle transition refreshes once more and clears the op notice —
+      // startOperation promises the page will refresh when it finishes.
+      if (this.busy || wasBusy) {
         await this.refreshData();
+        if (!this.busy) this.notice = "";
       }
     } catch (error) {
       // Once the server is stopping, poll failures are expected — don't

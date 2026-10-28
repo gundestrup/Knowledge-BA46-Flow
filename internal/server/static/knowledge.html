@@ -750,40 +750,43 @@
                   </div>
                 </div>
               </div>
-              <div class="column">
-                <div class="card kbm-tile">
-                  <div class="card-content">
-                    <div class="kbm-tile-row">
-                      <span class="icon is-large kbm-icon-badge"
-                        ><span
-                          class="kbm-icon icon-scan-search"
-                          aria-hidden="true"
-                        ></span
-                      ></span>
-                      <div class="is-flex-grow-1">
-                        <p
-                          class="stat-label"
-                          x-text="t('ui.kb.jobs_running', 'Background work')"
-                        ></p>
-                        <p
-                          class="is-size-7 has-text-grey"
-                          x-show="!runningJobs().length"
-                          x-text="t('ui.kb.jobs_idle', 'Idle — no jobs running')"
-                        ></p>
-                        <template x-for="job in runningJobs()" :key="job.id">
-                          <div class="mb-1">
-                            <p
-                              class="is-size-7"
-                              x-text="job.op + ': ' + (job.detail || job.status)"
-                            ></p>
-                            <progress
-                              class="progress is-small is-info mb-0"
-                              :value="jobPercent(job)"
-                              :max="100"
-                            ></progress>
-                          </div>
-                        </template>
-                      </div>
+            </div>
+          </div>
+
+          <div class="columns is-variable is-4 mb-2">
+            <div class="column">
+              <div class="card kbm-tile">
+                <div class="card-content">
+                  <div class="kbm-tile-row">
+                    <span class="icon is-large kbm-icon-badge"
+                      ><span
+                        class="kbm-icon icon-scan-search"
+                        aria-hidden="true"
+                      ></span
+                    ></span>
+                    <div class="is-flex-grow-1">
+                      <p
+                        class="stat-label"
+                        x-text="t('ui.kb.jobs_running', 'Background work')"
+                      ></p>
+                      <p
+                        class="is-size-7 has-text-grey"
+                        x-show="!runningJobs().length"
+                        x-text="t('ui.kb.jobs_idle', 'Idle — no jobs running')"
+                      ></p>
+                      <template x-for="job in runningJobs()" :key="job.id">
+                        <div class="mb-1">
+                          <p
+                            class="is-size-7"
+                            x-text="job.op + ': ' + (job.detail || job.status)"
+                          ></p>
+                          <progress
+                            class="progress is-small is-info mb-0"
+                            :value="jobPercent(job)"
+                            :max="100"
+                          ></progress>
+                        </div>
+                      </template>
                     </div>
                   </div>
                 </div>
