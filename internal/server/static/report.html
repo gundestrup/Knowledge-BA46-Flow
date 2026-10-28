@@ -271,6 +271,12 @@
                       :value="jobPercent(job)"
                       :max="100"
                     ></progress>
+                    <progress
+                      class="progress is-small is-link mb-0"
+                      x-show="jobPhase(job) !== null"
+                      :value="jobPhase(job)"
+                      :max="100"
+                    ></progress>
                   </div>
                 </template>
               </div>

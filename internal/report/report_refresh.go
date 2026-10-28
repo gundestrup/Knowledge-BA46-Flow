@@ -20,6 +20,7 @@ func refreshRemoteData(
 	snapshot *Snapshot,
 	oldRepos map[string]*Repository,
 	options RunOptions,
+	pp *phaseProgress,
 ) error {
 	if len(snapshot.Repos) == 0 {
 		return ctx.Err()
@@ -44,15 +45,11 @@ func refreshRemoteData(
 		repo := &snapshot.Repos[index]
 		pos := index + 1
 		checkProgress := func(check string) {
-			if options.Progress != nil {
-				options.Progress(fmt.Sprintf("remote %d/%d: %s — %s", pos, total, repo.Name, check))
-			}
+			pp.note(fmt.Sprintf("remote %d/%d: %s — %s", pos, total, repo.Name, check))
 		}
 		group.Go(func() error {
 			refreshRemoteRepositoryForRepo(ctx, client, repo, registryDir, registry, oldRepos, token, options, checkProgress)
-			if options.Progress != nil {
-				options.Progress(fmt.Sprintf("remote %d/%d: %s", remoteDone.Add(1), total, repo.Name))
-			}
+			pp.step(fmt.Sprintf("remote %d/%d: %s", remoteDone.Add(1), total, repo.Name))
 			return nil
 		})
 	}
@@ -60,9 +57,7 @@ func refreshRemoteData(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if options.Progress != nil {
-		options.Progress("semgrep refresh")
-	}
+	pp.step("semgrep refresh")
 	refreshSemgrepData(ctx, client, snapshot, registry)
 	return ctx.Err()
 }

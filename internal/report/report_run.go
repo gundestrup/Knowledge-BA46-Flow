@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"knowledge-ba46-flow/internal/config"
@@ -22,6 +23,47 @@ type RunOptions struct {
 	// Progress, when set, receives a short "repo i/N: name" status line as
 	// local checks walk the registry — the ops layer maps it to job detail.
 	Progress func(detail string)
+}
+
+// phaseProgress prefixes every detail line with a global k/T counter so the
+// UI can render an accumulated total bar plus the current phase's i/N.
+// step() counts one completed unit of work; note() narrates without
+// advancing (stage markers and per-check labels). Methods are nil-safe so
+// call sites need no guards.
+type phaseProgress struct {
+	done  atomic.Int64
+	total atomic.Int64
+	emit  func(string)
+}
+
+func newPhaseProgress(emit func(string), total int) *phaseProgress {
+	if emit == nil {
+		return nil
+	}
+	p := &phaseProgress{emit: emit}
+	p.total.Store(int64(total))
+	return p
+}
+
+func (p *phaseProgress) addTotal(n int) {
+	if p == nil {
+		return
+	}
+	p.total.Add(int64(n))
+}
+
+func (p *phaseProgress) step(detail string) {
+	if p == nil {
+		return
+	}
+	p.emit(fmt.Sprintf("%d/%d: %s", p.done.Add(1), p.total.Load(), detail))
+}
+
+func (p *phaseProgress) note(detail string) {
+	if p == nil {
+		return
+	}
+	p.emit(fmt.Sprintf("%d/%d: %s", p.done.Load(), p.total.Load(), detail))
 }
 
 // RunWithOptions refreshes the requested repository data, carries forward
@@ -41,13 +83,12 @@ func RunWithOptions(ctx context.Context, cfg config.ReportConfig, db *database.D
 			return Snapshot{}, fmt.Errorf("unknown repository %q", options.Repository)
 		}
 	}
-	if options.Progress != nil {
-		options.Progress("resolving policy channels")
-	}
+	pp := newPhaseProgress(options.Progress, len(registry)+3) // remote count is added once the merge fixes it
+	pp.step("resolving policy channels")
 	resolved, pins := resolvePolicyVersions(ctx, newRemoteHTTP(), policy, previousPolicyPins(old), options.Remote, options.Force)
 	effective := policy
 	applyResolvedVersions(&effective, resolved)
-	local, err := collect(ctx, cfg, resolved, options.Progress)
+	local, err := collect(ctx, cfg, resolved, pp.step)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -63,12 +104,11 @@ func RunWithOptions(ctx context.Context, cfg config.ReportConfig, db *database.D
 	snapshot.Repos = mergeRepositories(registry, localRepos, oldRepos, options.Repository)
 	prepareSnapshotRepos(snapshot.Repos, localRepos, oldRepos, referenceRepos, old, options)
 
-	if err := refreshRemoteSnapshot(ctx, cfg, &snapshot, registry, oldRepos, effective, options); err != nil {
+	pp.addTotal(len(snapshot.Repos))
+	if err := refreshRemoteSnapshot(ctx, cfg, &snapshot, registry, oldRepos, effective, options, pp); err != nil {
 		return Snapshot{}, err
 	}
-	if options.Progress != nil {
-		options.Progress("building fleet summary")
-	}
+	pp.step("building fleet summary")
 	snapshot.Fleet = buildFleet(snapshot.Repos, effective, snapshot.GemLatest, time.Now())
 	snapshot.Fleet.NPM = buildNPMFleet(snapshot.Repos, effective, snapshot.NPMLatest, snapshot.NodeReleases)
 	summarizeReport(&snapshot, registry, effective)
@@ -192,13 +232,15 @@ func refreshRemoteSnapshot(
 	oldRepos map[string]*Repository,
 	policy policyFile,
 	options RunOptions,
+	pp *phaseProgress,
 ) error {
 	if !options.Remote {
 		return nil
 	}
-	if err := refreshRemoteData(ctx, cfg, registry, snapshot, oldRepos, options); err != nil {
+	if err := refreshRemoteData(ctx, cfg, registry, snapshot, oldRepos, options, pp); err != nil {
 		return err
 	}
+	pp.note("gem/npm latest channels")
 	client := newRemoteHTTP()
 	snapshot.GemLatest = refreshGemLatest(ctx, client, fleetGemVersions(snapshot.Repos), snapshot.GemLatest, options.Force)
 	snapshot.NPMLatest = refreshNPMLatest(ctx, client, fleetNPMVersions(snapshot.Repos), snapshot.NPMLatest, options.Force)

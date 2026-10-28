@@ -89,6 +89,16 @@ window.repoReportDashboard = () => ({
     return m ? Math.round((+m[1] / +m[2]) * 100) : null;
   },
 
+  // jobPhase parses the second N/M in a detail line — the inner phase
+  // counter inside "12/27: remote 3/12: repo — sonar" — for the
+  // current-operation bar. Returns null for single-counter details.
+  jobPhase(job) {
+    const m = (job?.detail || "").match(/\d+\/\d+/g);
+    if (!m || m.length < 2) return null;
+    const [a, b] = m[1].split("/").map(Number);
+    return b ? Math.round((a / b) * 100) : null;
+  },
+
   schedulePoll() {
     clearTimeout(this.pollTimer);
     this.pollTimer = this.busy ? setTimeout(() => this.refresh(), 1500) : null;
