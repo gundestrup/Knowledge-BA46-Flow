@@ -125,6 +125,21 @@ try {
   if (scan.status !== 0)
     throw new Error(`scan failed: ${scan.stderr}${scan.stdout}`);
 
+  const seed = spawnSync(
+    "go",
+    [
+      "run",
+      "./scripts/e2e/seed",
+      "-db",
+      join(tmp, "state.db"),
+      "-repo",
+      repoDir,
+    ],
+    { cwd: root, encoding: "utf8" },
+  );
+  if (seed.status !== 0)
+    throw new Error(`seed failed: ${seed.stderr}${seed.stdout}`);
+
   server = spawn(binary, ["serve", "--config", configPath], {
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -204,6 +219,14 @@ try {
     `[...document.querySelectorAll("button")].find(b=>b.querySelector(".icon-refresh-cw"))?.click()`,
   );
   await pause(25000);
+  step("repos-scroll");
+  for (let i = 0; i < 10; i++) {
+    await page.eval(
+      `(() => { const secs = [...document.querySelectorAll("section.card")]; const el = secs.find((s) => s.querySelector(".report-controls")) || secs[secs.length - 1]; const target = el ? el.offsetTop : document.body.scrollHeight; window.scrollTo(0, target * ${i + 1} / 10); })()`,
+    );
+    await pause(400);
+  }
+  await pause(5000);
   await goto("/knowledge");
   await pause(1500);
 
