@@ -57,7 +57,8 @@ your-notes-repo/
   docs/, notes/, …        # Markdown shelves
 ```
 
-The MCP server either reads the corpus directly
+The [knowledge-base-mcp-server](https://github.com/jeanibarz/knowledge-base-mcp-server)
+either reads the corpus directly
 (`KNOWLEDGE_BASES_ROOT_DIR=<repo>` or a subdirectory) or through a
 **symbolic link** inside its knowledge-bases directory pointing at the
 shelf — both work; keep `repository_path` aimed at the same shelf.
