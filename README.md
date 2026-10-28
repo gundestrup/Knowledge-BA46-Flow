@@ -1,7 +1,9 @@
 # Knowledge-BA46-Flow
 
 [![CI][ci-badge]][ci-workflow]
-[![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![CodeFactor](https://www.codefactor.io/repository/github/gundestrup/knowledge-ba46-flow/badge)](https://www.codefactor.io/repository/github/gundestrup/knowledge-ba46-flow)
+[![codecov](https://codecov.io/gh/gundestrup/Knowledge-BA46-Flow/branch/main/graph/badge.svg)](https://app.codecov.io/gh/gundestrup/Knowledge-BA46-Flow)
+[![Go 1.27+](https://img.shields.io/badge/Go-1.27%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Version][version-badge]][changelog]
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/gundestrup/Knowledge-BA46-Flow)
