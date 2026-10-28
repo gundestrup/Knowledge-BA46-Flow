@@ -86,6 +86,22 @@ release-check:
 install-hooks:
 	git config core.hooksPath hooks
 
+# Full local quality gate — same checks CI runs plus an optional local
+# SonarCloud upload. Needs network (semgrep rules, govulncheck, sonarcloud).
+# Export SONAR_TOKEN (sonarcloud.io account token) to include sonar.
+quality: check frontend-check semgrep vuln-check coverage-ci sonar
+
+# SonarCloud upload via the local `sonar` CLI — reads
+# sonar-project.properties (key, org, host URL, coverage paths).
+# Skipped quietly without SONAR_TOKEN; CI stays the authoritative scan.
+sonar:
+	@if [ -z "$$SONAR_TOKEN" ]; then \
+		echo "SONAR_TOKEN not set — skipping SonarCloud upload"; \
+	else \
+		command -v sonar >/dev/null || { echo "sonar CLI not found — brew install sonar-scanner or sonarqube-cli"; exit 1; }; \
+		sonar -Dsonar.token="$$SONAR_TOKEN"; \
+	fi
+
 check: version-check fmt-check vet lint test-race build
 
 frontend-check:
