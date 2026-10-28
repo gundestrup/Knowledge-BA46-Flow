@@ -19,6 +19,9 @@ type RunOptions struct {
 	Remote     bool
 	Force      bool
 	Repository string
+	// Progress, when set, receives a short "repo i/N: name" status line as
+	// local checks walk the registry — the ops layer maps it to job detail.
+	Progress func(detail string)
 }
 
 // RunWithOptions refreshes the requested repository data, carries forward
@@ -41,7 +44,7 @@ func RunWithOptions(ctx context.Context, cfg config.ReportConfig, db *database.D
 	resolved, pins := resolvePolicyVersions(ctx, newRemoteHTTP(), policy, previousPolicyPins(old), options.Remote, options.Force)
 	effective := policy
 	applyResolvedVersions(&effective, resolved)
-	local, err := collect(ctx, cfg, resolved)
+	local, err := collect(ctx, cfg, resolved, options.Progress)
 	if err != nil {
 		return Snapshot{}, err
 	}

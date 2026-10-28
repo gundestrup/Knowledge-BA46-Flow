@@ -384,6 +384,11 @@ func (o *ops) execReport(j database.Job, options repositoryreport.RunOptions) {
 	stop := o.db.RunHeartbeat(ctx, j.ID)
 	defer stop()
 	logging.Debugf("report job #%d started", j.ID)
+	options.Progress = func(detail string) {
+		if uerr := o.db.UpdateJobDetail(ctx, j.ID, detail); uerr != nil {
+			logging.Infof("WARNING: could not update report job #%d progress: %v", j.ID, uerr)
+		}
+	}
 	snapshot, err := repositoryreport.RunWithOptions(ctx, o.c.Report, o.db, options)
 	detail, status, errText := "", "done", ""
 	if err != nil {

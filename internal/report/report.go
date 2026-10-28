@@ -121,12 +121,12 @@ type SyncInfo struct {
 // stay unresolved here — they match leniently rather than flagging
 // repositories; resolved values only exist inside RunWithOptions.
 func Collect(ctx context.Context, cfg config.ReportConfig) (Snapshot, error) {
-	return collect(ctx, cfg, nil)
+	return collect(ctx, cfg, nil, nil)
 }
 
 // collect is Collect with an optional resolved-versions overlay: RunWithOptions
 // resolves policy channels once and applies the effective values everywhere.
-func collect(ctx context.Context, cfg config.ReportConfig, resolved map[string]string) (Snapshot, error) {
+func collect(ctx context.Context, cfg config.ReportConfig, resolved map[string]string, progress func(string)) (Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
 	}
@@ -161,9 +161,12 @@ func collect(ctx context.Context, cfg config.ReportConfig, resolved map[string]s
 		Fleet:             emptyFleetSummary(),
 		Repos:             make([]Repository, 0, len(names)),
 	}
-	for _, name := range names {
+	for i, name := range names {
 		if err := ctx.Err(); err != nil {
 			return Snapshot{}, err
+		}
+		if progress != nil {
+			progress(fmt.Sprintf("repo %d/%d: %s", i+1, len(names), name))
 		}
 		repo := collectRepository(ctx, registryDir, name, registry[name], policy)
 		if err := ctx.Err(); err != nil {
