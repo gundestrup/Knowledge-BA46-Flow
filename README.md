@@ -13,8 +13,17 @@
 [version-badge]: https://img.shields.io/badge/version-0.1.0-blue.svg
 [changelog]: CHANGELOG.md
 
-A small Go MVP for maintaining a markdown-based knowledge repository. The
-command-line tool is called KBM-flow.
+KBM-flow is a Go CLI + local web dashboard with **two functions**:
+
+1. **Knowledge curator** for the
+   [knowledge-base-mcp-server](https://github.com/jeanibarz/knowledge-base-mcp-server):
+   scans Markdown notes, proposes LLM-assisted fixes (titles, tags, links,
+   stub expansion, freshness), and applies only human-reviewed changes.
+2. **Dev dashboard** for your registered repositories: GitHub/Forgejo PRs
+   and CI, Sonar/Semgrep/CodeFactor/Codecov signals, and gem/npm/Node
+   dependency drift — read-only.
+
+Details below; everything links to `docs/` for depth.
 
 > **ALPHA — NOT FOR PRODUCTION.** Local testing is still in progress. The
 > planned first release is `0.1.0`; no release tag or GHCR image has been
