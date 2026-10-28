@@ -654,6 +654,12 @@ async function main() {
       body: '"op":"scan"',
     });
     await page.waitFor(
+      `[...document.querySelectorAll('[role="status"][x-text="notice"]')].some(
+        (n) => n.textContent.includes("started"))`,
+      5000,
+      "op notice appears on start",
+    );
+    await page.waitFor(
       `[...document.querySelectorAll(".job-row")].some(
         (r) => r.textContent.includes("scan") && r.textContent.includes("done"))`,
       20000,
@@ -671,6 +677,18 @@ async function main() {
         `[...document.querySelectorAll(".job-row")].some(
           (r) => r.textContent.includes("scan") && r.textContent.includes("done"))`,
       ),
+    );
+    // Notice lifecycle: "started" appears on op start and is cleared on
+    // the busy→idle transition — guards the exact gap that left the
+    // flash message up forever.
+    await page.waitFor(
+      `(() => {
+        const n = document.querySelector(
+          '[role="status"][x-text="notice"]');
+        return !n || !n.textContent.trim();
+      })()`,
+      10000,
+      "op notice cleared when job finishes",
     );
 
     // "Link Check" — real link-check op; fixture docs have no
