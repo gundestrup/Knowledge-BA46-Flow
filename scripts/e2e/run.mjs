@@ -506,8 +506,8 @@ async function main() {
           (c) => c.offsetParent !== null).length`,
       )) === 1,
     );
-    const otherBtn = await page.eval(
-      `[...document.querySelectorAll(".kbm-help-btn")][1].click(); "ok"`,
+    await page.eval(
+      `[...document.querySelectorAll(".kbm-help-btn")][1].click()`,
     );
     await page.waitFor(
       `[...document.querySelectorAll(".kbm-help-card")].filter(

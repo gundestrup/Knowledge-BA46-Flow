@@ -530,7 +530,7 @@ window.knowledgeDashboard = () => ({
   },
 
   helpBlocks(id) {
-    return (this.usageFrags && this.usageFrags[id]) || [];
+    return this.usageFrags?.[id] || [];
   },
 
   async loadProgress() {
