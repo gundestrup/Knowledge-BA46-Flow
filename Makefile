@@ -83,6 +83,9 @@ release-check:
 	@test -n "$(RELEASE_TAG)" || (echo "usage: make release-check RELEASE_TAG=v$(APP_VERSION)" >&2; exit 1)
 	sh scripts/check-version.sh "$(RELEASE_TAG)"
 
+install-hooks:
+	git config core.hooksPath hooks
+
 check: version-check fmt-check vet lint test-race build
 
 frontend-check:

@@ -175,6 +175,12 @@ Additional conventions:
   mapping tables (`apiToCLI`, `cliJobCommands`) rather than weakening them.
 - Update `CHANGELOG.md` for material behavior changes and update the relevant
   user documentation in the same change.
+- Git hooks live in `hooks/`; run `make install-hooks` once per clone to
+  point `core.hooksPath` at them. `pre-commit` runs staged-scope gofmt/vet/
+  prettier/semgrep; `pre-push` runs the full `make check`, `frontend-check`,
+  `semgrep` and `vuln-check`. `SKIP_HOOKS=1` and `SEMGREP_SKIP=1` are the
+  documented escape hatches; SonarQube stays in CI plus SonarLint connected
+  mode — it is server-side and has no local hook role.
 
 ## Global knowledge
 

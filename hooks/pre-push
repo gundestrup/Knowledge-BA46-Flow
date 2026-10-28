@@ -1,0 +1,13 @@
+#!/bin/sh
+# Thorough push gate — same checks CI runs. Escape hatch: SKIP_HOOKS=1.
+[ "$SKIP_HOOKS" ] && exit 0
+
+set -e
+echo "pre-push: make check"
+make check
+echo "pre-push: make frontend-check"
+make frontend-check
+echo "pre-push: make semgrep (needs network)"
+make semgrep
+echo "pre-push: make vuln-check (needs network)"
+make vuln-check

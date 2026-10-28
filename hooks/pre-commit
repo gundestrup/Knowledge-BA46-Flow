@@ -1,0 +1,28 @@
+#!/bin/sh
+# Fast commit gate — staged-file scope. Escape hatch: SKIP_HOOKS=1.
+[ "$SKIP_HOOKS" ] && exit 0
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$staged" ] && exit 0
+
+fail() { echo "pre-commit: $1" >&2; exit 1; }
+
+go_files=$(printf '%s\n' "$staged" | grep '\.go$' || true)
+if [ -n "$go_files" ]; then
+  unformatted=$(gofmt -l $go_files)
+  [ -n "$unformatted" ] && fail "gofmt needed: $unformatted"
+  go vet ./... || fail "go vet failed"
+fi
+
+ui_files=$(printf '%s\n' "$staged" | grep -E '\.(js|mjs|css|html|yaml|yml|json|md)$' | grep -v '^docs/USAGE.md$' || true)
+if [ -n "$ui_files" ]; then
+  npx prettier --check $ui_files || fail "prettier --check failed"
+fi
+
+# Semgrep on staged files only — needs network to semgrep.dev.
+# SEMGREP_SKIP=1 to bypass when offline; CI is the authoritative gate.
+if command -v semgrep >/dev/null && [ -z "$SEMGREP_SKIP" ]; then
+  semgrep scan --config p/golang --config p/security-audit --metrics=off \
+    --error --exclude-rule java.lang.security.audit.xss.jsf.autoescape-disabled.autoescape-disabled \
+    $staged || fail "semgrep findings on staged files"
+fi
