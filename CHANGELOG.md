@@ -23,6 +23,18 @@ tag is prepared.
   uploads via the local CLI when `SONAR_TOKEN` is exported.
 - `make install-hooks` + committed `hooks/` git hooks: staged-scope
   `pre-commit` (gofmt, vet, prettier, semgrep) and CI-parity `pre-push`.
+- `.codefactor.yml` exclusions mirroring `.semgrepignore` scope — vendored
+  assets, fixture corpora, `data/`, `node_modules` and `coverage/` stay
+  out of style analysis.
+
+### Changed
+
+- `go` directive pinned to 1.27.2 (aligned with the CI/Docker golang
+  images) and `golang.org/x/net` to v0.60.0 — covers the fresh stdlib
+  advisories GO-2026-6809 (crypto/x509) and GO-2026-6617/6613/6612
+  (net/http) that govulncheck gates on.
+- `.node-version` / npm `engines` floor raised to 26.12.1 for
+  CVE-2026-111497; vendored `@alpinejs/csp` 3.17.5 and `chart.js` 4.5.1.
 
 ### Fixed
 
@@ -30,6 +42,12 @@ tag is prepared.
   cards splice out optimistically with a queue-scoped reconcile.
 - Op-started flash notices now clear on the busy→idle transition with
   a final refresh; report started-notices clear the same way.
+- `clientlog.js` fire-and-forget `fetch` gains `.catch` — no more
+  unhandled rejection when `/api/client-log` is unreachable.
+- SonarCloud project binding corrected to
+  `gundestrup_Knowledge-BA46-Flow` + org/host URL; static-dir exclusion
+  glob anchored (`**/internal/server/static/**`) so AutoScan and the CI
+  scan agree.
 
 - Restrictive `write_scope` policy (`metadata-links` by default; explicit
   `content`/`all` opt-ins) enforced during generation, acceptance and apply,
