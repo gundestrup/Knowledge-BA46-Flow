@@ -482,7 +482,7 @@ func TestRefreshSemgrepDataWithoutTokenMarksStale(t *testing.T) {
 
 func TestRefreshRemoteDataEmptySnapshot(t *testing.T) {
 	snapshot := &Snapshot{}
-	if err := refreshRemoteData(t.Context(), config.ReportConfig{}, nil, snapshot, nil, RunOptions{}); err != nil {
+	if err := refreshRemoteData(t.Context(), config.ReportConfig{}, nil, snapshot, nil, RunOptions{}, nil); err != nil {
 		t.Fatalf("empty snapshot should be a no-op: %v", err)
 	}
 }
