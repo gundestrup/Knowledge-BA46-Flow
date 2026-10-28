@@ -1,6 +1,6 @@
 # Knowledge-BA46-Flow
 
-<img src="docs/assets/logo.png" alt="Knowledge-BA46-Flow logo" width="400" align="center">
+![Logo](docs/assets/logo.png "Logo of Knowledge-BA46-Flow")
 
 [![CI][ci-badge]][ci-workflow]
 [![CodeFactor](https://www.codefactor.io/repository/github/gundestrup/knowledge-ba46-flow/badge)](https://www.codefactor.io/repository/github/gundestrup/knowledge-ba46-flow)
