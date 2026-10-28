@@ -418,6 +418,12 @@ body {
   transition: transform 0.2s ease;
 }
 
+.kbm-aside-logo {
+  width: 1.6rem;
+  height: 1.6rem;
+  object-fit: contain;
+}
+
 .kbm-aside-brand {
   display: flex;
   align-items: center;
