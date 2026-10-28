@@ -4,7 +4,7 @@ APP_VERSION := $(shell tr -d '\r\n' < VERSION)
 LDFLAGS := -s -w -X knowledge-ba46-flow/internal/version.Version=$(APP_VERSION)
 
 build: version-check
-	go build -trimpath -ldflags "$(LDFLAGS)" -o KBM-flow ./cmd/KBM-flow
+	go build -trimpath -buildvcs=false -ldflags "$(LDFLAGS)" -o KBM-flow ./cmd/KBM-flow
 
 test:
 	go test ./...
