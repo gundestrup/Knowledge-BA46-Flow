@@ -11,6 +11,26 @@ tag is prepared.
 
 ### Added
 
+- In-context help: `?` buttons on run options and "Revalidate queue" open
+  fragments of `internal/server/static/usage.md` (also reachable as
+  `docs/USAGE.md`) — one fragment at a time, rendered without `x-html`.
+- "Background work" cards on both pages show running jobs from either
+  lane (`/api/ops` + `/api/report/jobs`) with an accumulated-total bar
+  (global `k/T` counter) plus a current-phase bar, stage markers and
+  per-check labels (`remote 3/12: repo — sonar`).
+- `make quality` local gate (check + frontend-check + semgrep +
+  vuln-check + coverage-ci + sonar) and `make sonar` for SonarCloud
+  uploads via the local CLI when `SONAR_TOKEN` is exported.
+- `make install-hooks` + committed `hooks/` git hooks: staged-scope
+  `pre-commit` (gofmt, vet, prettier, semgrep) and CI-parity `pre-push`.
+
+### Fixed
+
+- Review decisions no longer re-fetch the documents payload and chart —
+  cards splice out optimistically with a queue-scoped reconcile.
+- Op-started flash notices now clear on the busy→idle transition with
+  a final refresh; report started-notices clear the same way.
+
 - Restrictive `write_scope` policy (`metadata-links` by default; explicit
   `content`/`all` opt-ins) enforced during generation, acceptance and apply,
   including legacy acceptances. Permission-blocked rows retain their decision.

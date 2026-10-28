@@ -511,3 +511,36 @@ CI also runs `npm audit --audit-level=high` against the locked frontend tools.
 After a reviewed npm dependency update, refresh the embedded files with
 `npm run assets:vendor`, update `THIRD-PARTY-NOTICES.md` if a version changed,
 and commit those changes with `package.json` and `package-lock.json`.
+
+## Quality gates and git hooks
+
+`make quality` runs the full local gate — `check`, `frontend-check`,
+`semgrep`, `vuln-check`, `coverage-ci`, and `sonar`. It needs network
+access (semgrep rulesets, the Go vuln database, sonarcloud.io). The
+`sonar` target uploads through the local `sonar` CLI when `SONAR_TOKEN`
+is exported and skips with a note otherwise; CI remains the
+authoritative scan. `sonar-project.properties` binds the
+`gundestrup_Knowledge-BA46-Flow` project, organization and cloud host.
+
+Git hooks live in `hooks/` and are activated once per clone with
+`make install-hooks` (sets `core.hooksPath`). `pre-commit` runs
+staged-scope gofmt, `go vet`, prettier and semgrep on staged files;
+`pre-push` runs `check`, `frontend-check`, `semgrep` and `vuln-check`.
+`SKIP_HOOKS=1` and `SEMGREP_SKIP=1` are the escape hatches.
+
+## In-app help and job progress
+
+The dashboard's `?` buttons open fragments of
+`internal/server/static/usage.md` — split at `### slug` headings into
+paragraph/list blocks rendered via `x-for`/`x-text` (no `x-html`, so no
+sanitization under the strict CSP). `docs/USAGE.md` symlinks to it —
+edit the static copy; `go:embed` cannot follow symlinks or read outside
+the package tree.
+
+Both pages show a "Background work" card merging `/api/ops` and
+`/api/report/jobs` — the ops manager is single-slot, so a job from
+either lane blocks the other and must be visible. Detail lines carry a
+global `k/T` prefix plus a phase `i/N` (`"12/27: remote 3/12: repo —
+sonar"`): the first bar accumulates total progress, the second tracks
+the current operation. `busy`→idle clears the started-notice and
+triggers one final refresh.
