@@ -23,18 +23,19 @@ const applyMarker = "Seeded e2e paragraph — apply marker."
 func main() {
 	dbPath := flag.String("db", "", "path to the fixture state.db")
 	repoPath := flag.String("repo", "", "knowledge repository root for reading document bodies")
+	rich := flag.Bool("rich", false, "seed extra suggestion variety for screencast demos")
 	flag.Parse()
 	if *dbPath == "" || *repoPath == "" {
-		fmt.Fprintln(os.Stderr, "usage: seed -db <state.db> -repo <repository root>")
+		fmt.Fprintln(os.Stderr, "usage: seed -db <state.db> -repo <repository root> [-rich]")
 		os.Exit(2)
 	}
-	if err := run(*dbPath, *repoPath); err != nil {
+	if err := run(*dbPath, *repoPath, *rich); err != nil {
 		fmt.Fprintf(os.Stderr, "seed: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(dbPath, repoPath string) error {
+func run(dbPath, repoPath string, rich bool) error {
 	ctx := context.Background()
 	db, err := database.Open(ctx, dbPath)
 	if err != nil {
@@ -89,6 +90,65 @@ func run(dbPath, repoPath string) error {
 				Confidence: 0.7,
 			}, nil
 		}},
+	}
+
+	// -rich extends the set for screencast demos: more cards across the
+	// action (expand/move/merge) and origin vocabularies so filters and
+	// status facets show real variety on camera. All entries stay pending —
+	// the tour script decides what to accept or reject.
+	if rich {
+		read := func(i int) func() (database.Suggestion, error) {
+			return func() (database.Suggestion, error) {
+				content, err := os.ReadFile(filepath.Join(repoPath, filepath.FromSlash(docs[i].Path))) // #nosec G304 -- e2e fixture path from CLI flags
+				if err != nil {
+					return database.Suggestion{}, err
+				}
+				return database.Suggestion{
+					Action:          "expand",
+					Reason:          "stub note needs a real body",
+					Confidence:      0.62,
+					ProposedContent: strings.TrimRight(string(content), "\n") + "\n\nExpanded body section drafted by analysis.\n",
+				}, nil
+			}
+		}
+		extra := []struct {
+			doc    database.Document
+			origin string
+			build  func() (database.Suggestion, error)
+		}{
+			{docs[3], "analysis", read(3)},
+			{docs[4], "enrich", func() (database.Suggestion, error) {
+				return database.Suggestion{
+					Action:     "merge",
+					TargetPath: docs[5].Path,
+					Reason:     "near-duplicate of a longer note — merge into the canonical one",
+					Confidence: 0.78,
+				}, nil
+			}},
+			{docs[6], "deterministic", func() (database.Suggestion, error) {
+				return database.Suggestion{
+					Action:     "move",
+					TargetPath: "guides/" + docs[6].Path,
+					Reason:     "guide-shaped note belongs under guides/",
+					Confidence: 0.55,
+				}, nil
+			}},
+			{docs[7], "analysis", func() (database.Suggestion, error) {
+				return database.Suggestion{
+					Action:     "move",
+					TargetPath: "archive/" + docs[7].Path,
+					Reason:     "incident report is closed — archive it",
+					Confidence: 0.44,
+				}, nil
+			}},
+			{docs[8], "enrich", read(8)},
+		}
+		for i, plan := range extra {
+			if i+3 >= len(docs) {
+				break
+			}
+			plans = append(plans, plan)
+		}
 	}
 
 	for _, plan := range plans {

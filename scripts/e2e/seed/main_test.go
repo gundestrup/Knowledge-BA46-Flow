@@ -34,7 +34,7 @@ func TestRunSeedsSuggestions(t *testing.T) {
 	}
 	db.Close()
 
-	if err := run(dbPath, repo); err != nil {
+	if err := run(dbPath, repo, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -80,7 +80,7 @@ func TestRunRejectsThinFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Close()
-	if err := run(dbPath, dir); err == nil || !strings.Contains(err.Error(), "at least 3") {
+	if err := run(dbPath, dir, false); err == nil || !strings.Contains(err.Error(), "at least 3") {
 		t.Fatalf("expected thin-fixture error, got %v", err)
 	}
 }
