@@ -70,6 +70,7 @@ func TestConfigFlagWorksBeforeAndAfterCommand(t *testing.T) {
 	if err := os.WriteFile(configPath, data, 0644); err != nil {
 		t.Fatal(err)
 	}
+	writeTestPrompts(t, filepath.Join(dir, "prompts"))
 
 	for _, args := range [][]string{
 		{"--config", configPath, "scan"},
@@ -159,6 +160,7 @@ func TestCommandsWithNoPendingWork(t *testing.T) {
 	if err := os.WriteFile(configPath, data, 0644); err != nil {
 		t.Fatal(err)
 	}
+	writeTestPrompts(t, filepath.Join(dir, "prompts"))
 
 	for _, name := range []string{"analyze", "run", "list", "review", "apply"} {
 		cmd := rootCmd()
@@ -198,6 +200,9 @@ func writeCLIConfig(t *testing.T, dir string, extra map[string]any) string {
 	for k, v := range extra {
 		values[k] = v
 	}
+	if promptDir, ok := values["prompt_directory"].(string); ok {
+		writeTestPrompts(t, promptDir)
+	}
 	data, err := json.Marshal(values)
 	if err != nil {
 		t.Fatal(err)
@@ -207,6 +212,25 @@ func writeCLIConfig(t *testing.T, dir string, extra map[string]any) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func writeTestPrompts(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"base.md":                      "BASE",
+		"knowledge-base-mcp-server.md": "MCP",
+		"analyze.md":                   "ANALYZE",
+		"enrich.md":                    "ENRICH",
+		"expand.md":                    "EXPAND",
+		"freshness.md":                 "FRESHNESS",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // seedDocument writes a markdown file and records it plus one pending

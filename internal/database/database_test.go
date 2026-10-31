@@ -1359,6 +1359,50 @@ func TestHeartbeatJobRefreshesOnlyRunningJobs(t *testing.T) {
 	}
 }
 
+func TestPendingFreshnessVerificationPromptIsOptInAndIncremental(t *testing.T) {
+	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	doc := Document{
+		Path: "a.md", SHA256: "source", SemanticSHA256: "semantic",
+		FreshnessInputSHA256: "freshness-input",
+		FreshnessWebVerify:   true, FreshnessVerifyModel: "verify-model",
+		FreshnessVerifyPromptSHA: "verify-v1",
+	}
+	if _, err := db.UpsertScanned(t.Context(), doc, "scan"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.StampTask(t.Context(), doc, "freshness", "freshness-model"); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := db.PendingTask(t.Context(), "freshness", "freshness-model", false); err != nil || len(pending) != 0 {
+		t.Fatalf("verify metadata should not affect ordinary freshness: %v %v", pending, err)
+	}
+	if pending, err := db.PendingTaskForRun(t.Context(), "freshness", "freshness-model", false,
+		TaskRunOptions{WebVerify: false, VerifyPromptSHA: "verify-v2"}); err != nil || len(pending) != 0 {
+		t.Fatalf("verifier prompt edit should not queue opt-out runs: %v %v", pending, err)
+	}
+	if pending, err := db.PendingTaskForRun(t.Context(), "freshness", "freshness-model", false,
+		TaskRunOptions{WebVerify: true, VerifyModel: "verify-model", VerifyPromptSHA: "verify-v1"}); err != nil || len(pending) != 0 {
+		t.Fatalf("unchanged verifier prompt was queued: %v %v", pending, err)
+	}
+	pending, err := db.PendingTaskForRun(t.Context(), "freshness", "freshness-model", false,
+		TaskRunOptions{WebVerify: true, VerifyModel: "verify-model", VerifyPromptSHA: "verify-v2"})
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("changed verifier prompt was not queued for opt-in run: %v %v", pending, err)
+	}
+	doc.FreshnessVerifyPromptSHA = "verify-v2"
+	if err := db.StampTask(t.Context(), doc, "freshness", "freshness-model"); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := db.PendingTaskForRun(t.Context(), "freshness", "freshness-model", false,
+		TaskRunOptions{WebVerify: true, VerifyModel: "verify-model", VerifyPromptSHA: "verify-v2"}); err != nil || len(pending) != 0 {
+		t.Fatalf("updated verifier prompt was not stamped: %v %v", pending, err)
+	}
+}
+
 func TestRunHeartbeatTicksUntilStopped(t *testing.T) {
 	ctx := context.Background()
 	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
@@ -1671,6 +1715,59 @@ func TestOpenRejectsNewerSchemaVersion(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "newer than this build") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestMigrationAddsFreshnessVerifyPromptStamp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "km.db")
+	db, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`ALTER TABLE documents DROP COLUMN freshness_verify_prompt_sha256`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`PRAGMA user_version=14`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var found bool
+	rows, err := db.Query(`PRAGMA table_info(documents)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, dataType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if name == "freshness_verify_prompt_sha256" {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("migration did not restore freshness_verify_prompt_sha256")
 	}
 }
 
@@ -2353,5 +2450,59 @@ func TestMigrationBackfillsSupersededDecidedAt(t *testing.T) {
 	}
 	if handled != 1 {
 		t.Fatalf("handled=%d — legacy superseded row should be backfilled", handled)
+	}
+}
+
+// TestUpsertScannedRestampsLineageUnderCurrentRecipe pins the fingerprint
+// recipe-migration rule: a stored input equal to both the lane stamp and the
+// scan's old-recipe recomputation is re-stamped under the new recipe —
+// content identity verified, no requeue. A stale stamp is never rescued.
+func TestUpsertScannedRestampsLineageUnderCurrentRecipe(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	scanned := Document{Path: "a.md", SHA256: "sha", SemanticSHA256: "sem",
+		AnalysisInputSHA256: "OLD-A", EnrichmentInputSHA256: "OLD-E", ExpandInputSHA256: "OLD-X"}
+	if _, err := db.UpsertScanned(ctx, scanned, "s1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE documents SET analyzed_sha256=analysis_input_sha256,
+external_sha256=analysis_input_sha256,enriched_sha256=enrichment_input_sha256,
+expand_sha256=expand_input_sha256`); err != nil {
+		t.Fatal(err)
+	}
+	scanned.Path = "b.md"
+	scanned.AnalysisInputSHA256 = "OLD-B"
+	if _, err := db.UpsertScanned(ctx, scanned, "s1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE documents SET analyzed_sha256='STALE' WHERE path='b.md'`); err != nil {
+		t.Fatal(err)
+	}
+	next := Document{Path: "a.md", SHA256: "sha", SemanticSHA256: "sem",
+		AnalysisInputSHA256: "NEW-A", EnrichmentInputSHA256: "NEW-E", ExpandInputSHA256: "NEW-X",
+		LegacyAnalysisInputSHA256: "OLD-A", LegacyEnrichmentInputSHA256: "OLD-E", LegacyExpandInputSHA256: "OLD-X"}
+	if _, err := db.UpsertScanned(ctx, next, "s2"); err != nil {
+		t.Fatal(err)
+	}
+	next.Path, next.LegacyAnalysisInputSHA256 = "b.md", "OLD-B"
+	if _, err := db.UpsertScanned(ctx, next, "s2"); err != nil {
+		t.Fatal(err)
+	}
+	var analyzed, external, enriched, expand, stale string
+	err = db.QueryRow(`SELECT analyzed_sha256,external_sha256,enriched_sha256,expand_sha256,
+(SELECT analyzed_sha256 FROM documents WHERE path='b.md') FROM documents WHERE path='a.md'`).
+		Scan(&analyzed, &external, &enriched, &expand, &stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analyzed != "NEW-A" || external != "NEW-A" || enriched != "NEW-E" || expand != "NEW-X" {
+		t.Fatalf("lineage not re-stamped: a=%q e=%q r=%q x=%q", analyzed, external, enriched, expand)
+	}
+	if stale != "STALE" {
+		t.Fatalf("stale lineage was rescued: %q", stale)
 	}
 }

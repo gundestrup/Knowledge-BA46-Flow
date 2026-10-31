@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 
 	"knowledge-ba46-flow/internal/frontmatter"
@@ -48,6 +49,23 @@ func ValidateMove(source, target string) error {
 // order and code spans/blocks must survive verbatim (apart from CRLF).
 func ValidateRewrite(original, proposed string) error {
 	return validateRewrite(original, proposed, nil)
+}
+
+// ValidateTagsUnchanged protects body-only proposal stages from silently
+// changing metadata when they return a complete document.
+func ValidateTagsUnchanged(original, proposed string) error {
+	before, _, err := frontmatter.Parse(original)
+	if err != nil {
+		return fmt.Errorf("original frontmatter: %w", err)
+	}
+	after, _, err := frontmatter.Parse(proposed)
+	if err != nil {
+		return fmt.Errorf("proposed frontmatter: %w", err)
+	}
+	if !slices.Equal(frontmatter.StringList(before, "tags"), frontmatter.StringList(after, "tags")) {
+		return fmt.Errorf("proposed content must preserve existing tags")
+	}
+	return nil
 }
 
 // ValidateLinkRepair allows only an unchanged body or the exact local repair

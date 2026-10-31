@@ -407,8 +407,9 @@ The tests cover:
 - local-first metadata derivation with and without a fast model, preservation of
   valid frontmatter, and retention/combination of deterministic proposals when
   full analysis succeeds or fails
-- taxonomy allowlist parsing, path-derived kind/subject tags, and rejection of
-  unlisted tags both during model validation and at apply time
+- taxonomy allowlist parsing, per-document prompt-scope tag validation,
+  scoped-rule fingerprint invalidation, and rejection of globally allowed but
+  off-scope tags during generation and apply
 - exact entity-match ranking from visible document names and explicit Markdown
   links; curated-catalog target resolution, evidence-dependent reanalysis,
   punctuation-bearing language names, and fenced/indented-code exclusion
@@ -448,10 +449,25 @@ The tests cover:
   cannot resolve; the class of bug Go tests and API tests cannot see
 - schema-v3-to-v4 preservation of populated documents, embeddings and pending
   suggestions, plus atomic stage-audit/pass writes and retained attempt history
+- schema-v14-to-v15 migration adds the independent freshness verifier prompt
+  stamp without invalidating existing base freshness lineage
 - strict source hashing versus semantic task fingerprints: full-source
   proposal checks remain strict, graph-only link edits do not requeue semantic
-  tasks, task prompt/policy changes do, and legacy current lineages migrate
-  without a blind corpus-wide analysis pass
+  tasks, task prompt/policy changes do, taxonomy edits invalidate only changed
+  document projections, and legacy lineages migrate only when the complete
+  old recipe is provable (unavailable prior taxonomy bytes never justify
+  blind restamping)
+- effect-scoped configuration inputs: changing `stub_max_body_lines` queues
+  only documents whose stub classification flips; changing a `STUB.md`
+  template queues only stubs that use it; verifier-prompt edits do not queue
+  ordinary freshness runs, and opted-in verification refreshes saved flags
+  without calling the base freshness model again; no-flag verifier changes
+  advance the verifier stamp without model/search calls
+- missing core prompts abort scanning before document fingerprints are
+  written; unavailable optional task prompts affect only their task input, and
+  `freshness-verify.md` is required only for `--web-verify`
+- freshness proposals preserve tags at both generation and apply, keeping
+  freshness fingerprints independent of taxonomy tag-validation changes
 - preflight scans on CLI/HTTP task entry points and a live-source guard that
   refuses to send bytes newer than the indexed source snapshot to a model
 - frontmatter rendering and proposal normalization: stable `document_id`/title/

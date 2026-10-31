@@ -225,6 +225,33 @@ func TestTaxonomyRejectsUnlistedTagsFromModelPatches(t *testing.T) {
 	}
 }
 
+func TestTaxonomyRejectsGloballyAllowedTagsOutsidePromptScope(t *testing.T) {
+	c, _ := setup(t)
+	writeTestTaxonomy(t, c.RepositoryPath)
+	vocabulary, err := taxonomy.Load(c.RepositoryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := database.Document{Path: "tools/x.md"}
+	patch := metadataPatch{Set: map[string]any{
+		"title": "Alpha",
+		"tags":  []string{"tool", "rails"},
+	}}
+	suggestion, rejected := patchSuggestion(doc, nil, patch, "# Alpha\n", nil, "analysis", vocabulary)
+	if suggestion == nil || !slices.ContainsFunc(rejected, func(reason string) bool {
+		return strings.Contains(reason, "rails") && strings.Contains(reason, "prompt scope")
+	}) {
+		t.Fatalf("off-scope tag was not rejected independently: suggestion=%+v rejected=%v", suggestion, rejected)
+	}
+	fields, _, err := frontmatter.Parse(suggestion.ProposedContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fields["title"] != "Alpha" || len(frontmatter.StringList(fields, "tags")) != 0 {
+		t.Fatalf("off-scope tag leaked into proposal: %+v", fields)
+	}
+}
+
 func TestLocalTaxonomyTagsReplaceUnapprovedModelTagsInCombinedPatch(t *testing.T) {
 	c, db := setup(t)
 	writeTestTaxonomy(t, c.RepositoryPath)

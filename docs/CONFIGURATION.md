@@ -103,9 +103,10 @@ and per-run choices never save defaults or download models. Model changes
 refresh incompatible embeddings automatically, without implicitly rerunning
 generation; see [model selection](MODELS.md).
 
-Changing `stub_max_body_lines` does not invalidate previously stamped task
-lineage; use the affected task's `--reanalyze-all` when previously skipped
-documents need reconsideration.
+Changing `stub_max_body_lines` invalidates only documents whose stub/non-stub
+classification changes; other documents keep their task lineage. A newly
+eligible stub is still skipped by generation until its classification changes
+back or its content is expanded.
 
 Use separate model identities for the two generation roles, not aliases of
 one model merely to force two passes. In `local-first` mode, existing valid

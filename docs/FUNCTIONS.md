@@ -21,7 +21,24 @@ privacy/lifecycle/custom metadata and visible prose, but excludes graph-only
 `related`/`contradicted_by` fields and relative Markdown link destinations.
 Changing a link label or surrounding prose still changes it. Each LLM task
 combines this semantic fingerprint with its static prompt/policy inputs; model
-lineage remains separate. Therefore link-only changes refresh the link index
+lineage remains separate. The taxonomy input is scoped per document: the
+fingerprint includes its prompt-visible tags, current-tag verdict, and
+validation-rule memberships for tags it may preserve or propose. Analysis and
+apply enforce the same path-specific tag scope, so an unrelated taxonomy
+addition no longer invalidates the whole corpus or changes which tags can be
+written. A malformed `taxonomy.yaml` fails closed with the whole-file digest.
+During a fingerprint-recipe rollout, old lineages migrate only when the full
+old input can be recomputed exactly. If the taxonomy changed before that
+rollout and its previous bytes are unavailable, the composite stamp is
+irreversible; unproven rows stay pending rather than being stamped current.
+The stub policy fingerprints each document's resolved stub/non-stub status,
+not the raw threshold, and expansion templates affect only actual stubs.
+Freshness has a base prompt/input plus a separate opt-in verification prompt
+stamp; changing the verifier prompt rechecks saved flags without rerunning the
+base freshness model. If the base input is already current, only saved flags
+are verified; freshness suggestions preserve existing tags and change body
+content only.
+Therefore link-only changes refresh the link index
 and stale any full-file review proposal, but do not re-run content analysis,
 freshness, expansion, or embeddings. Semantic content changes still re-run
 appropriate tasks and may re-evaluate linked/evidence-dependent notes.
@@ -169,7 +186,7 @@ model pickers run the same ops via
   plus its modification date and `kbm.link_check` result, then flags claims
   that may be dated (version pins, "latest release", ageing dates). A note
   that is fundamentally about a versioned technology also earns at most one
-  implicit tracking flag ("<tech> latest stable release and notable
+  implicit tracking flag ("`<tech>` latest stable release and notable
   changes") even when it pins no version, so `--web-verify` can judge whether
   a newer release changes what the note teaches. Without
   further options it cannot verify live facts — flags mean "check this",

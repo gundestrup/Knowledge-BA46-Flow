@@ -55,8 +55,14 @@ Read the document relevant to the change before editing:
   per-run `--model` override → `--external` on lane-capable tasks →
   `ollama_task_models.<task>` default → lane fallback. Each task stamps its
   own semantic input/prompt fingerprint and model lineage; keep pending
-  queries and stage provenance on the task's own columns. The full `sha256`
-  remains the source version for proposal/apply safety. In the batch
+  queries and stage provenance on the task's own columns. Taxonomy inputs are
+  per-document projections; generation-time and apply-time tag validation
+  must enforce the same prompt-visible tag scope and validation rules. Derived
+  policy outcomes (such as per-document stub classification) belong in the
+  fingerprint instead of raw global thresholds. Optional sub-stages have
+  separate inputs and stamps; changing a verifier-only prompt must not rerun
+  the base task. The full `sha256` remains the source version for proposal/apply
+  safety. In the batch
   `tasks --model` override, generation tasks share the selected model;
   embeddings use the independent `--embed-model` override, task embed default
   or `ollama_embed_model`. Vector/hash/model stamps are atomic; a model change
@@ -68,6 +74,9 @@ Read the document relevant to the change before editing:
   separate `--allow-cloud` for embeddings/enrichment.
 - `internal/proposal` shares content-preservation and metadata guards between
   analysis and apply. Keep these gates aligned; valid JSON is not edit validity.
+- Freshness suggestions are body-only and preserve existing tags. Keep
+  `freshness-verify.md` on its opt-in verifier lineage; changing it must not
+  invalidate the base freshness pass.
 - The repository report is separate from knowledge maintenance. It reads
   configured local YAML/Git inputs and does not run `kb-sync` or mutate the
   registered repositories.
@@ -90,7 +99,10 @@ Read the document relevant to the change before editing:
   content identity with the old recipe before re-stamping; only genuine
   content changes may re-enter the pending queue. See
   `lessons-learned/kbm-fingerprint-recipe-changes-need-hash-migration.md` in
-  engineering-memory.
+  engineering-memory. Composite fingerprints are not reversible: if an old
+  policy input (for example, a prior `taxonomy.yaml`) is no longer available,
+  do not infer that a document's scope was unchanged. Keep unprovable rows
+  pending unless an explicit migration has the archived old policy bytes.
 - Preserve source-hash verification, `os.Root`-confined filesystem operations,
   traversal and symlink protections, no-overwrite behavior, and trash-based
   deletion. Do not replace these with unchecked `filepath.Join` writes.

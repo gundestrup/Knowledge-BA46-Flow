@@ -146,6 +146,21 @@ func TestMergeRequiresCompleteTargetAndRetainsBothSources(t *testing.T) {
 	}
 }
 
+func TestFreshnessSuggestionCannotChangeTags(t *testing.T) {
+	c, _ := setup(t)
+	p := &pipeline{c: c, knownDocs: []database.Document{{Path: "a.md"}}}
+	original := "---\ntags: [tool]\n---\n# Note\n\nA dated claim.\n"
+	suggestion := database.Suggestion{
+		Action: "expand", DocumentPath: "a.md", Reason: "Add a dated correction.",
+		Origin:          "freshness",
+		ProposedContent: "---\ntags: [tool, testing]\n---\n# Note\n\nA dated claim.\n\nAs of 2026, the correction.\n",
+	}
+	if err := p.validateSuggestion(suggestion, original, nil, false); err == nil ||
+		!strings.Contains(err.Error(), "preserve existing tags") {
+		t.Fatalf("freshness accepted a tag change: %v", err)
+	}
+}
+
 func TestEnrichmentSchemaHasOnlyTitleAndTagsPatchFields(t *testing.T) {
 	var schema struct {
 		Properties map[string]struct {

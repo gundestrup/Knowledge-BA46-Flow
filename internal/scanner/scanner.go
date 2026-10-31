@@ -24,6 +24,7 @@ import (
 	"knowledge-ba46-flow/internal/paths"
 	"knowledge-ba46-flow/internal/prompts"
 	"knowledge-ba46-flow/internal/similarity"
+	"knowledge-ba46-flow/internal/taxonomy"
 )
 
 // Result summarises a scan: Seen = markdown files found,
@@ -71,14 +72,30 @@ func Scan(ctx context.Context, c config.Config, db *database.DB) (Result, error)
 	if err != nil {
 		return Result{}, err
 	}
-	taxonomySHA, err := taxonomyFingerprint(root)
+	taxonomyBytes, taxonomyExists, err := taxonomy.ReadFromRoot(root)
 	if err != nil {
 		return Result{}, err
 	}
+	taxonomySHA := ""
+	var vocabulary *taxonomy.Vocabulary
+	if taxonomyExists {
+		taxonomySHA = fmt.Sprintf("%x", sha256.Sum256(taxonomyBytes))
+		vocabulary, err = taxonomy.Parse(taxonomyBytes)
+		if err != nil {
+			// A malformed taxonomy cannot provide a safe scope projection.
+			// Keep the whole-file digest so every affected task remains stale.
+			vocabulary = nil
+		}
+	}
+	// A parsed vocabulary lets each document fingerprint only the taxonomy
+	// slice it can actually see (ScopeDigest), so unrelated vocabulary edits
+	// no longer invalidate the whole corpus. A malformed file fails closed:
+	// every document falls back to the whole-file digest and conservatively
+	// requeues.
 	w := repoWalker{
 		ctx: ctx, c: c, db: db, root: root, seen: seen,
 		excludes: excludes, exts: exts, exclude: patterns, paths: map[string]bool{},
-		promptInputs: taskPrompts, taxonomySHA: taxonomySHA,
+		promptInputs: taskPrompts, taxonomySHA: taxonomySHA, vocabulary: vocabulary,
 	}
 	err = filepath.WalkDir(c.RepositoryPath, w.visit)
 	if err != nil {
@@ -108,18 +125,32 @@ type repoWalker struct {
 	paths        map[string]bool // every document path indexed this run
 	promptInputs taskPromptInputs
 	taxonomySHA  string
+	vocabulary   *taxonomy.Vocabulary
+}
+
+// scopeDigest returns the per-document taxonomy fingerprint slice. Without a
+// usable vocabulary it is the whole-file digest — empty for an absent file
+// (matching the legacy recipe) and the file hash for a malformed one
+// (fail-closed broad invalidation).
+func (w *repoWalker) scopeDigest(rel string, currentTags []string) string {
+	if w.vocabulary == nil {
+		return w.taxonomySHA
+	}
+	return w.vocabulary.ScopeDigest(rel, currentTags)
 }
 
 type taskPromptInputs struct {
-	analysis  string
-	enrich    string
-	expand    string
-	freshness string
+	analysis             string
+	enrich               string
+	expand               string
+	freshness            string
+	freshnessVerify      string
+	freshnessVerifyKnown bool
 }
 
 func scanPromptInputs(c config.Config) (taskPromptInputs, error) {
 	if c.PromptDirectory == "" {
-		return taskPromptInputs{}, nil
+		return taskPromptInputs{freshnessVerifyKnown: true}, nil
 	}
 	server := c.MCPServer
 	if server == "" {
@@ -130,26 +161,37 @@ func scanPromptInputs(c config.Config) (taskPromptInputs, error) {
 	}
 	var result taskPromptInputs
 	var err error
-	result.analysis, _ = fingerprint("analyze.md")
-	result.enrich, _ = fingerprint("enrich.md")
-	result.expand, _ = fingerprint("expand.md")
-	result.freshness, _ = fingerprint("freshness.md")
-	verify, err := fingerprint("freshness-verify.md")
-	if err == nil {
-		result.freshness = hashInputs(result.freshness, verify)
+	if result.analysis, err = fingerprint("analyze.md"); err != nil {
+		return taskPromptInputs{}, err
+	}
+	optional := func(task string) (string, error) {
+		input, err := fingerprint(task)
+		if err != nil {
+			return hashInputs("unavailable-optional-prompt", task), nil
+		}
+		return input, err
+	}
+	if result.enrich, err = optional("enrich.md"); err != nil {
+		return taskPromptInputs{}, err
+	}
+	if result.expand, err = optional("expand.md"); err != nil {
+		return taskPromptInputs{}, err
+	}
+	if result.freshness, err = optional("freshness.md"); err != nil {
+		return taskPromptInputs{}, err
+	}
+	// Verification is an opt-in second pass. Keep its prompt out of the base
+	// freshness input; RunTask fingerprints and queues that pass only when
+	// --web-verify is selected. Absence is supported; other read errors fail.
+	result.freshnessVerify, err = fingerprint("freshness-verify.md")
+	switch {
+	case err == nil:
+		result.freshnessVerifyKnown = true
+	case errors.Is(err, fs.ErrNotExist):
+		// The prior recipe omitted an absent opt-in verifier prompt.
+		result.freshnessVerifyKnown = true
 	}
 	return result, nil
-}
-
-func taxonomyFingerprint(root *os.Root) (string, error) {
-	content, err := root.ReadFile("taxonomy.yaml")
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%x", sha256.Sum256(content)), nil
 }
 
 func hashInputs(inputs ...string) string {
@@ -265,9 +307,41 @@ func (w *repoWalker) indexFile(path, rel string, e os.DirEntry) error {
 	if err != nil {
 		return err
 	}
-	templateSHA, err := w.expandTemplateHash(rel)
+	fields, body, frontmatterErr := frontmatter.Parse(content)
+	stubState := "stub=unparseable"
+	var currentTags []string
+	var analysisTaxonomySHA, enrichmentTaxonomySHA, expandTaxonomySHA string
+	private := false
+	if frontmatterErr == nil {
+		private = frontmatter.NoLLMContext(fields)
+		isStub := frontmatter.IsStub(fields, body, w.c.StubLineLimit())
+		if private {
+			stubState = "generation=private"
+		} else {
+			stubState = fmt.Sprintf("stub=%t", isStub)
+		}
+		if w.vocabulary != nil {
+			currentTags = frontmatter.StringList(fields, "tags")
+		}
+		if !private {
+			scopeSHA := w.scopeDigest(rel, currentTags)
+			if isStub {
+				expandTaxonomySHA = scopeSHA
+			} else {
+				analysisTaxonomySHA = scopeSHA
+				enrichmentTaxonomySHA = scopeSHA
+			}
+		}
+	}
+	// Preserve the old recipe for safe lineage migration. The current recipe
+	// only depends on templates for actual stubs.
+	legacyTemplateSHA, err := w.expandTemplateHash(rel)
 	if err != nil {
 		return err
+	}
+	templateSHA := ""
+	if stubState == "stub=true" && !private {
+		templateSHA = legacyTemplateSHA
 	}
 	// Path-derived tags, e.g. frameworks/bulma/x.md -> ["frameworks","bulma","x"].
 	tags := pathTags(rel)
@@ -281,6 +355,15 @@ func (w *repoWalker) indexFile(path, rel string, e os.DirEntry) error {
 	if idIssue != "" {
 		fmIssues = appendIssue(fmIssues, idIssue)
 	}
+	legacyStubLines := fmt.Sprintf("stub_max_body_lines=%d", w.c.StubLineLimit())
+	legacyFreshnessPrompt := w.promptInputs.freshness
+	if w.promptInputs.freshnessVerify != "" {
+		legacyFreshnessPrompt = hashInputs(legacyFreshnessPrompt, w.promptInputs.freshnessVerify)
+	}
+	legacyFreshnessInput := ""
+	if w.promptInputs.freshnessVerifyKnown {
+		legacyFreshnessInput = hashInputs(hashes.semantic, legacyFreshnessPrompt, legacyStubLines)
+	}
 	// UpsertScanned reports any strict source change. It requeues tasks only
 	// when the semantic input changed, while stale full-file suggestions are
 	// superseded for every strict source change.
@@ -293,19 +376,27 @@ func (w *repoWalker) indexFile(path, rel string, e os.DirEntry) error {
 		SemanticFrontmatterSHA: hashes.semanticFrontmatter,
 		SemanticBodySHA256:     hashes.semanticBody,
 		AnalysisInputSHA256: hashInputs(
-			hashes.semantic, w.promptInputs.analysis, w.taxonomySHA,
-			"write_scope="+w.c.EffectiveWriteScope(),
-			fmt.Sprintf("stub_max_body_lines=%d", w.c.StubLineLimit())),
+			hashes.semantic, w.promptInputs.analysis, analysisTaxonomySHA,
+			"write_scope="+w.c.EffectiveWriteScope(), stubState),
 		EnrichmentInputSHA256: hashInputs(
-			hashes.semantic, w.promptInputs.enrich, w.taxonomySHA,
-			"enrichment_mode="+string(w.c.EnrichmentMode),
-			fmt.Sprintf("stub_max_body_lines=%d", w.c.StubLineLimit())),
+			hashes.semantic, w.promptInputs.enrich, enrichmentTaxonomySHA,
+			"enrichment_mode="+string(w.c.EnrichmentMode), stubState),
 		ExpandInputSHA256: hashInputs(
-			hashes.semantic, w.promptInputs.expand, templateSHA, w.taxonomySHA,
-			fmt.Sprintf("stub_max_body_lines=%d", w.c.StubLineLimit())),
+			hashes.semantic, w.promptInputs.expand, templateSHA, expandTaxonomySHA, stubState),
+		// Legacy fingerprints recompute the previous whole-file recipe so
+		// UpsertScanned can re-stamp lineages proven current under it.
+		LegacyAnalysisInputSHA256: hashInputs(
+			hashes.semantic, w.promptInputs.analysis, w.taxonomySHA,
+			"write_scope="+w.c.EffectiveWriteScope(), legacyStubLines),
+		LegacyEnrichmentInputSHA256: hashInputs(
+			hashes.semantic, w.promptInputs.enrich, w.taxonomySHA,
+			"enrichment_mode="+string(w.c.EnrichmentMode), legacyStubLines),
+		LegacyExpandInputSHA256: hashInputs(
+			hashes.semantic, w.promptInputs.expand, legacyTemplateSHA, w.taxonomySHA, legacyStubLines),
+		LegacyFreshnessInputSHA256: legacyFreshnessInput,
 		FreshnessInputSHA256: hashInputs(
 			hashes.semantic, w.promptInputs.freshness,
-			fmt.Sprintf("stub_max_body_lines=%d", w.c.StubLineLimit())),
+			stubState),
 		Size:              info.Size(),
 		ModifiedUnix:      info.ModTime().Unix(),
 		TagsJSON:          string(b),

@@ -61,8 +61,16 @@ type Document struct {
 	EnrichmentInputSHA256  string `json:"enrichment_input_sha256"`
 	ExpandInputSHA256      string `json:"expand_input_sha256"`
 	FreshnessInputSHA256   string `json:"freshness_input_sha256"`
-	FreshnessWebVerify     bool   `json:"freshness_web_verify"`
-	FreshnessVerifyModel   string `json:"freshness_verify_model"`
+	// Legacy*InputSHA256 carry the same fingerprints recomputed under the
+	// previous recipe. UpsertScanned uses them to re-stamp lineages proven
+	// current under the old recipe instead of requeueing them.
+	LegacyAnalysisInputSHA256   string `json:"-"`
+	LegacyEnrichmentInputSHA256 string `json:"-"`
+	LegacyExpandInputSHA256     string `json:"-"`
+	LegacyFreshnessInputSHA256  string `json:"-"`
+	FreshnessWebVerify          bool   `json:"freshness_web_verify"`
+	FreshnessVerifyModel        string `json:"freshness_verify_model"`
+	FreshnessVerifyPromptSHA    string `json:"-"`
 	// SeenFmSHA256/SeenBodySHA256 record what the document looked like when
 	// the last analysis of either lane ran — the reference for the
 	// changed-frontmatter-only vs changed-body breakdown.
@@ -176,7 +184,7 @@ func Open(ctx context.Context, path string) (*DB, error) {
 // schemaVersion stamps the shape migrate() produces — bump it on every schema
 // change. A database stamped newer than this build is refused at Open so an
 // old binary cannot silently half-migrate a future layout.
-const schemaVersion = 14
+const schemaVersion = 15
 
 func (d *DB) migrate(ctx context.Context) error {
 	var stamped int
@@ -224,6 +232,7 @@ CREATE TABLE IF NOT EXISTS documents (
  freshness_input_sha256 TEXT NOT NULL DEFAULT '',
  freshness_web_verify INTEGER NOT NULL DEFAULT 0,
  freshness_verify_model TEXT NOT NULL DEFAULT '',
+ freshness_verify_prompt_sha256 TEXT NOT NULL DEFAULT '',
  seen_fm_sha256 TEXT NOT NULL DEFAULT '',
  seen_body_sha256 TEXT NOT NULL DEFAULT '',
  expand_sha256 TEXT NOT NULL DEFAULT '',
@@ -402,6 +411,7 @@ func (d *DB) upgradeDocumentColumns(ctx context.Context) error {
 		{"freshness_input_sha256", `ALTER TABLE documents ADD COLUMN freshness_input_sha256 TEXT NOT NULL DEFAULT ''`},
 		{"freshness_web_verify", `ALTER TABLE documents ADD COLUMN freshness_web_verify INTEGER NOT NULL DEFAULT 0`},
 		{"freshness_verify_model", `ALTER TABLE documents ADD COLUMN freshness_verify_model TEXT NOT NULL DEFAULT ''`},
+		{"freshness_verify_prompt_sha256", `ALTER TABLE documents ADD COLUMN freshness_verify_prompt_sha256 TEXT NOT NULL DEFAULT ''`},
 		{"seen_fm_sha256", `ALTER TABLE documents ADD COLUMN seen_fm_sha256 TEXT NOT NULL DEFAULT ''`},
 		{"seen_body_sha256", `ALTER TABLE documents ADD COLUMN seen_body_sha256 TEXT NOT NULL DEFAULT ''`},
 		{"expand_sha256", `ALTER TABLE documents ADD COLUMN expand_sha256 TEXT NOT NULL DEFAULT ''`},
@@ -677,6 +687,7 @@ type scanSnapshot struct {
 	sha, fmSHA, bodySHA, semanticSHA, semanticFM, semanticBody                  string
 	analyzedSHA, externalSHA, enrichedSHA, expandSHA, freshnessSHA, embeddedSHA string
 	analyzedSemantic, externalSemantic                                          string
+	analysisInput, enrichmentInput, expandInput, freshnessInput                 string
 	frontmatterJSON, status                                                     string
 }
 
@@ -690,11 +701,14 @@ func loadScannedSnapshot(ctx context.Context, tx *sql.Tx, path string) (scanSnap
 	err := tx.QueryRowContext(ctx, `SELECT sha256,fm_sha256,body_sha256,semantic_sha256,
 semantic_frontmatter_sha256,semantic_body_sha256,analyzed_sha256,external_sha256,enriched_sha256,
 expand_sha256,freshness_sha256,embedded_sha256,analyzed_semantic_sha256,external_semantic_sha256,
-frontmatter_json,status FROM documents WHERE path=?`, path).Scan(
+	frontmatter_json,status,analysis_input_sha256,enrichment_input_sha256,expand_input_sha256,
+freshness_input_sha256
+FROM documents WHERE path=?`, path).Scan(
 		&old.sha, &old.fmSHA, &old.bodySHA, &old.semanticSHA, &old.semanticFM, &old.semanticBody,
 		&old.analyzedSHA, &old.externalSHA, &old.enrichedSHA, &old.expandSHA,
 		&old.freshnessSHA, &old.embeddedSHA, &old.analyzedSemantic, &old.externalSemantic,
-		&old.frontmatterJSON, &old.status)
+		&old.frontmatterJSON, &old.status, &old.analysisInput, &old.enrichmentInput, &old.expandInput,
+		&old.freshnessInput)
 	return old, err
 }
 
@@ -720,6 +734,7 @@ func migrateLegacyLineage(old scanSnapshot, doc Document, semanticSame bool) sca
 		freshnessSHA: old.freshnessSHA, embeddedSHA: old.embeddedSHA,
 		analyzedSemantic: old.analyzedSemantic, externalSemantic: old.externalSemantic,
 	}
+	lineage = migrateTaskInputRecipe(old, doc, lineage)
 	if !semanticSame {
 		return lineage
 	}
@@ -738,8 +753,36 @@ func migrateLegacyLineage(old scanSnapshot, doc Document, semanticSame bool) sca
 	if old.embeddedSHA == old.sha {
 		lineage.embeddedSHA = doc.SemanticSHA256
 	}
-	// Do not migrate freshness: its prompt now includes version-impact review,
-	// so an old result needs one refresh under the new contract.
+	return lineage
+}
+
+func migrateTaskInputRecipe(old scanSnapshot, doc Document, lineage scanLineage) scanLineage {
+	// Recipe migration: a stored input equal to both the lane stamp and this
+	// scan's old-recipe recomputation proves the run covered the same inputs;
+	// restamp lineage under the current recipe instead of requeueing. Rows
+	// already on the new recipe never equal the recomputed old value. The
+	// recomputation embeds the semantic hash, so a changed document can never
+	// satisfy this.
+	if doc.LegacyAnalysisInputSHA256 != "" && old.analyzedSHA != "" &&
+		old.analyzedSHA == old.analysisInput && old.analysisInput == doc.LegacyAnalysisInputSHA256 {
+		lineage.analyzedSHA, lineage.analyzedSemantic = doc.AnalysisInputSHA256, doc.SemanticSHA256
+	}
+	if doc.LegacyAnalysisInputSHA256 != "" && old.externalSHA != "" &&
+		old.externalSHA == old.analysisInput && old.analysisInput == doc.LegacyAnalysisInputSHA256 {
+		lineage.externalSHA, lineage.externalSemantic = doc.AnalysisInputSHA256, doc.SemanticSHA256
+	}
+	if doc.LegacyEnrichmentInputSHA256 != "" && old.enrichedSHA != "" &&
+		old.enrichedSHA == old.enrichmentInput && old.enrichmentInput == doc.LegacyEnrichmentInputSHA256 {
+		lineage.enrichedSHA = doc.EnrichmentInputSHA256
+	}
+	if doc.LegacyExpandInputSHA256 != "" && old.expandSHA != "" &&
+		old.expandSHA == old.expandInput && old.expandInput == doc.LegacyExpandInputSHA256 {
+		lineage.expandSHA = doc.ExpandInputSHA256
+	}
+	if doc.LegacyFreshnessInputSHA256 != "" && old.freshnessSHA != "" &&
+		old.freshnessSHA == old.freshnessInput && old.freshnessInput == doc.LegacyFreshnessInputSHA256 {
+		lineage.freshnessSHA = doc.FreshnessInputSHA256
+	}
 	return lineage
 }
 
@@ -923,12 +966,12 @@ func (d *DB) MarkMissing(ctx context.Context, seen string) error {
 }
 
 // documentColumns is the shared SELECT list for Document rows.
-const documentColumns = `path,sha256,analyzed_sha256,analyzed_model,analyzed_semantic_sha256,external_sha256,external_model,external_semantic_sha256,enriched_sha256,enriched_model,fm_sha256,body_sha256,semantic_sha256,semantic_frontmatter_sha256,semantic_body_sha256,analysis_input_sha256,enrichment_input_sha256,expand_input_sha256,freshness_input_sha256,freshness_web_verify,freshness_verify_model,seen_fm_sha256,seen_body_sha256,expand_sha256,expand_model,freshness_sha256,freshness_model,embedded_sha256,embedded_model,size,modified_unix,title,summary,tags_json,status,last_error,frontmatter_json,frontmatter_issues,link_issues,sig,embedding`
+const documentColumns = `path,sha256,analyzed_sha256,analyzed_model,analyzed_semantic_sha256,external_sha256,external_model,external_semantic_sha256,enriched_sha256,enriched_model,fm_sha256,body_sha256,semantic_sha256,semantic_frontmatter_sha256,semantic_body_sha256,analysis_input_sha256,enrichment_input_sha256,expand_input_sha256,freshness_input_sha256,freshness_web_verify,freshness_verify_model,freshness_verify_prompt_sha256,seen_fm_sha256,seen_body_sha256,expand_sha256,expand_model,freshness_sha256,freshness_model,embedded_sha256,embedded_model,size,modified_unix,title,summary,tags_json,status,last_error,frontmatter_json,frontmatter_issues,link_issues,sig,embedding`
 
 // scanDocument reads one Document row in documentColumns order.
 func scanDocument(rows *sql.Rows) (Document, error) {
 	var x Document
-	err := rows.Scan(&x.Path, &x.SHA256, &x.AnalyzedSHA256, &x.AnalyzedModel, &x.AnalyzedSemanticSHA256, &x.ExternalSHA256, &x.ExternalModel, &x.ExternalSemanticSHA256, &x.EnrichedSHA256, &x.EnrichedModel, &x.FmSHA256, &x.BodySHA256, &x.SemanticSHA256, &x.SemanticFrontmatterSHA, &x.SemanticBodySHA256, &x.AnalysisInputSHA256, &x.EnrichmentInputSHA256, &x.ExpandInputSHA256, &x.FreshnessInputSHA256, &x.FreshnessWebVerify, &x.FreshnessVerifyModel, &x.SeenFmSHA256, &x.SeenBodySHA256, &x.ExpandSHA256, &x.ExpandModel, &x.FreshnessSHA256, &x.FreshnessModel, &x.EmbeddedSHA256, &x.EmbeddedModel, &x.Size, &x.ModifiedUnix, &x.Title, &x.Summary, &x.TagsJSON, &x.Status, &x.LastError, &x.FrontmatterJSON, &x.FrontmatterIssues, &x.LinkIssues, &x.Signature, &x.Embedding)
+	err := rows.Scan(&x.Path, &x.SHA256, &x.AnalyzedSHA256, &x.AnalyzedModel, &x.AnalyzedSemanticSHA256, &x.ExternalSHA256, &x.ExternalModel, &x.ExternalSemanticSHA256, &x.EnrichedSHA256, &x.EnrichedModel, &x.FmSHA256, &x.BodySHA256, &x.SemanticSHA256, &x.SemanticFrontmatterSHA, &x.SemanticBodySHA256, &x.AnalysisInputSHA256, &x.EnrichmentInputSHA256, &x.ExpandInputSHA256, &x.FreshnessInputSHA256, &x.FreshnessWebVerify, &x.FreshnessVerifyModel, &x.FreshnessVerifyPromptSHA, &x.SeenFmSHA256, &x.SeenBodySHA256, &x.ExpandSHA256, &x.ExpandModel, &x.FreshnessSHA256, &x.FreshnessModel, &x.EmbeddedSHA256, &x.EmbeddedModel, &x.Size, &x.ModifiedUnix, &x.Title, &x.Summary, &x.TagsJSON, &x.Status, &x.LastError, &x.FrontmatterJSON, &x.FrontmatterIssues, &x.LinkIssues, &x.Signature, &x.Embedding)
 	return x, err
 }
 
@@ -1052,8 +1095,9 @@ func firstNonempty(values ...string) string {
 // PendingTask returns documents whose task lineage is behind the current
 // content — the task run is incremental, exactly like the analysis lanes.
 type TaskRunOptions struct {
-	WebVerify   bool
-	VerifyModel string
+	WebVerify       bool
+	VerifyModel     string
+	VerifyPromptSHA string
 }
 
 func (d *DB) PendingTask(ctx context.Context, task, model string, reanalyze bool, forceAll ...bool) ([]Document, error) {
@@ -1075,8 +1119,8 @@ func (d *DB) pendingTask(ctx context.Context, task, model string, reanalyze bool
 	cond := cur + `<>` + sha
 	var args []any
 	if task == "freshness" && opts.WebVerify {
-		cond += ` OR freshness_web_verify=0 OR freshness_verify_model<>?`
-		args = append(args, opts.VerifyModel)
+		cond += ` OR freshness_web_verify=0 OR freshness_verify_model<>? OR freshness_verify_prompt_sha256<>?`
+		args = append(args, opts.VerifyModel, opts.VerifyPromptSHA)
 	}
 	if reanalyze || task == "embed" {
 		cond += ` OR ` + modelCol + `<>?`
@@ -1130,8 +1174,10 @@ func (d *DB) SaveTask(ctx context.Context, doc Document, task, model string, sug
 	query := `UPDATE documents SET ` + shaCol + `=?,` + modelCol + `=?` // #nosec G202 -- columns are compile-time constants from taskColumns
 	args := []any{inputSHA, model}
 	if task == "freshness" {
-		query += `,freshness_web_verify=?,freshness_verify_model=?`
-		args = append(args, doc.FreshnessWebVerify, doc.FreshnessVerifyModel)
+		query += `,freshness_web_verify=?,freshness_verify_model=?,
+freshness_verify_prompt_sha256=CASE WHEN ? THEN ? ELSE freshness_verify_prompt_sha256 END`
+		args = append(args, doc.FreshnessWebVerify, doc.FreshnessVerifyModel,
+			doc.FreshnessWebVerify, doc.FreshnessVerifyPromptSHA)
 	}
 	query += ` WHERE path=?`
 	args = append(args, doc.Path)
@@ -1164,8 +1210,10 @@ func (d *DB) StampTask(ctx context.Context, doc Document, task, model string) er
 	query := `UPDATE documents SET ` + shaCol + `=?,` + modelCol + `=?` // #nosec G202 -- columns are compile-time constants from taskColumns
 	args := []any{inputSHA, model}
 	if task == "freshness" {
-		query += `,freshness_web_verify=?,freshness_verify_model=?`
-		args = append(args, doc.FreshnessWebVerify, doc.FreshnessVerifyModel)
+		query += `,freshness_web_verify=?,freshness_verify_model=?,
+freshness_verify_prompt_sha256=CASE WHEN ? THEN ? ELSE freshness_verify_prompt_sha256 END`
+		args = append(args, doc.FreshnessWebVerify, doc.FreshnessVerifyModel,
+			doc.FreshnessWebVerify, doc.FreshnessVerifyPromptSHA)
 	}
 	query += ` WHERE path=?`
 	args = append(args, doc.Path)

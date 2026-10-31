@@ -723,8 +723,17 @@ func (o *ops) stagePending(ctx context.Context, name, model string, b opRequest)
 		docs, err = o.db.PendingEnrich(ctx, model, b.Reanalyze, b.ReanalyzeAll)
 	case config.TaskFreshness:
 		verifyModel := o.c.VerifyModel(b.External, b.Model, model)
+		verifyPromptSHA := ""
+		if b.WebVerify {
+			verifyPromptSHA, err = analyzer.FreshnessVerifyPromptFingerprint(o.c)
+			if err != nil {
+				return 0, err
+			}
+		}
 		docs, err = o.db.PendingTaskForRun(ctx, name, model, b.Reanalyze,
-			database.TaskRunOptions{WebVerify: b.WebVerify, VerifyModel: verifyModel}, b.ReanalyzeAll)
+			database.TaskRunOptions{
+				WebVerify: b.WebVerify, VerifyModel: verifyModel, VerifyPromptSHA: verifyPromptSHA,
+			}, b.ReanalyzeAll)
 	default:
 		docs, err = o.db.PendingTask(ctx, name, model, b.Reanalyze, b.ReanalyzeAll)
 	}

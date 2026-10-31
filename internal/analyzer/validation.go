@@ -80,6 +80,9 @@ func (p *pipeline) validateSuggestion(s database.Suggestion, content string, mer
 		if err := proposal.ValidateRewrite(targetBody, s.ProposedContent); err != nil {
 			return fmt.Errorf("merge target: %w", err)
 		}
+		if err := p.taxonomy.ValidateTagChanges(s.TargetPath, targetBody, s.ProposedContent); err != nil {
+			return fmt.Errorf("merge target taxonomy: %w", err)
+		}
 	case "expand":
 		if s.TargetPath != "" {
 			return fmt.Errorf("expand must have an empty target_path")
@@ -99,7 +102,15 @@ func (p *pipeline) validateSuggestion(s database.Suggestion, content string, mer
 		}); err != nil {
 		return err
 	}
-	return proposal.ValidateLinks(s.ProposedContent, documentLookup(s.DocumentPath, p.knownDocs))
+	if err := proposal.ValidateLinks(s.ProposedContent, documentLookup(s.DocumentPath, p.knownDocs)); err != nil {
+		return err
+	}
+	if s.Origin == "freshness" {
+		if err := proposal.ValidateTagsUnchanged(content, s.ProposedContent); err != nil {
+			return err
+		}
+	}
+	return p.taxonomy.ValidateTagChanges(s.DocumentPath, content, s.ProposedContent)
 }
 
 type validatedSuggestions struct {
@@ -110,7 +121,7 @@ type validatedSuggestions struct {
 	localFieldsBlocked bool
 }
 
-func (p *pipeline) validateModelSuggestions(doc database.Document, content string, mergeBodies map[string]string, models []llmSuggestion, localPatch metadataPatch, localPending bool) validatedSuggestions {
+func (p *pipeline) validateModelSuggestions(doc database.Document, content string, mergeBodies map[string]string, models []llmSuggestion, localPatch metadataPatch, localPending bool, origin string) validatedSuggestions {
 	result := validatedSuggestions{
 		items: make([]database.Suggestion, 0, len(models)),
 	}
@@ -136,7 +147,7 @@ func (p *pipeline) validateModelSuggestions(doc database.Document, content strin
 			Reason:          strings.TrimSpace(item.Reason),
 			Confidence:      clamp(item.Confidence),
 			ProposedContent: item.ProposedContent,
-			Origin:          "analysis",
+			Origin:          origin,
 		}
 		var localFields []string
 		if localPending && action == "expand" {
@@ -191,9 +202,9 @@ func (p *pipeline) analysisMetadataSuggestion(
 	validated validatedSuggestions,
 ) (*database.Suggestion, []string, []string) {
 	patch, localFields, rejected := mergeLocalAnalysisPatch(
-		fm, modelPatch, localPatch, localDerived, localPending, validated, p.taxonomy,
+		doc.Path, fm, modelPatch, localPatch, localDerived, localPending, validated, p.taxonomy,
 	)
-	hasModelPatch := hasAllowedModelPatch(modelPatch, p.taxonomy)
+	hasModelPatch := hasAllowedModelPatch(doc.Path, fm, modelPatch, p.taxonomy)
 	origin := "analysis"
 	if len(localFields) > 0 && !hasModelPatch {
 		origin = "deterministic"
@@ -221,6 +232,7 @@ func (p *pipeline) analysisMetadataSuggestion(
 }
 
 func mergeLocalAnalysisPatch(
+	relativePath string,
 	fm map[string]any,
 	modelPatch *metadataPatch,
 	localPatch metadataPatch,
@@ -248,12 +260,11 @@ func mergeLocalAnalysisPatch(
 			continue
 		}
 		if explicit, exists := patch.Set[field]; exists {
-			unknown := vocabulary.InvalidTagSet(explicit)
-			if field != "tags" || len(unknown) == 0 {
+			tagErr := vocabulary.ValidateTagSetChange(relativePath, frontmatter.StringList(fm, "tags"), explicit)
+			if field != "tags" || tagErr == nil {
 				continue
 			}
-			rejected = append(rejected,
-				"analysis patch contains tag(s) not listed in taxonomy.yaml: "+strings.Join(unknown, ", "))
+			rejected = append(rejected, "analysis patch contains invalid tags: "+tagErr.Error())
 			delete(patch.Set, field)
 		}
 		if slices.Contains(patch.Remove, field) {
@@ -265,7 +276,7 @@ func mergeLocalAnalysisPatch(
 	return patch, localFields, rejected
 }
 
-func hasAllowedModelPatch(modelPatch *metadataPatch, vocabulary *taxonomy.Vocabulary) bool {
+func hasAllowedModelPatch(relativePath string, fm map[string]any, modelPatch *metadataPatch, vocabulary *taxonomy.Vocabulary) bool {
 	if modelPatch == nil {
 		return false
 	}
@@ -273,7 +284,7 @@ func hasAllowedModelPatch(modelPatch *metadataPatch, vocabulary *taxonomy.Vocabu
 		return true
 	}
 	for key, value := range modelPatch.Set {
-		if key == "tags" && len(vocabulary.InvalidTagSet(value)) > 0 {
+		if key == "tags" && vocabulary.ValidateTagSetChange(relativePath, frontmatter.StringList(fm, "tags"), value) != nil {
 			continue
 		}
 		return true
@@ -318,8 +329,8 @@ func patchSuggestion(doc database.Document, fm map[string]any, patch metadataPat
 	}
 	for key, value := range patch.Set {
 		if key == "tags" && vocabulary != nil {
-			if unknown := vocabulary.InvalidTagSet(value); len(unknown) > 0 {
-				rejected = append(rejected, fmt.Sprintf("%s patch contains tag(s) not listed in taxonomy.yaml: %s", origin, strings.Join(unknown, ", ")))
+			if err := vocabulary.ValidateTagSetChange(doc.Path, frontmatter.StringList(fm, "tags"), value); err != nil {
+				rejected = append(rejected, fmt.Sprintf("%s patch contains invalid tags: %v", origin, err))
 				continue
 			}
 		}

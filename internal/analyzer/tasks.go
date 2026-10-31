@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -45,6 +46,19 @@ type TaskResult struct {
 	Failed      int
 	Rejected    int // unsafe model proposals omitted from review
 	Suggestions int
+}
+
+// FreshnessVerifyPromptFingerprint is independent from the base freshness
+// prompt because verification is opt-in and runs only for documents with flags.
+func FreshnessVerifyPromptFingerprint(c config.Config) (string, error) {
+	if c.PromptDirectory == "" {
+		return "", errors.New("freshness verification requires prompt_directory")
+	}
+	server := c.MCPServer
+	if server == "" {
+		server = config.MCPServerKnowledgeBase
+	}
+	return prompts.Fingerprint(c.PromptDirectory, server, "freshness-verify.md")
 }
 
 // Summary renders the one-line job/CLI detail.
@@ -215,8 +229,17 @@ func RunTask(ctx context.Context, c config.Config, db *database.DB, gens Generat
 	if task == config.TaskFreshness {
 		verifyModel = c.VerifyModel(opts.External, opts.Model, model)
 	}
+	verifyPromptSHA := ""
+	if task == config.TaskFreshness && opts.WebVerify {
+		verifyPromptSHA, err = FreshnessVerifyPromptFingerprint(c)
+		if err != nil {
+			return TaskResult{}, err
+		}
+	}
 	docs, err := db.PendingTaskForRun(ctx, task, model, opts.Reanalyze,
-		database.TaskRunOptions{WebVerify: opts.WebVerify, VerifyModel: verifyModel}, opts.ReanalyzeAll)
+		database.TaskRunOptions{
+			WebVerify: opts.WebVerify, VerifyModel: verifyModel, VerifyPromptSHA: verifyPromptSHA,
+		}, opts.ReanalyzeAll)
 	if err != nil {
 		return TaskResult{}, err
 	}
@@ -249,6 +272,9 @@ func RunTask(ctx context.Context, c config.Config, db *database.DB, gens Generat
 		if task == config.TaskFreshness {
 			doc.FreshnessWebVerify = opts.WebVerify
 			doc.FreshnessVerifyModel = verifyModel
+			if opts.WebVerify {
+				doc.FreshnessVerifyPromptSHA = verifyPromptSHA
+			}
 		}
 		base := Progress{Index: i + 1, Total: len(docs), Path: doc.Path}
 		var step error
@@ -389,17 +415,14 @@ func (p *pipeline) freshnessDoc(root *os.Root, doc database.Document, model, ver
 	if scanner.CanonicalHash(content) != doc.SHA256 {
 		return p.taskFail(base, out, "source changed since scan; rescan before running LLM tasks")
 	}
-	p.emit(Progress{Index: base.Index, Total: base.Total, Path: base.Path, Outcome: "checking freshness"})
-	var kbmNote string
-	if kbm, ok := fm[frontmatter.ManagedKey].(map[string]any); ok {
-		if lc, ok := kbm["link_check"].(map[string]any); ok {
-			b, _ := json.Marshal(lc)
-			kbmNote = "Latest external link check result: " + string(b) + "\n"
-		}
+	if p.opts.WebVerify &&
+		doc.FreshnessInputSHA256 == doc.FreshnessSHA256 &&
+		!p.opts.ReanalyzeAll &&
+		(!p.opts.Reanalyze || doc.FreshnessModel == model) {
+		return p.verifyFreshnessOnly(root, doc, fm, content, model, verifyModel, base, out)
 	}
-	contextText := fmt.Sprintf("Current path: %s\nFile modified: %s\nDocument frontmatter: %s\n%s%s",
-		doc.Path, time.Unix(doc.ModifiedUnix, 0).UTC().Format("2006-01-02"),
-		cmp.Or(doc.FrontmatterJSON, "none"), kbmNote, p.rejectionContext(doc.Path))
+	p.emit(Progress{Index: base.Index, Total: base.Total, Path: base.Path, Outcome: "checking freshness"})
+	contextText := p.freshnessContext(doc, fm)
 	prompt, err := prompts.ComposeTask(p.c.PromptDirectory, p.mcpServer, "freshness.md", contextText, content)
 	if err != nil {
 		return err
@@ -427,17 +450,10 @@ func (p *pipeline) freshnessDoc(root *os.Root, doc database.Document, model, ver
 	if verifyErr != "" {
 		block["verify_error"] = verifyErr
 	}
-	if err := frontmatter.WriteManaged(root, doc.Path, "freshness", block); err != nil {
+	if err := p.writeFreshnessBlock(root, doc.Path, block); err != nil {
 		return p.taskFail(base, out, "record kbm.freshness: "+err.Error())
 	}
-	if refreshed, rerr := scanner.ReadDocument(p.c, doc.Path); rerr == nil {
-		if fields, _, perr := frontmatter.Parse(refreshed); perr == nil {
-			fmJSON, _ := json.Marshal(fields)
-			issues, _ := json.Marshal(frontmatter.Validate(fields))
-			_ = p.db.RefreshFrontmatter(p.ctx, doc.Path, string(fmJSON), string(issues))
-		}
-	}
-	validated := p.validateModelSuggestions(doc, content, nil, suggestions, metadataPatch{}, false)
+	validated := p.validateModelSuggestions(doc, content, nil, suggestions, metadataPatch{}, false, "freshness")
 	var sugs []database.Suggestion
 	for i := range validated.items {
 		validated.items[i].Origin = "freshness"
@@ -465,6 +481,135 @@ func (p *pipeline) freshnessDoc(root *os.Root, doc database.Document, model, ver
 	out.Processed++
 	out.Suggestions += len(sugs)
 	out.Rejected += len(validated.rejected)
+	return nil
+}
+
+func (p *pipeline) freshnessContext(doc database.Document, fm map[string]any) string {
+	var kbmNote string
+	if kbm, ok := fm[frontmatter.ManagedKey].(map[string]any); ok {
+		if lc, ok := kbm["link_check"].(map[string]any); ok {
+			b, _ := json.Marshal(lc)
+			kbmNote = "Latest external link check result: " + string(b) + "\n"
+		}
+	}
+	return fmt.Sprintf("Current path: %s\nFile modified: %s\nDocument frontmatter: %s\n%s%s",
+		doc.Path, time.Unix(doc.ModifiedUnix, 0).UTC().Format("2006-01-02"),
+		cmp.Or(doc.FrontmatterJSON, "none"), kbmNote, p.rejectionContext(doc.Path))
+}
+
+func (p *pipeline) verifyFreshnessOnly(
+	root *os.Root,
+	doc database.Document,
+	fm map[string]any,
+	content, model, verifyModel string,
+	base *Progress,
+	out *TaskResult,
+) error {
+	block := storedFreshnessBlock(fm)
+	flags := freshnessFlagsFromBlock(block)
+	if len(flags) == 0 {
+		if err := p.db.StampTask(p.ctx, doc, config.TaskFreshness, model); err != nil {
+			return err
+		}
+		base.Outcome, base.Detail = "checked", "no flags require web verification"
+		p.emit(*base)
+		out.Skipped++
+		return nil
+	}
+
+	p.emit(Progress{Index: base.Index, Total: base.Total, Path: base.Path, Outcome: "verifying saved flags"})
+	started := time.Now()
+	verifiedFlags, suggestions, err := p.verifyFlags(doc, fm, content, p.freshnessContext(doc, fm), flags)
+	verifyDuration := time.Since(started)
+	if err != nil {
+		block["at"] = time.Now().UTC().Format(time.RFC3339)
+		block["verify_error"] = err.Error()
+		delete(block, "verified")
+		delete(block, "verify_model")
+		if err := p.writeFreshnessBlock(root, doc.Path, block); err != nil {
+			return err
+		}
+		if err := p.db.StampTask(p.ctx, doc, config.TaskFreshness, model); err != nil {
+			return err
+		}
+		base.Outcome, base.Detail = "checked", "verify failed: "+truncate(err.Error(), 80)
+		p.emit(*base)
+		out.Processed++
+		return nil
+	}
+
+	verdict := "current"
+	for _, flag := range verifiedFlags {
+		if flag["verdict"] != "current" {
+			verdict = "review"
+		}
+	}
+	block["at"] = time.Now().UTC().Format(time.RFC3339)
+	block["verdict"] = verdict
+	block["flags"] = verifiedFlags
+	block["verified"] = true
+	block["verify_model"] = verifyModel
+	delete(block, "verify_error")
+	if err := p.writeFreshnessBlock(root, doc.Path, block); err != nil {
+		return err
+	}
+
+	validated := p.validateModelSuggestions(doc, content, nil, suggestions, metadataPatch{}, false, "freshness")
+	var sugs []database.Suggestion
+	for i := range validated.items {
+		validated.items[i].Origin = "freshness"
+		sugs = append(sugs, validated.items[i])
+	}
+	audit := database.StageResult{DurationMS: verifyDuration.Milliseconds(), Rejected: validated.rejected}
+	if err := p.db.SaveTask(p.ctx, doc, config.TaskFreshness, model, sugs, audit); err != nil {
+		return err
+	}
+	base.Outcome = "checked"
+	base.Detail = fmt.Sprintf("verified %d saved flag(s); verdict %s", len(flags), verdict)
+	if len(validated.rejected) > 0 {
+		base.Detail += "; " + suggestionDetail(len(sugs), validated.rejected)
+	}
+	p.emit(*base)
+	out.Processed++
+	out.Suggestions += len(sugs)
+	out.Rejected += len(validated.rejected)
+	return nil
+}
+
+func storedFreshnessBlock(fm map[string]any) map[string]any {
+	kbm, _ := fm[frontmatter.ManagedKey].(map[string]any)
+	block, _ := kbm["freshness"].(map[string]any)
+	if block == nil {
+		return map[string]any{}
+	}
+	return maps.Clone(block)
+}
+
+func freshnessFlagsFromBlock(block map[string]any) []freshnessFlag {
+	raw, _ := block["flags"].([]any)
+	flags := make([]freshnessFlag, 0, len(raw))
+	for _, item := range raw {
+		entry, _ := item.(map[string]any)
+		claim, _ := entry["claim"].(string)
+		concern, _ := entry["concern"].(string)
+		if claim != "" {
+			flags = append(flags, freshnessFlag{Claim: claim, Concern: concern})
+		}
+	}
+	return flags
+}
+
+func (p *pipeline) writeFreshnessBlock(root *os.Root, path string, block map[string]any) error {
+	if err := frontmatter.WriteManaged(root, path, "freshness", block); err != nil {
+		return err
+	}
+	if refreshed, err := scanner.ReadDocument(p.c, path); err == nil {
+		if fields, _, err := frontmatter.Parse(refreshed); err == nil {
+			fmJSON, _ := json.Marshal(fields)
+			issues, _ := json.Marshal(frontmatter.Validate(fields))
+			_ = p.db.RefreshFrontmatter(p.ctx, path, string(fmJSON), string(issues))
+		}
+	}
 	return nil
 }
 

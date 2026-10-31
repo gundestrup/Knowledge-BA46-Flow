@@ -48,6 +48,8 @@ func setup(t *testing.T) (config.Config, *database.DB) {
 	os.WriteFile(filepath.Join(promptDir, config.MCPServerKnowledgeBase+".md"), []byte("MCP"), 0644)
 	os.WriteFile(filepath.Join(promptDir, "analyze.md"), []byte("TASK"), 0644)
 	os.WriteFile(filepath.Join(promptDir, "enrich.md"), []byte("ENRICH"), 0644)
+	os.WriteFile(filepath.Join(promptDir, "expand.md"), []byte("EXPAND"), 0644)
+	os.WriteFile(filepath.Join(promptDir, "freshness.md"), []byte("FRESHNESS"), 0644)
 	db, err := database.Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
 	if err != nil {
 		t.Fatal(err)

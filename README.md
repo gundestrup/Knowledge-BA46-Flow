@@ -14,7 +14,7 @@
 
 [ci-badge]: https://github.com/gundestrup/Knowledge-BA46-Flow/actions/workflows/ci.yml/badge.svg
 [ci-workflow]: https://github.com/gundestrup/Knowledge-BA46-Flow/actions/workflows/ci.yml
-[version-badge]: https://img.shields.io/badge/version-0.1.0-blue.svg
+[version-badge]: https://img.shields.io/badge/version-0.2.0-blue.svg
 [changelog]: CHANGELOG.md
 
 KBM-flow is a Go CLI + local web dashboard with **two functions**:

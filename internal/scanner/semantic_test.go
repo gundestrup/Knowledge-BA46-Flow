@@ -1,8 +1,11 @@
 package scanner
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"knowledge-ba46-flow/internal/config"
@@ -184,6 +187,28 @@ func TestPromptChangesInvalidateOnlyTheAffectedTask(t *testing.T) {
 	if pending, err := db.PendingTask(t.Context(), config.TaskFreshness, "same-model", false); err != nil || len(pending) != 1 {
 		t.Fatalf("freshness prompt change was not queued: %v %v", pending, err)
 	}
+	doc = scannerDoc(t, db, "a.md")
+	doc.FreshnessWebVerify = true
+	doc.FreshnessVerifyModel = "verify-model"
+	doc.FreshnessVerifyPromptSHA = "verify v1"
+	if err := db.StampTask(t.Context(), doc, config.TaskFreshness, "same-model"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(c.PromptDirectory, "freshness-verify.md"), []byte("verify v2"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := db.PendingTask(t.Context(), config.TaskFreshness, "same-model", false); err != nil || len(pending) != 0 {
+		t.Fatalf("verify-only prompt edit queued base freshness without opt-in: %v %v", pending, err)
+	}
+	verifyPending, err := db.PendingTaskForRun(t.Context(), config.TaskFreshness, "same-model", false,
+		database.TaskRunOptions{WebVerify: true, VerifyModel: "verify-model", VerifyPromptSHA: "verify v2"})
+	if err != nil || len(verifyPending) != 1 {
+		t.Fatalf("verify prompt edit did not queue opt-in verification only: %v %v", verifyPending, err)
+	}
 }
 
 func hasPath(docs []database.Document, path string) bool {
@@ -208,4 +233,356 @@ func scannerDoc(t *testing.T, db *database.DB, path string) database.Document {
 	}
 	t.Fatalf("document %s not found", path)
 	return database.Document{}
+}
+
+// TestScanScopesTaxonomyInvalidationToAffectedDocuments proves a taxonomy
+// edit only moves the input fingerprints of documents whose taxonomy
+// projection (path-derived + current tags) actually changed.
+func TestScanScopesTaxonomyInvalidationToAffectedDocuments(t *testing.T) {
+	c, db, write := identityScanFixture(t)
+	base := `version: 1
+kind: [tool, programming-language, pattern]
+subject:
+  languages:
+    - go
+  topics:
+    - taxonomy
+function: [testing]
+`
+	write("taxonomy.yaml", base)
+	write("tools/x.md", "---\ntags: [tool]\n---\n# X\n\nOne.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.\n")
+	write("languages/go.md", "---\ntags: [programming-language]\n---\n# Go\n\nOne.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.\n")
+	write("languages/zig.md", "---\ntags: [programming-language]\n---\n# Zig\n\nOne.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.\n")
+	write("tools/STUB.md", "# Template\n")
+	write("tools/placeholder.md", "---\ntags: [stub, tool]\n---\n# Placeholder\n")
+	write("tools/private.md", "---\ntags: [tool]\nkb_policy: {no_llm_context: true}\n---\n# Private\n")
+	if _, err := Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	inputs := map[string]string{}
+	for _, p := range []string{
+		"tools/x.md", "languages/go.md", "languages/zig.md",
+		"tools/placeholder.md", "tools/private.md",
+	} {
+		inputs[p] = scannerDoc(t, db, p).AnalysisInputSHA256
+	}
+	write("taxonomy.yaml", `version: 1
+kind: [tool, programming-language, pattern]
+subject:
+  languages:
+    - go
+    - zig
+  topics:
+    - taxonomy
+function: [testing]
+`)
+	if _, err := Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	if got := scannerDoc(t, db, "tools/x.md").AnalysisInputSHA256; got != inputs["tools/x.md"] {
+		t.Fatal("unrelated subject addition moved an unaffected document's fingerprint")
+	}
+	if got := scannerDoc(t, db, "languages/go.md").AnalysisInputSHA256; got != inputs["languages/go.md"] {
+		t.Fatal("sibling-language addition moved an unaffected document's fingerprint")
+	}
+	if got := scannerDoc(t, db, "languages/zig.md").AnalysisInputSHA256; got == inputs["languages/zig.md"] {
+		t.Fatal("newly allowed path-derived subject did not move the document's fingerprint")
+	}
+	for _, p := range []string{"tools/placeholder.md", "tools/private.md"} {
+		if got := scannerDoc(t, db, p).AnalysisInputSHA256; got != inputs[p] {
+			t.Fatalf("taxonomy edit changed generation input for skipped document %s", p)
+		}
+	}
+}
+
+func TestScanMigratesLineageFromCurrentWholeTaxonomyRecipe(t *testing.T) {
+	c, db, write := identityScanFixture(t)
+	taxonomyContent := `version: 1
+kind: [tool]
+subject:
+  topics: [go, testing]
+function: [security]
+`
+	write("taxonomy.yaml", taxonomyContent)
+	write("tools/x.md", "---\ntags: [tool]\n---\n# X\n")
+	if _, err := Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+
+	doc := scannerDoc(t, db, "tools/x.md")
+	taxonomyHash := fmt.Sprintf("%x", sha256.Sum256([]byte(taxonomyContent)))
+	legacyAnalysis, legacyEnrichment, legacyExpand, legacyFreshness := legacyTaxonomyInputs(c, doc, taxonomyHash)
+	if _, err := db.Exec(`UPDATE documents SET analysis_input_sha256=?,enrichment_input_sha256=?,
+expand_input_sha256=?,freshness_input_sha256=?,analyzed_sha256=?,external_sha256=?,enriched_sha256=?,
+expand_sha256=?,freshness_sha256=?
+WHERE path=?`,
+		legacyAnalysis, legacyEnrichment, legacyExpand, legacyFreshness,
+		legacyAnalysis, legacyAnalysis, legacyEnrichment, legacyExpand, legacyFreshness, doc.Path); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	got := scannerDoc(t, db, "tools/x.md")
+	if got.AnalysisInputSHA256 == legacyAnalysis || got.AnalyzedSHA256 != got.AnalysisInputSHA256 {
+		t.Fatalf("analysis lineage was not migrated: input=%q stamp=%q", got.AnalysisInputSHA256, got.AnalyzedSHA256)
+	}
+	if got.ExternalSHA256 != got.AnalysisInputSHA256 ||
+		got.EnrichedSHA256 != got.EnrichmentInputSHA256 ||
+		got.ExpandSHA256 != got.ExpandInputSHA256 ||
+		got.FreshnessSHA256 != got.FreshnessInputSHA256 {
+		t.Fatalf("task lineages were not migrated: %+v", got)
+	}
+}
+
+func TestScanDoesNotMigrateLineageAcrossTaxonomyEditWithoutProof(t *testing.T) {
+	c, db, write := identityScanFixture(t)
+	oldTaxonomy := `version: 1
+kind: [tool]
+subject:
+  topics: [go, testing]
+function: [security]
+`
+	currentTaxonomy := `version: 1
+kind: [tool]
+subject:
+  topics: [go, testing, unrelated]
+function: [security]
+`
+	write("taxonomy.yaml", oldTaxonomy)
+	write("tools/x.md", "---\ntags: [tool]\n---\n# X\n")
+	if _, err := Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	doc := scannerDoc(t, db, "tools/x.md")
+
+	oldTaxonomyHash := fmt.Sprintf("%x", sha256.Sum256([]byte(oldTaxonomy)))
+	priorAnalysis, _, _, priorFreshness := legacyTaxonomyInputs(c, doc, oldTaxonomyHash)
+	currentTaxonomyHash := fmt.Sprintf("%x", sha256.Sum256([]byte(currentTaxonomy)))
+	currentLegacyAnalysis, currentLegacyEnrichment, currentLegacyExpand, currentLegacyFreshness := legacyTaxonomyInputs(c, doc, currentTaxonomyHash)
+	// Simulate the previous scanner having updated input fingerprints after
+	// the taxonomy edit, while its analysis job has not yet restamped this row.
+	if _, err := db.Exec(`UPDATE documents SET analysis_input_sha256=?,enrichment_input_sha256=?,
+expand_input_sha256=?,freshness_input_sha256=?,analyzed_sha256=?,external_sha256=?,enriched_sha256=?,
+expand_sha256=?,freshness_sha256=?
+WHERE path=?`,
+		currentLegacyAnalysis, currentLegacyEnrichment, currentLegacyExpand,
+		currentLegacyFreshness, priorAnalysis, priorAnalysis, priorAnalysis, priorAnalysis,
+		priorFreshness, doc.Path); err != nil {
+		t.Fatal(err)
+	}
+	write("taxonomy.yaml", currentTaxonomy)
+
+	if _, err := Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	got := scannerDoc(t, db, "tools/x.md")
+	if got.AnalyzedSHA256 != priorAnalysis || got.AnalysisInputSHA256 == got.AnalyzedSHA256 {
+		t.Fatalf("unproven old lineage was restamped: input=%q stamp=%q", got.AnalysisInputSHA256, got.AnalyzedSHA256)
+	}
+}
+
+func TestStubThresholdOnlyInvalidatesDocumentsThatChangeClassification(t *testing.T) {
+	c, db, write := identityScanFixture(t)
+	c.StubMaxBodyLines = 2
+	write("short.md", "# Short\none\n")
+	write("boundary.md", "# Boundary\none\ntwo\n")
+	write("long.md", "# Long\none\ntwo\nthree\n")
+	write("explicit.md", "---\ntags: [stub]\n---\n# Explicit\none\ntwo\nthree\n")
+	write("private-boundary.md", "---\nkb_policy: {no_llm_context: true}\n---\n# Private\none\ntwo\n")
+	if _, err := Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"short.md", "boundary.md", "long.md", "explicit.md", "private-boundary.md"} {
+		doc := scannerDoc(t, db, path)
+		if err := db.SaveAnalysis(t.Context(), doc, "analysis", "", "", nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.SaveEnrichment(t.Context(), doc, "fast", "", "", nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.SaveTask(t.Context(), doc, config.TaskExpand, "expand", nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.SaveTask(t.Context(), doc, config.TaskFreshness, "freshness", nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.SaveEmbedding(t.Context(), doc, "embed", []byte{0, 0, 128, 63}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	c.StubMaxBodyLines = 3
+	if scan, err := Scan(t.Context(), c, db); err != nil || scan.Changed != 0 {
+		t.Fatalf("stub-policy scan=%+v err=%v", scan, err)
+	}
+	for _, task := range []string{config.TaskAnalyze, config.TaskEnrich, config.TaskExpand, config.TaskFreshness} {
+		var pending []database.Document
+		var err error
+		switch task {
+		case config.TaskAnalyze:
+			pending, err = db.Pending(t.Context(), "analysis", "fast", false)
+		case config.TaskEnrich:
+			pending, err = db.PendingEnrich(t.Context(), "fast", false)
+		default:
+			pending, err = db.PendingTask(t.Context(), task, task+"-model", false)
+		}
+		if err != nil {
+			t.Fatalf("%s pending query: %v", task, err)
+		}
+		if len(pending) != 1 || pending[0].Path != "boundary.md" {
+			t.Fatalf("%s pending=%v, want only boundary.md", task, pathsOf(pending))
+		}
+	}
+	if pending, err := db.PendingTask(t.Context(), config.TaskEmbed, "embed", false); err != nil || len(pending) != 0 {
+		t.Fatalf("stub threshold change invalidated embeddings: %v %v", pathsOf(pending), err)
+	}
+}
+
+func TestTemplateChangeOnlyQueuesStubExpansion(t *testing.T) {
+	c, db, write := identityScanFixture(t)
+	c.StubMaxBodyLines = 2
+	write("notes/STUB.md", "# Template v1\n")
+	write("notes/example.md", "# Stub\none\n")
+	write("notes/regular.md", "# Regular\none\ntwo\nthree\n")
+	write("notes/private.md", "---\nkb_policy: {no_llm_context: true}\n---\n# Private\n")
+	if _, err := Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"notes/example.md", "notes/regular.md", "notes/private.md"} {
+		if err := db.SaveTask(t.Context(), scannerDoc(t, db, path), config.TaskExpand, "expand", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("notes/STUB.md", "# Template v2\n")
+	if _, err := Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := db.PendingTask(t.Context(), config.TaskExpand, "expand", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].Path != "notes/example.md" {
+		t.Fatalf("expand pending=%v, want only notes/example.md", pathsOf(pending))
+	}
+}
+
+func TestScanRejectsMissingRequiredPromptWithoutUpdatingDocuments(t *testing.T) {
+	c, db, write := identityScanFixture(t)
+	c.PromptDirectory = t.TempDir()
+	c.MCPServer = config.MCPServerKnowledgeBase
+	for name, body := range map[string]string{
+		"base.md":                      "base",
+		"knowledge-base-mcp-server.md": "mcp",
+		"enrich.md":                    "enrich",
+		"expand.md":                    "expand",
+		"freshness.md":                 "freshness",
+	} {
+		if err := os.WriteFile(filepath.Join(c.PromptDirectory, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("a.md", "# A\n\nBody.\n")
+	if _, err := Scan(t.Context(), c, db); err == nil || !strings.Contains(err.Error(), "analyze.md") {
+		t.Fatalf("missing required prompt did not fail scan: %v", err)
+	}
+	docs, err := db.Documents(t.Context())
+	if err != nil || len(docs) != 0 {
+		t.Fatalf("scan partially updated docs on prompt error: docs=%v err=%v", pathsOf(docs), err)
+	}
+}
+
+func TestMissingOptionalTaskPromptOnlyInvalidatesThatTaskWhenAdded(t *testing.T) {
+	c, db, write := identityScanFixture(t)
+	c.PromptDirectory = t.TempDir()
+	c.MCPServer = config.MCPServerKnowledgeBase
+	for name, body := range map[string]string{
+		"base.md":                      "base",
+		"knowledge-base-mcp-server.md": "mcp",
+		"analyze.md":                   "analyze",
+		"enrich.md":                    "enrich",
+		"freshness.md":                 "freshness",
+	} {
+		if err := os.WriteFile(filepath.Join(c.PromptDirectory, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("a.md", "# A\n\nOne.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.\n\nSix.\n")
+	if _, err := Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	doc := scannerDoc(t, db, "a.md")
+	if err := db.SaveAnalysis(t.Context(), doc, "analysis", "", "", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveEnrichment(t.Context(), doc, "fast", "", "", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveTask(t.Context(), doc, config.TaskExpand, "expand", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveTask(t.Context(), doc, config.TaskFreshness, "freshness", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(c.PromptDirectory, "expand.md"), []byte("expand"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := db.Pending(t.Context(), "analysis", "fast", false); err != nil || len(pending) != 0 {
+		t.Fatalf("adding expand prompt invalidated analysis: %v %v", pending, err)
+	}
+	if pending, err := db.PendingEnrich(t.Context(), "fast", false); err != nil || len(pending) != 0 {
+		t.Fatalf("adding expand prompt invalidated enrichment: %v %v", pending, err)
+	}
+	if pending, err := db.PendingTask(t.Context(), config.TaskFreshness, "freshness", false); err != nil || len(pending) != 0 {
+		t.Fatalf("adding expand prompt invalidated freshness: %v %v", pending, err)
+	}
+	if pending, err := db.PendingTask(t.Context(), config.TaskExpand, "expand", false); err != nil || len(pending) != 1 {
+		t.Fatalf("expand prompt did not invalidate its task: %v %v", pending, err)
+	}
+}
+
+func TestScanDoesNotRequireOptInFreshnessVerifyPrompt(t *testing.T) {
+	c, db, write := identityScanFixture(t)
+	c.PromptDirectory = t.TempDir()
+	c.MCPServer = config.MCPServerKnowledgeBase
+	for name, body := range map[string]string{
+		"base.md":                      "base",
+		"knowledge-base-mcp-server.md": "mcp",
+		"analyze.md":                   "analyze",
+		"enrich.md":                    "enrich",
+		"expand.md":                    "expand",
+		"freshness.md":                 "freshness",
+	} {
+		if err := os.WriteFile(filepath.Join(c.PromptDirectory, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("a.md", "# A\n\nBody.\n")
+	if _, err := Scan(t.Context(), c, db); err != nil {
+		t.Fatalf("scan should not require the opt-in verifier prompt: %v", err)
+	}
+}
+
+func legacyTaxonomyInputs(c config.Config, doc database.Document, taxonomySHA string) (analysis, enrichment, expand, freshness string) {
+	stubLines := fmt.Sprintf("stub_max_body_lines=%d", c.StubLineLimit())
+	analysis = hashInputs(doc.SemanticSHA256, "", taxonomySHA,
+		"write_scope="+c.EffectiveWriteScope(), stubLines)
+	enrichment = hashInputs(doc.SemanticSHA256, "", taxonomySHA,
+		"enrichment_mode="+string(c.EnrichmentMode), stubLines)
+	expand = hashInputs(doc.SemanticSHA256, "", "", taxonomySHA, stubLines)
+	freshness = hashInputs(doc.SemanticSHA256, "", stubLines)
+	return analysis, enrichment, expand, freshness
+}
+
+func pathsOf(docs []database.Document) []string {
+	paths := make([]string, 0, len(docs))
+	for _, doc := range docs {
+		paths = append(paths, doc.Path)
+	}
+	return paths
 }

@@ -76,11 +76,26 @@ func TestTaxonomyValidatesNewTagsButPreservesExistingHumanValues(t *testing.T) {
 	t.Parallel()
 	vocabulary := mustParse(t, []byte(testTaxonomy))
 	original := "---\ntags: [framework, legacy-custom]\n---\n# Note\n"
-	if err := vocabulary.ValidateTagChanges(original, "---\ntags: [framework, legacy-custom, css]\n---\n# Note\n"); err != nil {
+	if err := vocabulary.ValidateTagChanges("frameworks/css/note.md", original,
+		"---\ntags: [framework, legacy-custom, css]\n---\n# Note\n"); err != nil {
 		t.Fatalf("allowed new tag rejected: %v", err)
 	}
-	if err := vocabulary.ValidateTagChanges(original, "---\ntags: [framework, legacy-custom, invented]\n---\n# Note\n"); err == nil || !strings.Contains(err.Error(), "invented") {
+	if err := vocabulary.ValidateTagChanges("frameworks/css/note.md", original,
+		"---\ntags: [framework, legacy-custom, invented]\n---\n# Note\n"); err == nil || !strings.Contains(err.Error(), "invented") {
 		t.Fatalf("unapproved tag was accepted: %v", err)
+	}
+}
+
+func TestScopedTagChangesOnlyAllowPromptVisibleTags(t *testing.T) {
+	t.Parallel()
+	vocabulary := mustParse(t, []byte(testTaxonomy))
+	current := []string{"tool", "legacy-custom"}
+	if err := vocabulary.ValidateTagSetChange("tools/x.md", current, []string{"tool", "legacy-custom", "jekyll"}); err == nil ||
+		!strings.Contains(err.Error(), "prompt scope") {
+		t.Fatalf("off-scope but globally allowed tag was accepted: %v", err)
+	}
+	if err := vocabulary.ValidateTagSetChange("tools/shell/note.md", current, []string{"tool", "legacy-custom", "shell"}); err != nil {
+		t.Fatalf("path-visible tag rejected while preserving legacy tag: %v", err)
 	}
 }
 
@@ -112,6 +127,28 @@ func TestLoadFromRootIsOptionalAndFailsClosedOnMalformedTaxonomy(t *testing.T) {
 		t.Fatal("malformed taxonomy was accepted")
 	}
 	root.Close()
+}
+
+func TestReadFromRootReturnsBytesAndPresenceFromOneSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if data, exists, err := ReadFromRoot(root); err != nil || exists || data != nil {
+		t.Fatalf("missing taxonomy: data=%q exists=%v err=%v", data, exists, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "taxonomy.yaml"), []byte(testTaxonomy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	data, exists, err := ReadFromRoot(root)
+	if err != nil || !exists || string(data) != testTaxonomy {
+		t.Fatalf("read taxonomy: exists=%v err=%v", exists, err)
+	}
+	if _, err := Parse(data); err != nil {
+		t.Fatalf("bytes returned by ReadFromRoot did not parse: %v", err)
+	}
 }
 
 func TestLoadReadsTaxonomyFromRepository(t *testing.T) {
@@ -260,4 +297,63 @@ func FuzzParse(f *testing.F) {
 		_ = v1.TagsForPath("frameworks/css/x.md")
 		_ = v1.InvalidTagSet([]string{"framework", "bogus"})
 	})
+}
+
+// TestScopeDigestScopesVocabularyChanges pins the scoped-fingerprint
+// contract: a vocabulary edit only moves the digest of documents whose
+// taxonomy projection actually changed.
+func TestScopeDigestScopesVocabularyChanges(t *testing.T) {
+	t.Parallel()
+	vocabulary := mustParse(t, []byte(testTaxonomy))
+	if (*Vocabulary)(nil).ScopeDigest("tools/x.md", nil) != "" {
+		t.Fatal("nil vocabulary must produce an empty digest")
+	}
+	before := vocabulary.ScopeDigest("tools/sonarqube.md", nil)
+	if before == "" || before != vocabulary.ScopeDigest("tools/sonarqube.md", nil) {
+		t.Fatal("digest must be non-empty and deterministic")
+	}
+	// A subject added far outside this document's projection leaves it alone.
+	wider := mustParse(t, []byte(strings.Replace(
+		testTaxonomy, "    - shell\n", "    - shell\n    - zig\n", 1)))
+	if got := wider.ScopeDigest("tools/sonarqube.md", nil); got != before {
+		t.Fatalf("unrelated vocabulary addition changed the digest")
+	}
+	// A subject this document's path derives changes it — the prompt's
+	// approved-tag list genuinely differs.
+	zigBefore := vocabulary.ScopeDigest("languages/zig.md", nil)
+	if got := wider.ScopeDigest("languages/zig.md", nil); got == zigBefore {
+		t.Fatal("digest ignored a newly allowed path-derived subject")
+	}
+	// A human tag's validity verdict is part of the projection too: a doc
+	// carrying zig sees a different digest once the tag is approved.
+	taggedBefore := vocabulary.ScopeDigest("tools/x.md", []string{"zig"})
+	if wider.ScopeDigest("tools/x.md", []string{"zig"}) == taggedBefore {
+		t.Fatal("digest ignored a tag becoming taxonomy-approved")
+	}
+
+	// Rule membership is part of the scope even when the current tag set
+	// remains valid and the prompt tag list is unchanged.
+	withoutLibraryRule := mustParse(t, []byte(strings.Replace(
+		testTaxonomy,
+		"requires-language: [framework, library, cms]",
+		"requires-language: [framework, cms]",
+		1,
+	)))
+	current := []string{"library", "ruby"}
+	path := "libraries/ruby/rspec.md"
+	if !slices.Equal(withoutLibraryRule.PromptTags(path, current), vocabulary.PromptTags(path, current)) {
+		t.Fatal("test setup changed prompt tags")
+	}
+	if len(withoutLibraryRule.InvalidTagSet(current)) != 0 || len(vocabulary.InvalidTagSet(current)) != 0 {
+		t.Fatal("test setup requires both current tag sets to remain valid")
+	}
+	if withoutLibraryRule.ScopeDigest(path, current) == vocabulary.ScopeDigest(path, current) {
+		t.Fatal("digest ignored a changed validator rule for a visible tag")
+	}
+	if err := withoutLibraryRule.ValidateTagSetChange(path, current, []string{"library", "testing"}); err != nil {
+		t.Fatalf("proposal allowed by old rule rejected: %v", err)
+	}
+	if err := vocabulary.ValidateTagSetChange(path, current, []string{"library", "testing"}); err == nil {
+		t.Fatal("proposal disallowed by new requires-language rule was accepted")
+	}
 }

@@ -54,6 +54,11 @@ func suggestionValidator(ctx context.Context, c config.Config, db *database.DB, 
 			err = frontmatter.ValidateIdentity(original, proposed)
 		case "deterministic":
 			err = proposal.ValidateLinkRepair(s.DocumentPath, original, proposed, retarget, exists)
+		case "freshness":
+			err = proposal.ValidateRewrite(original, proposed)
+			if err == nil {
+				err = proposal.ValidateTagsUnchanged(original, proposed)
+			}
 		default:
 			err = proposal.ValidateRewrite(original, proposed)
 		}
@@ -154,7 +159,7 @@ func prepareProposedContent(root *os.Root, path, proposed string, c config.Confi
 	if err != nil {
 		return "", fmt.Errorf("%w: load tag taxonomy: %v", ErrValidationUnavailable, err)
 	}
-	if err := vocabulary.ValidateTagChanges(original, proposed); err != nil {
+	if err := vocabulary.ValidateTagChanges(path, original, proposed); err != nil {
 		return "", fmt.Errorf("%s: %w", path, err)
 	}
 	err = proposal.ValidateLinks(proposed, func(target string) error {

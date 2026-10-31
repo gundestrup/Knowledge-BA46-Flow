@@ -1048,7 +1048,7 @@ func (p *pipeline) analyzeDoc(doc database.Document, fm map[string]any, candidat
 		}
 	}
 	tags := normalizeTags(parsed.Tags, doc.TagsJSON, frontmatter.StringList(fm, "tags"))
-	validated := p.validateModelSuggestions(doc, content, mergeBodies, parsed.Suggestions, localPatch, localMetadataPending)
+	validated := p.validateModelSuggestions(doc, content, mergeBodies, parsed.Suggestions, localPatch, localMetadataPending, "analysis")
 	sugs := validated.items
 	patch, patchRejected, localFieldsApplied := p.analysisMetadataSuggestion(
 		doc, fm, content, parsed.Patch, localPatch, localDerived, localMetadataPending, validated,

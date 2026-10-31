@@ -9,6 +9,8 @@ tag is prepared.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-31
+
 ### Added
 
 - Screencast tooling under `scripts/e2e/`: `screencast-knowlege.mjs` and
@@ -25,6 +27,23 @@ tag is prepared.
 
 ### Changed
 
+- Task input fingerprints now hash a per-document taxonomy scope
+  (`Vocabulary.ScopeDigest`: prompt tags, current-tag verdict, and
+  validation-rule membership for tags the document may preserve or propose)
+  instead of the whole `taxonomy.yaml` hash. Analysis and apply now enforce
+  the same path-specific tag scope. A malformed taxonomy file fails closed
+  with the old whole-file digest. Existing lineages are re-stamped only when
+  the stored input, lane stamp, and old-recipe recomputation all match; if
+  the taxonomy itself changed before the recipe migration, unprovable rows
+  remain queued rather than being marked current unsafely.
+- Generation fingerprints now use the resolved per-document stub status
+  rather than the raw `stub_max_body_lines` setting, and expansion template
+  hashes apply only to actual stubs. Freshness verification has a separate
+  opt-in prompt stamp; changing `freshness-verify.md` rechecks saved flags
+  without rerunning the base freshness model; freshness suggestions preserve
+  tags and only update the body. Missing core prompts now fail scanning before
+  partial fingerprints are persisted; unavailable optional task prompts stay
+  isolated to their task. Schema v15 adds the verifier-prompt lineage stamp.
 - `TestRunHeartbeatTicksUntilStopped` now runs inside a
   `testing/synctest` bubble — the ticker-driven heartbeat is exercised on
   the fake clock instead of a 2s real-time poll, making it deterministic
@@ -88,7 +107,7 @@ tag is prepared.
   conflicting, blocked and validation-unavailable proposals remain preserved.
 - Freshness pass-1 emits one implicit version-tracking flag for notes about
   a released technology even without a version pin; `--web-verify` then
-  searches "<tech> latest release" and judges release IMPACT on the note's
+  searches "`<tech>` latest release" and judges release IMPACT on the note's
   substance, not just literal claim truth.
 - Task fingerprints include the static prompt files, task policy inputs and
   applicable `STUB.md` template; the freshness verifier also records whether

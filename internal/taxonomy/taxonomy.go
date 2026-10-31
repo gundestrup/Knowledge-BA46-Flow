@@ -2,6 +2,8 @@
 package taxonomy
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -58,33 +61,44 @@ type Vocabulary struct {
 	requiresLanguage map[string]struct{}
 }
 
-// LoadFromRoot reads taxonomy.yaml inside the repository root. Absence means
-// the shelf has no taxonomy policy; malformed files fail closed.
-func LoadFromRoot(root *os.Root) (*Vocabulary, error) {
+// ReadFromRoot reads taxonomy.yaml inside the repository root. The bool
+// distinguishes an absent file from a present, empty file. Symlinks,
+// non-regular files and oversized files are rejected.
+func ReadFromRoot(root *os.Root) ([]byte, bool, error) {
 	info, err := root.Lstat(fileName)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("inspect %s: %w", fileName, err)
+		return nil, false, fmt.Errorf("inspect %s: %w", fileName, err)
 	}
 	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s must be a regular file", fileName)
+		return nil, false, fmt.Errorf("%s must be a regular file", fileName)
 	}
 	file, err := root.Open(fileName)
 	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", fileName, err)
+		return nil, false, fmt.Errorf("open %s: %w", fileName, err)
 	}
 	data, readErr := io.ReadAll(io.LimitReader(file, maxBytes+1))
 	closeErr := file.Close()
 	if readErr != nil {
-		return nil, fmt.Errorf("read %s: %w", fileName, readErr)
+		return nil, false, fmt.Errorf("read %s: %w", fileName, readErr)
 	}
 	if closeErr != nil {
-		return nil, fmt.Errorf("close %s: %w", fileName, closeErr)
+		return nil, false, fmt.Errorf("close %s: %w", fileName, closeErr)
 	}
 	if len(data) > maxBytes {
-		return nil, fmt.Errorf("%s exceeds %d bytes", fileName, maxBytes)
+		return nil, false, fmt.Errorf("%s exceeds %d bytes", fileName, maxBytes)
+	}
+	return data, true, nil
+}
+
+// LoadFromRoot reads and parses taxonomy.yaml. Absence means the shelf has no
+// taxonomy policy; malformed files fail closed.
+func LoadFromRoot(root *os.Root) (*Vocabulary, error) {
+	data, exists, err := ReadFromRoot(root)
+	if err != nil || !exists {
+		return nil, err
 	}
 	return parse(data)
 }
@@ -215,6 +229,73 @@ func (v *Vocabulary) PromptTags(relativePath string, currentTags []string) []str
 	tags = unique(tags)
 	sort.Strings(tags)
 	return tags
+}
+
+type tagRule struct {
+	Tag              string `json:"tag"`
+	Allowed          bool   `json:"allowed"`
+	Kind             bool   `json:"kind"`
+	RequiresLanguage bool   `json:"requires_language"`
+	LanguageSubject  bool   `json:"language_subject"`
+}
+
+// ScopeDigest hashes the complete taxonomy projection used for one document:
+// its prompt tags, current-tag validity, and the validation rules for every
+// tag it may preserve or propose. Proposal validation is restricted to this
+// same scope, so unrelated vocabulary changes do not affect the result.
+func (v *Vocabulary) ScopeDigest(relativePath string, currentTags []string) string {
+	if v == nil {
+		return ""
+	}
+	promptTags := v.PromptTags(relativePath, currentTags)
+	ruleTags := slices.Clone(promptTags)
+	ruleTags = append(ruleTags, currentTags...)
+	ruleTags = unique(ruleTags)
+	sort.Strings(ruleTags)
+	rules := make([]tagRule, 0, len(ruleTags))
+	for _, tag := range ruleTags {
+		_, kind := v.kinds[tag]
+		_, requiresLanguage := v.requiresLanguage[tag]
+		_, languageSubject := v.languageSubjects[tag]
+		rules = append(rules, tagRule{
+			Tag:              tag,
+			Allowed:          v.Allows(tag),
+			Kind:             kind,
+			RequiresLanguage: requiresLanguage,
+			LanguageSubject:  languageSubject,
+		})
+	}
+	var projection strings.Builder
+	writeStrings := func(name string, values []string) {
+		projection.WriteString(name)
+		projection.WriteByte('=')
+		projection.WriteString(strconv.Itoa(len(values)))
+		projection.WriteByte(';')
+		for _, value := range values {
+			projection.WriteString(strconv.Itoa(len(value)))
+			projection.WriteByte(':')
+			projection.WriteString(value)
+		}
+	}
+	writeStrings("prompt", promptTags)
+	writeStrings("current-issues", v.InvalidTagSet(currentTags))
+	projection.WriteString("rules=")
+	projection.WriteString(strconv.Itoa(len(rules)))
+	projection.WriteByte(';')
+	for _, rule := range rules {
+		projection.WriteString(strconv.Itoa(len(rule.Tag)))
+		projection.WriteByte(':')
+		projection.WriteString(rule.Tag)
+		for _, flag := range []bool{rule.Allowed, rule.Kind, rule.RequiresLanguage, rule.LanguageSubject} {
+			if flag {
+				projection.WriteByte('1')
+			} else {
+				projection.WriteByte('0')
+			}
+		}
+	}
+	sum := sha256.Sum256([]byte(projection.String()))
+	return hex.EncodeToString(sum[:])
 }
 
 // TagsForPath returns only kind/subject tags supported by taxonomy.yaml.
@@ -363,9 +444,49 @@ func (v *Vocabulary) requiresLanguageViolations(tags []string) []string {
 	return nil
 }
 
-// ValidateTagChanges permits existing human-authored values to remain, but
-// rejects new tag values not approved by the current taxonomy.
-func (v *Vocabulary) ValidateTagChanges(original, proposed string) error {
+// ValidateTagSetChange permits existing human-authored values to remain, but
+// only permits new values offered in this document's prompt scope. It applies
+// the same kind and language constraints used by InvalidTagSet.
+func (v *Vocabulary) ValidateTagSetChange(relativePath string, original []string, value any) error {
+	if v == nil {
+		return nil
+	}
+	proposed, ok := stringList(value)
+	if !ok {
+		return fmt.Errorf("tags must be a string or list of strings")
+	}
+	remaining := make(map[string]int, len(original))
+	for _, tag := range original {
+		remaining[tag]++
+	}
+	scope := make(map[string]struct{})
+	for _, tag := range v.PromptTags(relativePath, original) {
+		scope[tag] = struct{}{}
+	}
+	for _, tag := range proposed {
+		if remaining[tag] > 0 {
+			remaining[tag]--
+			continue
+		}
+		if !v.Allows(tag) {
+			return fmt.Errorf("tag %q is not listed in taxonomy.yaml", tag)
+		}
+		if _, ok := scope[tag]; !ok {
+			return fmt.Errorf("tag %q is not in the taxonomy prompt scope for %s", tag, relativePath)
+		}
+	}
+	if !slices.Equal(original, proposed) {
+		invalid := append(v.kindViolations(proposed), v.requiresLanguageViolations(proposed)...)
+		if len(invalid) > 0 {
+			return fmt.Errorf("invalid taxonomy tag set: %s", strings.Join(invalid, ", "))
+		}
+	}
+	return nil
+}
+
+// ValidateTagChanges validates a complete proposed document using the
+// document-relative taxonomy scope. Existing human-owned tags may remain.
+func (v *Vocabulary) ValidateTagChanges(relativePath, original, proposed string) error {
 	if v == nil {
 		return nil
 	}
@@ -377,28 +498,11 @@ func (v *Vocabulary) ValidateTagChanges(original, proposed string) error {
 	if err != nil {
 		return err
 	}
-	oldTags := frontmatter.StringList(oldFields, "tags")
-	remaining := make(map[string]int, len(oldTags))
-	for _, tag := range oldTags {
-		remaining[tag]++
-	}
-	newTags := frontmatter.StringList(newFields, "tags")
-	for _, tag := range newTags {
-		if remaining[tag] > 0 {
-			remaining[tag]--
-			continue
-		}
-		if !v.Allows(tag) {
-			return fmt.Errorf("tag %q is not listed in taxonomy.yaml", tag)
-		}
-	}
-	if !slices.Equal(oldTags, newTags) {
-		invalid := append(v.kindViolations(newTags), v.requiresLanguageViolations(newTags)...)
-		if len(invalid) > 0 {
-			return fmt.Errorf("invalid taxonomy tag set: %s", strings.Join(invalid, ", "))
-		}
-	}
-	return nil
+	return v.ValidateTagSetChange(
+		relativePath,
+		frontmatter.StringList(oldFields, "tags"),
+		frontmatter.StringList(newFields, "tags"),
+	)
 }
 
 func stringList(value any) ([]string, bool) {

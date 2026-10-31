@@ -88,11 +88,89 @@ func TestFreshnessVerifyJudgesFlagsAgainstSearchEvidence(t *testing.T) {
 	}
 }
 
+func TestFreshnessVerifyPromptChangeDoesNotRepeatBaseFreshnessPass(t *testing.T) {
+	ctx := context.Background()
+	c, db := taskSetup(t)
+	verifyPromptPath := filepath.Join(c.PromptDirectory, "freshness-verify.md")
+	if err := os.WriteFile(verifyPromptPath, []byte("VERIFY-TASK-v1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(c.RepositoryPath, "a.md")); err != nil {
+		t.Fatal(err)
+	}
+	writeDoc(t, c.RepositoryPath, "tools/curl.md",
+		"---\ntitle: curl\ntags: [tool, curl]\n---\n# curl\n\nThe latest curl release is 8.4.0.\n")
+	if _, err := scanner.Scan(ctx, c, db); err != nil {
+		t.Fatal(err)
+	}
+	searcher := &fakeSearcher{results: []websearch.Result{
+		{Title: "curl changelog", URL: "https://curl.se/changes.html", Content: "curl 8.12.0 released"},
+	}}
+	firstLLM := &fakeLLM{queue: []string{
+		`{"current":false,"summary":"Version pin may be stale.","flags":[{"claim":"latest curl release is 8.4.0","concern":"release claim"}],"suggestions":[]}`,
+		`{"flags":[{"claim":"latest curl release is 8.4.0","verdict":"stale","evidence":"curl 8.12.0 is current","source":"https://curl.se/changes.html"}],"suggestions":[]}`,
+	}}
+	first, err := RunTask(ctx, c, db, Generators{Analysis: firstLLM, Verify: firstLLM, Search: searcher},
+		config.TaskFreshness, RunOptions{WebVerify: true})
+	if err != nil || first.Processed != 1 || len(firstLLM.prompts) != 2 {
+		t.Fatalf("first freshness + verification=%+v err=%v calls=%d", first, err, len(firstLLM.prompts))
+	}
+	baseStamp := docByPath(t, db, "tools/curl.md").FreshnessSHA256
+	if err := os.WriteFile(verifyPromptPath, []byte("VERIFY-TASK-v2"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(ctx, c, db); err != nil {
+		t.Fatal(err)
+	}
+
+	verifyOnlyLLM := &fakeLLM{reply: `{"flags":[{"claim":"latest curl release is 8.4.0","verdict":"current","evidence":"verified against v2 prompt","source":"https://curl.se/changes.html"}],"suggestions":[]}`}
+	second, err := RunTask(ctx, c, db, Generators{Analysis: verifyOnlyLLM, Verify: verifyOnlyLLM, Search: searcher},
+		config.TaskFreshness, RunOptions{WebVerify: true})
+	if err != nil || second.Processed != 1 || len(verifyOnlyLLM.prompts) != 1 {
+		t.Fatalf("verify-only pass=%+v err=%v calls=%d", second, err, len(verifyOnlyLLM.prompts))
+	}
+	if !strings.Contains(verifyOnlyLLM.prompts[0], "VERIFY-TASK-v2") ||
+		strings.Contains(verifyOnlyLLM.prompts[0], "FRESHNESS") {
+		t.Fatalf("expected only the verifier prompt after its edit: %s", verifyOnlyLLM.prompts[0])
+	}
+	doc := docByPath(t, db, "tools/curl.md")
+	if doc.FreshnessSHA256 != baseStamp {
+		t.Fatalf("verification-only refresh changed the base freshness stamp: %q -> %q", baseStamp, doc.FreshnessSHA256)
+	}
+	if doc.FreshnessVerifyPromptSHA == "" {
+		t.Fatal("verification-only pass did not stamp the verifier prompt")
+	}
+}
+
 func TestFreshnessVerifyRequiresSearchClient(t *testing.T) {
 	ctx := context.Background()
 	c, db := taskSetup(t)
 	if _, err := RunTask(ctx, c, db, Generators{Analysis: &fakeLLM{}}, config.TaskFreshness, RunOptions{WebVerify: true}); err == nil {
 		t.Fatal("web-verify without a search client must fail")
+	}
+}
+
+func TestFreshnessVerifyPromptIsRequiredOnlyForOptIn(t *testing.T) {
+	ctx := context.Background()
+	c, db := taskSetup(t)
+	if err := os.Remove(filepath.Join(c.RepositoryPath, "a.md")); err != nil {
+		t.Fatal(err)
+	}
+	writeDoc(t, c.RepositoryPath, "tools/ok.md",
+		"---\ntags: [tool]\n---\n# ok\n\nNothing versioned here.\n")
+	if _, err := scanner.Scan(ctx, c, db); err != nil {
+		t.Fatal(err)
+	}
+	baseLLM := &fakeLLM{reply: `{"current":true,"summary":"ok","flags":[],"suggestions":[]}`}
+	if _, err := RunTask(ctx, c, db, Generators{Analysis: baseLLM}, config.TaskFreshness, RunOptions{}); err != nil {
+		t.Fatalf("base freshness should work without the opt-in verifier prompt: %v", err)
+	}
+	verifyLLM := &fakeLLM{}
+	if _, err := RunTask(ctx, c, db,
+		Generators{Analysis: verifyLLM, Verify: verifyLLM, Search: &fakeSearcher{}},
+		config.TaskFreshness, RunOptions{WebVerify: true}); err == nil ||
+		!strings.Contains(err.Error(), "freshness-verify.md") {
+		t.Fatalf("opt-in web verification should require its prompt: %v", err)
 	}
 }
 
@@ -197,6 +275,19 @@ func TestFreshnessVerifySkipsWhenNoFlags(t *testing.T) {
 	}
 	if r.Processed != 1 || len(searcher.queries) != 0 || len(llm.prompts) != 1 {
 		t.Fatalf("no flags means no search and no second pass: %+v queries=%v", r, searcher.queries)
+	}
+	if err := os.WriteFile(filepath.Join(c.PromptDirectory, "freshness-verify.md"), []byte("VERIFY-TASK-v2"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(ctx, c, db); err != nil {
+		t.Fatal(err)
+	}
+	noCall := &fakeLLM{}
+	again, err := RunTask(ctx, c, db, Generators{Analysis: noCall, Verify: noCall, Search: searcher},
+		config.TaskFreshness, RunOptions{WebVerify: true})
+	if err != nil || again.Skipped != 1 || len(noCall.prompts) != 0 || len(searcher.queries) != 0 {
+		t.Fatalf("verify prompt change with no saved flags should only advance lineage: result=%+v err=%v prompts=%v queries=%v",
+			again, err, noCall.prompts, searcher.queries)
 	}
 }
 

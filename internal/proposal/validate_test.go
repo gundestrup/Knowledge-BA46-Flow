@@ -128,6 +128,18 @@ func TestValidateRewrite(t *testing.T) {
 	}
 }
 
+func TestValidateTagsUnchanged(t *testing.T) {
+	original := "---\ntags: [tool, shell]\n---\n# Note\n\nKeep the body.\n"
+	additive := "---\ntags: [tool, shell]\n---\n# Note\n\nKeep the body.\n\nMore detail.\n"
+	if err := ValidateTagsUnchanged(original, additive); err != nil {
+		t.Fatalf("unchanged tags rejected: %v", err)
+	}
+	changed := "---\ntags: [tool, shell, new-tag]\n---\n# Note\n\nKeep the body.\n\nMore detail.\n"
+	if err := ValidateTagsUnchanged(original, changed); err == nil {
+		t.Fatal("body-only guard accepted a tag change")
+	}
+}
+
 func TestValidateMove(t *testing.T) {
 	for _, tt := range []struct {
 		source string

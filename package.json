@@ -1,6 +1,6 @@
 {
   "name": "knowledge-ba46-flow-frontend",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A small Go MVP for maintaining a markdown-based knowledge repository. The command-line tool is called KBM-flow.",
   "author": "Svend Gundestrup",
   "license": "AGPL-3.0-or-later",

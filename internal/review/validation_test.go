@@ -150,6 +150,61 @@ function: [testing]
 	}
 }
 
+func TestApplyRejectsGloballyAllowedTagOutsidePromptScope(t *testing.T) {
+	repo := t.TempDir()
+	original := "---\ntags: [tool]\n---\n# Note\n"
+	proposed := "---\ntags: [tool, jekyll]\n---\n# Note\n\nMore context.\n"
+	if err := os.WriteFile(filepath.Join(repo, "taxonomy.yaml"), []byte(`version: 1
+kind: [tool, framework, library, database, cms, programming-language]
+kind-dependent: [framework, library, cms]
+requires-language: [framework, library, cms]
+subject:
+  platforms: [jekyll]
+  languages: [css, ruby]
+function: [testing]
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(repo, "tools", "source.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+	err := applyOne(config.Config{RepositoryPath: repo, WriteScope: "all"}, database.Suggestion{
+		Action: "expand", DocumentPath: "tools/source.md", ProposedContent: proposed,
+	})
+	if err == nil || !strings.Contains(err.Error(), "prompt scope") {
+		t.Fatalf("accepted globally allowed but off-scope tag: %v", err)
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil || string(got) != original {
+		t.Fatalf("source changed after off-scope tag rejection: %q error=%v", got, readErr)
+	}
+}
+
+func TestApplyRejectsFreshnessTagChanges(t *testing.T) {
+	repo := t.TempDir()
+	original := "---\ntags: [tool]\n---\n# Note\n\nA dated claim.\n"
+	proposed := "---\ntags: [tool, testing]\n---\n# Note\n\nA dated claim.\n\nAs of 2026, the correction.\n"
+	path := filepath.Join(repo, "source.md")
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+	err := applyOne(config.Config{RepositoryPath: repo, WriteScope: "all"}, database.Suggestion{
+		Action: "expand", DocumentPath: "source.md", Reason: "Freshness correction",
+		Origin: "freshness", ProposedContent: proposed,
+	})
+	if err == nil || !strings.Contains(err.Error(), "preserve existing tags") {
+		t.Fatalf("accepted freshness tag change: %v", err)
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil || string(got) != original {
+		t.Fatalf("source changed after freshness tag rejection: %q error=%v", got, readErr)
+	}
+}
+
 func TestApplyRejectsLinkThroughExternalSymlink(t *testing.T) {
 	repo, outside := t.TempDir(), t.TempDir()
 	if err := os.WriteFile(filepath.Join(outside, "private.md"), []byte("# Private"), 0644); err != nil {
