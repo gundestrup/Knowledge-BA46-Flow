@@ -1,6 +1,7 @@
 package mcppolicy
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,4 +124,38 @@ func TestAssertMutationAllowedRejectsOversizedPolicy(t *testing.T) {
 	if err := AssertMutationAllowed(root, "note.md"); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("error=%v, want oversized policy rejection", err)
 	}
+}
+
+// FuzzAssertMutationAllowed pins the fail-closed contract on arbitrary policy
+// bytes: the check may allow or deny, but it never panics and every rejection
+// wraps ErrDenied — no raw error leaks past the policy gate.
+func FuzzAssertMutationAllowed(f *testing.F) {
+	for _, seed := range []string{
+		`{"mutations":"deny"}`,
+		`{"mutations":"allow"}`,
+		`{"mutations":null}`,
+		`{}`,
+		`{`,
+		`{"mutations":true}`,
+		`{"mutations":"sometimes"}`,
+		`{"other":true}`,
+		`[]`,
+		"",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, policy string) {
+		repo := t.TempDir()
+		if err := os.WriteFile(filepath.Join(repo, writePolicyFilename), []byte(policy), 0600); err != nil {
+			t.Fatal(err)
+		}
+		root, err := os.OpenRoot(repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer root.Close()
+		if err := AssertMutationAllowed(root, "note.md"); err != nil && !errors.Is(err, ErrDenied) {
+			t.Fatalf("rejection does not wrap ErrDenied: %v", err)
+		}
+	})
 }

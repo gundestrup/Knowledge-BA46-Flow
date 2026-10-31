@@ -6,6 +6,7 @@ import (
 )
 
 func TestIdenticalDocumentsScoreOne(t *testing.T) {
+	t.Parallel()
 	text := strings.Repeat("the quick brown fox jumps over the lazy dog ", 20)
 	sig := Signature(text)
 	if len(sig) == 0 {
@@ -17,6 +18,7 @@ func TestIdenticalDocumentsScoreOne(t *testing.T) {
 }
 
 func TestDifferentDocumentsScoreLow(t *testing.T) {
+	t.Parallel()
 	a := Signature(strings.Repeat("kubernetes pods deployments services ingress ", 20))
 	b := Signature(strings.Repeat("sourdough starter flour hydration fermentation ", 20))
 	if got := Estimate(a, b); got > 0.1 {
@@ -25,6 +27,7 @@ func TestDifferentDocumentsScoreLow(t *testing.T) {
 }
 
 func TestNearDuplicatesScoreHigh(t *testing.T) {
+	t.Parallel()
 	base := strings.Repeat("install the package then configure the daemon and restart ", 20)
 	a := Signature(base + "see the troubleshooting section")
 	b := Signature(base + "see the appendix for details")
@@ -34,6 +37,7 @@ func TestNearDuplicatesScoreHigh(t *testing.T) {
 }
 
 func TestEmbeddingMarshalRoundTrip(t *testing.T) {
+	t.Parallel()
 	embedding := []float32{0.5, -1.25, 3.14159, 0}
 	got := UnmarshalEmbedding(MarshalEmbedding(embedding))
 	if len(got) != len(embedding) {
@@ -52,6 +56,7 @@ func TestEmbeddingMarshalRoundTrip(t *testing.T) {
 }
 
 func TestCosine(t *testing.T) {
+	t.Parallel()
 	unit := []float32{0.6, 0.8} // |v| = 1
 	if got := Cosine(unit, unit); got != 1.0 {
 		t.Errorf("identical vectors: %f, want 1", got)
@@ -78,6 +83,7 @@ func TestCosine(t *testing.T) {
 }
 
 func TestMarshalRoundTrip(t *testing.T) {
+	t.Parallel()
 	sig := Signature("one two three four five six seven eight nine ten")
 	got := Unmarshal(Marshal(sig))
 	if len(got) != len(sig) {
@@ -94,6 +100,7 @@ func TestMarshalRoundTrip(t *testing.T) {
 }
 
 func TestShortAndEmptyDocuments(t *testing.T) {
+	t.Parallel()
 	if sig := Signature(""); len(sig) != 0 {
 		t.Fatalf("empty input: %v", sig)
 	}
@@ -109,6 +116,7 @@ func TestShortAndEmptyDocuments(t *testing.T) {
 }
 
 func TestIncrementalMatchesOneShot(t *testing.T) {
+	t.Parallel()
 	text := "alpha beta gamma delta epsilon zeta eta theta iota kappa"
 	sk := NewSketcher()
 	for _, w := range strings.Fields(text) {
@@ -137,8 +145,7 @@ func BenchmarkSketch(b *testing.B) {
 	text := doc.String()
 	b.SetBytes(int64(len(text)))
 	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		Signature(text)
 	}
 }

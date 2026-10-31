@@ -203,6 +203,7 @@ Relevant notes:
 - `tools/knowledge-base-mcp-server.md`
 - `languages/go.md`
 - `patterns/local-llm.md`
+- `patterns/go-testing.md`
 - `patterns/version-consistency.md`
 - `patterns/npm-supply-chain-hardening.md`
 - `tools/github-actions.md`

@@ -36,6 +36,7 @@ function:
 `
 
 func TestTagsForPathUsesOnlyApprovedKindAndSubject(t *testing.T) {
+	t.Parallel()
 	vocabulary := mustParse(t, []byte(testTaxonomy))
 	for path, want := range map[string][]string{
 		"languages/ruby.md":                  {"programming-language", "ruby"},
@@ -55,6 +56,7 @@ func TestTagsForPathUsesOnlyApprovedKindAndSubject(t *testing.T) {
 }
 
 func TestRequiresLanguageRuleRejectsUnscopedDependentKinds(t *testing.T) {
+	t.Parallel()
 	vocabulary := mustParse(t, []byte(testTaxonomy))
 	if invalid := vocabulary.InvalidTagSet([]string{"framework", "testing"}); len(invalid) == 0 {
 		t.Fatal("framework without a language subject passed")
@@ -71,6 +73,7 @@ func TestRequiresLanguageRuleRejectsUnscopedDependentKinds(t *testing.T) {
 }
 
 func TestTaxonomyValidatesNewTagsButPreservesExistingHumanValues(t *testing.T) {
+	t.Parallel()
 	vocabulary := mustParse(t, []byte(testTaxonomy))
 	original := "---\ntags: [framework, legacy-custom]\n---\n# Note\n"
 	if err := vocabulary.ValidateTagChanges(original, "---\ntags: [framework, legacy-custom, css]\n---\n# Note\n"); err != nil {
@@ -82,6 +85,7 @@ func TestTaxonomyValidatesNewTagsButPreservesExistingHumanValues(t *testing.T) {
 }
 
 func TestPromptTagsExcludeStoredUnapprovedTags(t *testing.T) {
+	t.Parallel()
 	vocabulary := mustParse(t, []byte(testTaxonomy))
 	got := vocabulary.PromptTags("languages/ruby.md", []string{"ruby", "invented-model-tag"})
 	if !slices.Contains(got, "programming-language") || !slices.Contains(got, "testing") ||
@@ -91,6 +95,7 @@ func TestPromptTagsExcludeStoredUnapprovedTags(t *testing.T) {
 }
 
 func TestLoadFromRootIsOptionalAndFailsClosedOnMalformedTaxonomy(t *testing.T) {
+	t.Parallel()
 	rootPath := t.TempDir()
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
@@ -110,6 +115,7 @@ func TestLoadFromRootIsOptionalAndFailsClosedOnMalformedTaxonomy(t *testing.T) {
 }
 
 func TestLoadReadsTaxonomyFromRepository(t *testing.T) {
+	t.Parallel()
 	// Missing taxonomy.yaml is not an error — a repository may legitimately
 	// carry no vocabulary and callers treat nil as "unrestricted".
 	dir := t.TempDir()
@@ -143,6 +149,7 @@ func TestLoadReadsTaxonomyFromRepository(t *testing.T) {
 }
 
 func TestParseValidatesWithoutFilesystem(t *testing.T) {
+	t.Parallel()
 	v, err := Parse([]byte(testTaxonomy))
 	if err != nil {
 		t.Fatal(err)
@@ -165,6 +172,7 @@ func TestParseValidatesWithoutFilesystem(t *testing.T) {
 }
 
 func TestInvalidTagsForPathExemptsIndexReadme(t *testing.T) {
+	t.Parallel()
 	vocabulary := mustParse(t, []byte(testTaxonomy))
 	// A dependent kind without a language subject violates requires-language —
 	// except on an aggregating index README. jekyll is a framework subject,
@@ -198,6 +206,7 @@ func mustParse(t *testing.T, data []byte) *Vocabulary {
 }
 
 func TestAllowedTagsReturnsSortedApprovedSet(t *testing.T) {
+	t.Parallel()
 	var nilVocab *Vocabulary
 	if got := nilVocab.AllowedTags(); got != nil {
 		t.Fatalf("nil vocabulary should have no tags: %v", got)
@@ -210,4 +219,45 @@ func TestAllowedTagsReturnsSortedApprovedSet(t *testing.T) {
 	if !slices.Contains(got, "ruby") || !slices.Contains(got, "tool") {
 		t.Fatalf("approved subject/kind tags missing: %v", got)
 	}
+}
+
+// FuzzParse pins the fail-closed contract on arbitrary taxonomy bytes: parse
+// is deterministic, never panics, and a nil error always yields a usable
+// vocabulary whose AllowedTags are exactly the tags Allows accepts.
+func FuzzParse(f *testing.F) {
+	for _, seed := range []string{
+		testTaxonomy,
+		"version: 1\nkind: [tool]\nsubject: {x: [y]}\n",
+		"version: 2\nkind: [tool]\nsubject: {x: [y]}\n",
+		"version: 1\nkind: [Bad Tag]\nsubject: {x: [y]}\n",
+		"::: not yaml",
+		"",
+		"\xff\xfe binary",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, data string) {
+		v1, err1 := Parse([]byte(data))
+		v2, err2 := Parse([]byte(data))
+		if (err1 == nil) != (err2 == nil) {
+			t.Fatalf("Parse not deterministic: %v vs %v", err1, err2)
+		}
+		if err1 != nil {
+			return
+		}
+		if v1 == nil || v2 == nil {
+			t.Fatalf("successful parse returned nil vocabulary for %q", data)
+		}
+		for _, tag := range v1.AllowedTags() {
+			if !v1.Allows(tag) {
+				t.Fatalf("AllowedTags lists %q but Allows rejects it", tag)
+			}
+			if !slices.Contains(v2.AllowedTags(), tag) {
+				t.Fatalf("AllowedTags not deterministic for %q", tag)
+			}
+		}
+		// Fuzzed vocabularies must stay safe under the path/tag queries.
+		_ = v1.TagsForPath("frameworks/css/x.md")
+		_ = v1.InvalidTagSet([]string{"framework", "bogus"})
+	})
 }

@@ -7,6 +7,7 @@ import (
 )
 
 func TestInternalTargets(t *testing.T) {
+	t.Parallel()
 	body := `See [the guide](../guides/x.md) and [sibling](sib.md).
 External [site](https://example.com) and [mail](mailto:a@b.c) are out.
 Anchors like [jump](#section) and absolute [root](/abs.md) are skipped.
@@ -19,6 +20,7 @@ Anchors like [jump](#section) and absolute [root](/abs.md) are skipped.
 }
 
 func TestExternalURLs(t *testing.T) {
+	t.Parallel()
 	body := `Docs: [site](https://example.com/path).
 Bare https://other.example/a?b=1, and https://dup.example same as [dup](https://dup.example).
 ` + "```\nhttps://in-fence.example\n```\n`https://inline.example` skipped."
@@ -30,6 +32,7 @@ Bare https://other.example/a?b=1, and https://dup.example same as [dup](https://
 }
 
 func TestInternalCandidates(t *testing.T) {
+	t.Parallel()
 	got := InternalCandidates("tools/x.md", "../guides/g.md#s")
 	if !slices.Equal(got, []string{"guides/g.md", "../guides/g.md"}) {
 		t.Fatalf("candidates=%v", got)
@@ -44,6 +47,7 @@ func TestInternalCandidates(t *testing.T) {
 }
 
 func TestIsDocumentTarget(t *testing.T) {
+	t.Parallel()
 	for target, ok := range map[string]bool{
 		"x.md": true, "x.markdown": true, "x.md#sec": true,
 		"x.png": false, "x": false, "x.txt": false,
@@ -101,6 +105,7 @@ func FuzzInternalTargets(f *testing.F) {
 // TestRetarget rewrites destinations to a moved document's new path while
 // leaving live links, code, external URLs and anchors untouched.
 func TestRetarget(t *testing.T) {
+	t.Parallel()
 	renames := map[string]string{"sub/old.md": "archive/old.md", "a.md": "b.md"}
 	retarget := func(old string) (string, bool) {
 		n, ok := renames[old]
@@ -138,6 +143,7 @@ Link in inline code stays: ` + "`[x](old.md)`" + `.
 }
 
 func TestRetargetPreservesLiveAndIdentityLinks(t *testing.T) {
+	t.Parallel()
 	body := "[catalog](../frameworks/css/README.md) [local](README.md)\n"
 	for _, live := range []bool{true, false} {
 		got := Retarget("languages/scss.md", body, func(path string) (string, bool) {
@@ -157,6 +163,7 @@ func TestRetargetPreservesLiveAndIdentityLinks(t *testing.T) {
 }
 
 func TestRetargetPreservesSuffixAndRejectsUnsafeEndpoint(t *testing.T) {
+	t.Parallel()
 	for next, want := range map[string]string{
 		"archive/new.md":      "[note](../archive/new.md?view=1#part)",
 		"../outside.md":       "[note](old.md?view=1#part)",

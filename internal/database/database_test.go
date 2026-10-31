@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -1370,19 +1371,21 @@ func TestRunHeartbeatTicksUntilStopped(t *testing.T) {
 		t.Fatal(err)
 	}
 	initial := heartbeatAt(t, db, job.ID)
-	stop := db.runHeartbeat(ctx, job.ID, 5*time.Millisecond)
-	deadline := time.Now().Add(2 * time.Second)
-	updated := ""
-	for time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-		if updated = heartbeatAt(t, db, job.ID); updated > initial {
-			break
+	// The heartbeat loop is ticker-driven, so a synctest bubble fires every
+	// tick on the fake clock instead of real milliseconds: the test is
+	// deterministic and instant. The bubble clock starts at 2000-01-01, so
+	// any written heartbeat differs from the real-clock initial value.
+	synctest.Test(t, func(t *testing.T) {
+		stop := db.runHeartbeat(ctx, job.ID, 5*time.Millisecond)
+		// Sleeping durably blocks this goroutine, which advances the fake
+		// clock and fires the 5ms ticker several times.
+		time.Sleep(20 * time.Millisecond)
+		stop()
+		synctest.Wait()
+		if updated := heartbeatAt(t, db, job.ID); updated == "" || updated == initial {
+			t.Fatalf("heartbeat did not advance: initial=%q got=%q", initial, updated)
 		}
-	}
-	stop()
-	if updated == "" || updated <= initial {
-		t.Fatalf("heartbeat did not advance: initial=%q got=%q", initial, updated)
-	}
+	})
 }
 
 func TestDerivedStateUpdatesAndTaskStamps(t *testing.T) {

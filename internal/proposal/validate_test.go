@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"knowledge-ba46-flow/internal/frontmatter"
 )
 
 func TestValidateLinkRepair(t *testing.T) {
@@ -176,4 +178,59 @@ func TestCodeSpansMatchFenceLengthsAndInlineRuns(t *testing.T) {
 	if len(got) != 3 || got[1] != "``a ` b``" || got[2] != "`x`" {
 		t.Fatalf("spans=%q", got)
 	}
+}
+
+// FuzzValidateRewrite pins two contracts on arbitrary model output: validation
+// never panics and is deterministic, and a byte-identical proposal is always
+// accepted for any original that parses with clean frontmatter.
+func FuzzValidateRewrite(f *testing.F) {
+	for _, seed := range [][2]string{
+		{"# Title\n\nKeep this.\n", "# Title\n\nKeep this.\n\nMore.\n"},
+		{"---\ntags: [go]\n---\nBody\n", "---\ntags: [go, x]\n---\nBody\n"},
+		{"---\ntitle: Old\n---\nBody\n", "---\ntitle: New\n---\nBody\n"},
+		{"Body with `code` span.\n", "Body with `changed` span.\n"},
+		{"", ""},
+		{"---\nbad: [unclosed\n", "anything"},
+		{"---\nkb_policy: {no_llm_context: true}\n---\nB\n", "---\nkb_policy: {no_llm_context: false}\n---\nB\n"},
+	} {
+		f.Add(seed[0], seed[1])
+	}
+	f.Fuzz(func(t *testing.T, original, proposed string) {
+		err1 := ValidateRewrite(original, proposed)
+		err2 := ValidateRewrite(original, proposed)
+		if (err1 == nil) != (err2 == nil) {
+			t.Fatalf("validation not deterministic: %v vs %v", err1, err2)
+		}
+		fields, _, perr := frontmatter.Parse(original)
+		if perr == nil && len(frontmatter.Validate(fields)) == 0 && strings.TrimSpace(original) != "" {
+			if err := ValidateRewrite(original, original); err != nil {
+				t.Fatalf("byte-identical rewrite rejected: %v (original %q)", err, original)
+			}
+		}
+	})
+}
+
+// FuzzValidateMove pins the move-guard invariants: arbitrary path pairs never
+// panic, and a cleaned source equal to its target is always rejected.
+func FuzzValidateMove(f *testing.F) {
+	for _, seed := range [][2]string{
+		{"frameworks/shell/README.md", "patterns/shell.md"},
+		{"a.md", "a.md"},
+		{"a.md", "b.txt"},
+		{"a.md", "../outside.md"},
+		{"", ""},
+		{"x/../a.md", "./a.md"},
+	} {
+		f.Add(seed[0], seed[1])
+	}
+	f.Fuzz(func(t *testing.T, source, target string) {
+		err1 := ValidateMove(source, target)
+		err2 := ValidateMove(source, target)
+		if (err1 == nil) != (err2 == nil) {
+			t.Fatalf("validation not deterministic: %v vs %v", err1, err2)
+		}
+		if source == target && source != "" && err1 == nil {
+			t.Fatalf("identical source/target %q accepted", source)
+		}
+	})
 }

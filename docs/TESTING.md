@@ -188,6 +188,47 @@ it stays runnable on headless machines; set `KBM_E2E_CHROME` (or
 services and deletes its temporary fixture on exit. `window.confirm` is
 stubbed via CDP for the apply confirmation — the only dialog in the app.
 
+## Screencast recording (demo videos)
+
+`scripts/e2e/screencast-knowlege.mjs` and `scripts/e2e/screencast-report.mjs`
+reuse the same CDP stack to produce demo videos of the knowledge and report
+pages. Shared fixture/recording/encode code lives in
+`scripts/e2e/lib/screencast-demo.mjs`:
+
+```bash
+node scripts/e2e/screencast-knowlege.mjs   # -> docs/assets/screencasts/screencast-knowlege.mp4
+node scripts/e2e/screencast-report.mjs     # -> docs/assets/screencasts/screencast-report.mp4
+KBM_DEMO_OUT=/tmp/demo.mp4 node scripts/e2e/screencast-knowlege.mjs
+```
+
+- Capture is `Page.startScreencast` with `format: "png"` — lossless frames,
+  emitted on repaint only (frame count varies per take; wall-clock and video
+  time diverge).
+- Each `step("name")` in a script becomes an **mp4 chapter**: chapter time is
+  frame-index / 2.5 fps, never wall clock; zero-length chapters are dropped.
+- Frames persist under `data/screencast-frames/<name>/` (gitignored) so the
+  approve-then-convert gap survives reboots.
+- The mp4 gets `-movflags +faststart` for progressive playback.
+- The fixture corpus is a curated set of themed notes (varied
+  titles/tags/status/links) padded with generated filler —
+  `KBM_DEMO_DOCS=<n>` controls total size — and `seed -rich` seeds
+  suggestions across the expand/move/merge actions and all origins.
+
+After reviewing the mp4, `scripts/e2e/screencast-convert.mjs` derives the
+animated web formats — feed it the durable frames dir (lossless source, no
+mp4 generation loss) or the mp4 as fallback:
+
+```bash
+node scripts/e2e/screencast-convert.mjs data/screencast-frames/knowlege \
+    --name screencast-knowlege          # -> .apng .webp .avif .svg
+```
+
+Knobs: `--scale 640` (embed width), `--fps` (playback speed, not
+smoothness), `--crf 35` (AVIF, SVT-AV1 `-preset 4` via `--preset`),
+`--quality 80` (WebP lossy, `-m 6` effort), `--svg-payload webp|avif`.
+Benchmarks and the rejected-alternative list are in the engineering-memory
+note `workflows/ui-screencast-animated-formats.md`.
+
 The e2e suite is not part of `make check`: it needs a system browser and a
 longer runtime. Run it after frontend changes, and in particular after any
 edit to Alpine expressions or component methods.
@@ -447,7 +488,12 @@ The tests cover:
   (fm+body always concatenates to the canonical form), `FuzzSetManaged`
   (successful writes are hash-neutral and re-parseable), `FuzzExternalURLs`
   and `FuzzInternalTargets` (every reported target is a verbatim substring
-  of the source). Fuzzer-discovered crashers persist in `testdata/fuzz/`
+  of the source), `FuzzAssertMutationAllowed` (every `.kb-policy.json`
+  rejection wraps `ErrDenied`), `FuzzValidateRewrite` (deterministic, and a
+  byte-identical non-blank original is always valid), `FuzzValidateMove`
+  (deterministic, identical source/target always rejected) and taxonomy
+  `FuzzParse` (a nil error always yields a usable vocabulary).
+  Fuzzer-discovered crashers persist in `testdata/fuzz/`
   and replay on every `go test` run; deeper runs use
   `go test -fuzz=FuzzX -fuzztime=30s` locally.
 - a malformed-frontmatter matrix: invalid UTF-8, NUL bytes, duplicate keys
@@ -457,7 +503,14 @@ The tests cover:
 - benchmarks for the hot paths the suite must keep cheap:
   `BenchmarkSignature`/`BenchmarkCosine` (similarity),
   `BenchmarkCanonicalParts` (per-file hashing), `BenchmarkScanRescan`
-  (incremental re-scan)
+  (incremental re-scan) — all use the Go 1.24+ `for b.Loop()` form
+- `testing/synctest` for the ticker-driven job heartbeat:
+  `TestRunHeartbeatTicksUntilStopped` advances the bubble's fake clock with
+  `time.Sleep` instead of polling for up to 2s on the real clock. HTTP
+  polls of real background jobs (`waitForJob`, model-selection ops) stay
+  real-time — they wait on work outside any bubble
+- `t.Parallel()` on the pure-function tests in `internal/similarity`,
+  `internal/links` and `internal/taxonomy`
 - shared proposal guards in analysis and apply, including old accepted rows:
   missing headings/caveats, padded lossy rewrites, regex/indentation corruption,
   invented provenance, invalid/unresolved/traversing graph links, README-to-script
