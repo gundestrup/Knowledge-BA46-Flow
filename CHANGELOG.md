@@ -9,6 +9,35 @@ tag is prepared.
 
 ## [Unreleased]
 
+### Added
+
+- Screencast tooling under `scripts/e2e/`: `screencast-knowlege.mjs` and
+  `screencast-report.mjs` record chaptered mp4 tours of the two pages in
+  headless Chrome (lossless PNG `Page.startScreencast` frames, durable
+  `data/screencast-frames/` source), and `screencast-convert.mjs` derives
+  APNG/WebP/AVIF/SVG animated assets into `docs/assets/screencasts/`
+  (see `docs/TESTING.md` "Screencast recording").
+- Fuzz targets on the remaining fail-closed boundaries:
+  `FuzzAssertMutationAllowed` (`.kb-policy.json` rejections always wrap
+  `ErrDenied`), `FuzzValidateRewrite`/`FuzzValidateMove` (proposal guards
+  are deterministic; a byte-identical non-blank original is always valid),
+  and taxonomy `FuzzParse` (a nil error always yields a usable vocabulary).
+
+### Changed
+
+- `TestRunHeartbeatTicksUntilStopped` now runs inside a
+  `testing/synctest` bubble — the ticker-driven heartbeat is exercised on
+  the fake clock instead of a 2s real-time poll, making it deterministic
+  under `-race`.
+- Pure-function tests in `internal/similarity`, `internal/links` and
+  `internal/taxonomy` run with `t.Parallel()`; `BenchmarkSketch` uses the
+  Go 1.24+ `for b.Loop()` form.
+- Dependencies: `modernc.org/sqlite` v1.60.1 → v1.61.0,
+  `golang.org/x/net` v0.60.0 → v0.62.0 (closes GO-2026-6866 and
+  GO-2026-6860, both unreachable but now patched),
+  `github.com/nicksnyder/go-i18n/v2` v2.6.1 → v2.7.0, and vendored
+  Chart.js v4.5.1 → v4.6.1.
+
 ## [0.1.0] - 2026-10-28
 
 ### Added
