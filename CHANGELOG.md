@@ -17,6 +17,13 @@ tag is prepared.
   no model calls. Legacy rows stop taking the conservative heuristic sweep
   immediately instead of after a re-analysis pass.
 
+### Fixed
+
+- Dashboard/report progress bars no longer crash on a zero-total job detail
+  (`N/0`): `jobPercent` now guards the denominator the way `jobPhase`
+  already did — Alpine threw `non-finite value` binding `Infinity` to the
+  `<progress>` element.
+
 ### Changed
 
 - Dependents now report _why_ they queue: each evidence-dependent emits a
