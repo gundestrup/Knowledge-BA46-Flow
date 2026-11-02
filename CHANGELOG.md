@@ -22,7 +22,8 @@ tag is prepared.
 - Dashboard/report progress bars no longer crash on a zero-total job detail
   (`N/0`): `jobPercent` now guards the denominator the way `jobPhase`
   already did — Alpine threw `non-finite value` binding `Infinity` to the
-  `<progress>` element.
+  `<progress>` element; `scripts/test-progress-helpers.mjs` now pins the
+  edge cases for both components.
 
 ### Changed
 
