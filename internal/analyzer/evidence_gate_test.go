@@ -64,8 +64,9 @@ func TestEmbeddingDependentsRespectCalibratedGate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Editing the anchor makes it pending and its stored vector stale — the
-	// dry-run estimate has no embedder, so it reports the pending queue only.
+	// Editing the anchor makes it pending and its stored vector stale. The
+	// dry-run has no embedder for new-neighbor projection, but it still counts
+	// the nearby notes whose saved prompts actually consumed the anchor.
 	write("changed.md", "# Changed\n\nanchor words revised.")
 	if _, err := scanner.Scan(ctx, c, db); err != nil {
 		t.Fatal(err)
@@ -74,13 +75,13 @@ func TestEmbeddingDependentsRespectCalibratedGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if est.Pending != 1 || est.Total != 1 {
-		t.Fatalf("dry-run estimate=%+v, want pending=1 total=1", est)
+	if est.Pending != 1 || est.Dependents == 0 || est.Total != 1+est.Dependents {
+		t.Fatalf("dry-run estimate=%+v, want one direct item plus recorded evidence dependents", est)
 	}
 
-	// The real run backfills the anchor's vector into the cluster; the sweep
-	// may then pull at most evidenceNeighborLimit nearest neighbors — never
-	// the far notes, never a whole-corpus pass like the old absolute bar.
+	// The real run backfills the anchor's vector into the cluster; its
+	// calibrated projection may add at most the capped nearest-neighbor set
+	// beyond the dependents already proven by saved prompt evidence.
 	emb := switchingEmbedder(func(context.Context, string) ([]float32, error) {
 		v := make([]float32, 48)
 		v[0] = 1
@@ -91,8 +92,11 @@ func TestEmbeddingDependentsRespectCalibratedGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Processed != 1+evidenceNeighborLimit {
-		t.Fatalf("processed=%d, want %d (anchor + capped neighbors)", result.Processed, 1+evidenceNeighborLimit)
+	if result.Processed != 1+result.Dependents {
+		t.Fatalf("processed=%d, direct=%d dependents=%d", result.Processed, 1, result.Dependents)
+	}
+	if result.Dependents > est.Dependents+evidenceNeighborLimit {
+		t.Fatalf("dependents=%d exceeded exact evidence %d plus neighbor cap %d", result.Dependents, est.Dependents, evidenceNeighborLimit)
 	}
 	for _, prompt := range second.prompts {
 		if strings.Contains(prompt, "Current path: far-") {

@@ -709,7 +709,7 @@ func TestAnalyzeAndRunJobsWithoutPendingDocuments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(detail, "Scanned 1 markdown files; 0 new/changed. 1 document IDs assigned. Analyzed 0; fast-enriched 0; locally enriched 0; skipped 0 by MCP policy; failed 0 (model ") ||
+	if !strings.HasPrefix(detail, "Scanned 1 markdown files; 0 new/changed. 1 document IDs assigned. Analyzed 0; queue 0 direct + 0 evidence dependents; fast-enriched 0; locally enriched 0; skipped 0 by MCP policy; failed 0 (model ") ||
 		!strings.HasSuffix(detail, "; rejected 0 unsafe edit(s); skipped 0 stub placeholder(s).") {
 		t.Fatalf("analyze detail=%q", detail)
 	}
@@ -718,7 +718,7 @@ func TestAnalyzeAndRunJobsWithoutPendingDocuments(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(detail, "Scanned 1 markdown files; 0 new/changed.") ||
-		!strings.Contains(detail, "Analyzed 0; fast-enriched 0; locally enriched 0; skipped 0 by MCP policy; failed 0 (model ") ||
+		!strings.Contains(detail, "Analyzed 0; queue 0 direct + 0 evidence dependents; fast-enriched 0; locally enriched 0; skipped 0 by MCP policy; failed 0 (model ") ||
 		!strings.Contains(detail, "skipped 0 stub placeholder(s)") {
 		t.Fatalf("run detail=%q", detail)
 	}

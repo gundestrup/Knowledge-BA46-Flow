@@ -112,12 +112,14 @@ type Result struct {
 	Failed           int
 	Rejected         int // unsafe model proposals omitted from review
 	EnrichmentFailed int // optional generation failures; full analysis can still succeed
+	DirectPending    int // documents selected by the task's own pending fingerprints
+	Dependents       int // unchanged docs re-analyzed because their evidence drifted
 }
 
 // Summary keeps CLI and HTTP job reporting consistent about optional failures.
 func (r Result) Summary(model, fastModel string) string {
-	return fmt.Sprintf("Analyzed %d; fast-enriched %d; locally enriched %d; skipped %d by MCP policy; failed %d (model %s, fast %s); enrichment failures %d (retryable); rejected %d unsafe edit(s); skipped %d stub placeholder(s).",
-		r.Processed, r.Enriched, r.LocalEnriched, r.Skipped, r.Failed, model, fastModel, r.EnrichmentFailed, r.Rejected, r.Stubs)
+	return fmt.Sprintf("Analyzed %d; queue %d direct + %d evidence dependents; fast-enriched %d; locally enriched %d; skipped %d by MCP policy; failed %d (model %s, fast %s); enrichment failures %d (retryable); rejected %d unsafe edit(s); skipped %d stub placeholder(s).",
+		r.Processed, r.DirectPending, r.Dependents, r.Enriched, r.LocalEnriched, r.Skipped, r.Failed, model, fastModel, r.EnrichmentFailed, r.Rejected, r.Stubs)
 }
 
 // Progress reports one step of document analysis. Outcome is "enriching" or
@@ -291,11 +293,12 @@ type RunOptions struct {
 // Optional enrichment model failures are warnings and do not block analysis.
 // Source/read and full-analysis failures are recorded as status='error';
 // neither kind of per-document failure aborts the run.
-func RunProgress(ctx context.Context, c config.Config, db *database.DB, gens Generators, opts RunOptions) (Result, error) {
-	models, err := resolveRunModels(c, opts)
-	if err != nil {
-		return Result{}, err
-	}
+// newPipeline wires the shared per-run state: the progress emitter, the
+// active lane and the resolved model names. enrichCapable reports whether the
+// caller has an enrichment client — enrichment is a shared local stage that
+// runs whenever a distinct fast model is configured (comparing against the
+// resolved analysis model would wrongly enable it on every external run).
+func newPipeline(ctx context.Context, c config.Config, db *database.DB, gens Generators, opts RunOptions, models runModels, enrichCapable bool) *pipeline {
 	p := &pipeline{
 		ctx: ctx, c: c, db: db, gens: gens, opts: opts,
 		emit: func(pr Progress) {
@@ -308,19 +311,17 @@ func RunProgress(ctx context.Context, c config.Config, db *database.DB, gens Gen
 		analysisModel: models.analysis,
 		embedModel:    models.embed,
 	}
-	// Enrichment is a shared local stage: it runs (and is pending) whenever a
-	// distinct fast model is configured — comparing against the resolved
-	// analysis model would wrongly enable it on every external run.
-	p.enrichOn = gens.Enrich != nil && (p.fastModel != c.OllamaModel || opts.EnrichOnly)
-	var docs []database.Document
-	switch {
-	case opts.EnrichOnly:
-		docs, err = db.PendingEnrich(ctx, p.fastModel, opts.Reanalyze, opts.ReanalyzeAll)
-	case p.external:
-		docs, err = db.PendingExternal(ctx, p.analysisModel, p.fastModel, p.enrichOn, opts.Reanalyze, opts.ReanalyzeAll)
-	default:
-		docs, err = db.Pending(ctx, p.analysisModel, p.fastModel, opts.Reanalyze, opts.ReanalyzeAll)
+	p.enrichOn = enrichCapable && (models.fast != c.OllamaModel || opts.EnrichOnly)
+	return p
+}
+
+func RunProgress(ctx context.Context, c config.Config, db *database.DB, gens Generators, opts RunOptions) (Result, error) {
+	models, err := resolveRunModels(c, opts)
+	if err != nil {
+		return Result{}, err
 	}
+	p := newPipeline(ctx, c, db, gens, opts, models, gens.Enrich != nil)
+	docs, err := p.pendingDocuments()
 	if err != nil {
 		return Result{}, err
 	}
@@ -331,8 +332,16 @@ func RunProgress(ctx context.Context, c config.Config, db *database.DB, gens Gen
 	if err != nil {
 		return Result{}, err
 	}
-	if len(docs) == 0 && len(p.renames) == 0 && (gens.Embed == nil || models.embed == "" || opts.EnrichOnly) {
+	skip, err := p.skipWithoutDirectWork(docs, gens.Embed != nil)
+	if err != nil {
+		return Result{}, err
+	}
+	if skip {
 		return out, nil
+	}
+	p.removalGeneration, err = db.RemovalGeneration(ctx)
+	if err != nil {
+		return Result{}, err
 	}
 	if err := p.loadCorpus(); err != nil {
 		return out, err
@@ -340,24 +349,30 @@ func RunProgress(ctx context.Context, c config.Config, db *database.DB, gens Gen
 	if err := p.relinkMoved(&out); err != nil {
 		return out, err
 	}
-	if len(docs) == 0 {
-		if p.embeddingUsed {
-			return out, unloadModel(ctx, p.gens.Embed)
-		}
-		return out, nil
-	}
-	changedEvidence, analysisPending := p.pendingEvidencePaths(docs)
+	// Evidence seeds classify every drifted document — before the stage
+	// filter drops docs whose enrichment pass failed or was skipped.
+	pendingDocs := docs
 	p.forceAnalysis = make(map[string]bool)
 	docs, err = p.prepareModelStages(docs, &out)
 	if err != nil {
 		return out, err
 	}
+	out.DirectPending = len(docs)
 	if !opts.EnrichOnly {
-		dependents, err := p.evidenceDependents(changedEvidence, analysisPending)
+		dependents, err := p.evidenceDependents(pendingDocs, true)
 		if err != nil {
 			return out, err
 		}
+		out.Dependents = len(dependents)
 		docs = mergeDocumentLists(docs, dependents)
+	}
+	// The empty-queue check comes after the dependents sweep: removals and
+	// evidence drift can queue work even when nothing is directly pending.
+	if len(docs) == 0 {
+		if p.embeddingUsed {
+			return out, unloadModel(ctx, p.gens.Embed)
+		}
+		return out, nil
 	}
 	for i, doc := range docs {
 		if err := ctx.Err(); err != nil {
@@ -369,6 +384,28 @@ func RunProgress(ctx context.Context, c config.Config, db *database.DB, gens Gen
 		}
 	}
 	return out, nil
+}
+
+func (p *pipeline) pendingDocuments() ([]database.Document, error) {
+	switch {
+	case p.opts.EnrichOnly:
+		return p.db.PendingEnrich(p.ctx, p.fastModel, p.opts.Reanalyze, p.opts.ReanalyzeAll)
+	case p.external:
+		return p.db.PendingExternal(p.ctx, p.analysisModel, p.fastModel, p.enrichOn, p.opts.Reanalyze, p.opts.ReanalyzeAll)
+	default:
+		return p.db.Pending(p.ctx, p.analysisModel, p.fastModel, p.opts.Reanalyze, p.opts.ReanalyzeAll)
+	}
+}
+
+func (p *pipeline) skipWithoutDirectWork(docs []database.Document, embedAvailable bool) (bool, error) {
+	if len(docs) > 0 || len(p.renames) > 0 || (embedAvailable && p.embedModel != "" && !p.opts.EnrichOnly) {
+		return false, nil
+	}
+	if p.opts.EnrichOnly {
+		return true, nil
+	}
+	needsRemovalSweep, err := p.db.NeedsRemovalSweep(p.ctx, p.external)
+	return !needsRemovalSweep, err
 }
 
 type runModels struct {
@@ -416,6 +453,27 @@ func (p *pipeline) laneInputSHA(doc database.Document) string {
 	return doc.AnalysisInputSHA256
 }
 
+func (p *pipeline) laneSeenFm(doc database.Document) string {
+	if p.external {
+		return doc.SeenExternalFmSHA256
+	}
+	return doc.SeenFmSHA256
+}
+
+func (p *pipeline) laneEvidenceJSON(doc database.Document) string {
+	if p.external {
+		return doc.ExternalAnalysisEvidenceJSON
+	}
+	return doc.AnalysisEvidenceJSON
+}
+
+func (p *pipeline) laneRemovalGeneration(doc database.Document) int64 {
+	if p.external {
+		return doc.SeenExternalRemovalGeneration
+	}
+	return doc.SeenRemovalGeneration
+}
+
 func (p *pipeline) laneModel(doc database.Document) string {
 	if p.external {
 		return doc.ExternalModel
@@ -423,29 +481,49 @@ func (p *pipeline) laneModel(doc database.Document) string {
 	return doc.AnalyzedModel
 }
 
+// isLanePending is the single Go-side predicate for "this document's analysis
+// stamp is behind its current input fingerprint in the active lane" — the
+// same condition the SQL pending() queries express. Keep the two in sync.
+func (p *pipeline) isLanePending(doc database.Document) bool {
+	return p.opts.ReanalyzeAll || p.laneInputSHA(doc) != p.laneSHA(doc) ||
+		(p.opts.Reanalyze && p.laneModel(doc) != p.analysisModel)
+}
+
 // saveAnalysis stamps the active lane: the local analyzed_* markers on a
 // normal run, external_* on an enhanced run. The recorded model is always
 // the resolved analysis model for this run.
 func (p *pipeline) saveAnalysis(doc database.Document, title, summary string, tags []string, sugs []database.Suggestion, results ...database.StageResult) error {
+	if doc.AnalysisEvidenceJSON == "" {
+		doc.AnalysisEvidenceJSON = `{"v":2,"fm":[],"full":[],"inbound":[],"siblings":[],"validation_context":""}`
+	}
 	if p.external {
+		doc.SeenExternalRemovalGeneration = p.removalGeneration
 		return p.db.SaveExternalAnalysis(p.ctx, doc, p.analysisModel, title, summary, tags, sugs, results...)
 	}
+	doc.SeenRemovalGeneration = p.removalGeneration
 	return p.db.SaveAnalysis(p.ctx, doc, p.analysisModel, title, summary, tags, sugs, results...)
 }
 
-func (p *pipeline) pendingEvidencePaths(docs []database.Document) (map[string]bool, map[string]bool) {
+func (p *pipeline) pendingEvidencePaths(docs []database.Document) (map[string]bool, map[string]bool, map[string]bool, map[string]bool) {
 	changed := make(map[string]bool)
+	changedFm := make(map[string]bool)
+	changedNewFm := make(map[string]bool)
 	analysisPending := make(map[string]bool)
 	for _, doc := range docs {
 		if doc.SemanticSHA256 != p.laneSemanticSHA(doc) {
 			changed[doc.Path] = true
 		}
-		if p.opts.ReanalyzeAll || p.laneInputSHA(doc) != p.laneSHA(doc) ||
-			(p.opts.Reanalyze && p.laneModel(doc) != p.analysisModel) {
+		if doc.FmSHA256 != p.laneSeenFm(doc) {
+			changedFm[doc.Path] = true
+			if p.laneSeenFm(doc) == "" {
+				changedNewFm[doc.Path] = true
+			}
+		}
+		if p.isLanePending(doc) {
 			analysisPending[doc.Path] = true
 		}
 	}
-	return changed, analysisPending
+	return changed, changedFm, changedNewFm, analysisPending
 }
 
 func (p *pipeline) prepareModelStages(docs []database.Document, out *Result) ([]database.Document, error) {
@@ -563,9 +641,11 @@ type pipeline struct {
 	taxonomy          *taxonomy.Vocabulary
 	renames           map[string]string
 	forceAnalysis     map[string]bool
+	removalGeneration int64
 	embeddingUsed     bool
 	embeddingDisabled bool
 	enrichmentUsed    bool
+	visibleNow        map[string]bool
 }
 
 // loadCorpus snapshots the corpus once per run: computes the LLM-visibility
@@ -587,6 +667,7 @@ func (p *pipeline) loadCorpus() error {
 	if err != nil {
 		return err
 	}
+	p.entities.resolveDistinctWords(len(p.visiblePaths))
 	p.entities.resolveExplicitMarkdownLinks(p.visiblePaths)
 	p.entities.addFrameworkCatalog(frameworkCatalog, p.visiblePaths)
 	p.allDocs = allDocs
@@ -692,163 +773,6 @@ func (p *pipeline) backfillEmbedding(doc *database.Document, text string) {
 	} else {
 		p.emit(Progress{Path: doc.Path, Outcome: "embedding warning", Detail: err.Error()})
 	}
-}
-
-// evidenceDependents adds unchanged notes whose explicit or high-confidence
-// local evidence changed with another document. It runs only when scan already
-// found new/changed documents, so the unchanged path stays cheap.
-func (p *pipeline) evidenceDependents(changedPaths, analysisPending map[string]bool) ([]database.Document, error) {
-	changed := make(map[string]bool)
-	for path := range changedPaths {
-		if p.visiblePaths[path] {
-			changed[path] = true
-		}
-	}
-	if len(changed) == 0 {
-		return nil, nil
-	}
-	inbound := make(map[string]bool)
-	for target := range changed {
-		sources, err := p.db.InboundLinks(p.ctx, target)
-		if err != nil {
-			return nil, err
-		}
-		for _, source := range sources {
-			if p.visiblePaths[source] {
-				inbound[source] = true
-			}
-		}
-	}
-
-	related := p.embeddingDependents(changed)
-	var dependents []database.Document
-	for _, doc := range p.allDocs {
-		if p.ctx.Err() != nil {
-			return nil, p.ctx.Err()
-		}
-		if analysisPending[doc.Path] || doc.Status == "missing" ||
-			p.laneInputSHA(doc) != p.laneSHA(doc) || !p.visiblePaths[doc.Path] {
-			continue
-		}
-		content, err := scanner.ReadDocument(p.c, doc.Path)
-		if err != nil {
-			continue
-		}
-		fm, _, err := frontmatter.Parse(content)
-		if err != nil || frontmatter.NoLLMContext(fm) {
-			continue
-		}
-		if inbound[doc.Path] || p.dependsOnChangedEvidence(doc, fm, content, changed, related) {
-			if p.currentlyVisible(doc.Path) {
-				p.forceAnalysis[doc.Path] = true
-				dependents = append(dependents, doc)
-			}
-		}
-	}
-	return dependents, nil
-}
-
-// embeddingEvidenceFloor returns the evidenceFloorQuantile cosine of the
-// sampled document-pair distribution under the live embedding model — the
-// per-run calibration of "unusually close." A zero floor (sparse or tiny
-// corpus) degrades gracefully to a pure top-k neighborhood.
-func (p *pipeline) embeddingEvidenceFloor() float64 {
-	paths := slices.Sorted(maps.Keys(p.embeds))
-	n := len(paths)
-	if n < 4 {
-		return 0
-	}
-	total := n * (n - 1) / 2
-	stride := max(1, total/evidenceFloorSamplePairs)
-	scores := make([]float64, 0, min(evidenceFloorSamplePairs, total))
-	idx := 0
-	for i := 0; i < n; i++ {
-		for j := i + 1; j < n; j++ {
-			if idx%stride == 0 {
-				scores = append(scores, similarity.Cosine(p.embeds[paths[i]], p.embeds[paths[j]]))
-			}
-			idx++
-		}
-	}
-	if len(scores) == 0 {
-		return 0
-	}
-	slices.Sort(scores)
-	return scores[int(evidenceFloorQuantile*float64(len(scores)-1))]
-}
-
-// embeddingDependents returns the documents unusually close to a changed
-// document under the live embedding model: each changed document contributes
-// at most its evidenceNeighborLimit nearest neighbors, and only those that
-// also clear the corpus-calibrated floor. Rank plus calibration keeps the
-// sweep selective across embedding models with very different cosine
-// distributions — under the old absolute threshold a dense model flagged a
-// quarter of all pairs and re-analyzed nearly the whole repository.
-func (p *pipeline) embeddingDependents(changed map[string]bool) map[string]bool {
-	related := map[string]bool{}
-	floor := p.embeddingEvidenceFloor()
-	type neighbor struct {
-		path  string
-		score float64
-	}
-	for path := range changed {
-		emb := p.embeds[path]
-		if len(emb) == 0 {
-			continue
-		}
-		var hits []neighbor
-		for other, otherEmb := range p.embeds {
-			if other == path {
-				continue
-			}
-			if c := similarity.Cosine(emb, otherEmb); c >= floor {
-				hits = append(hits, neighbor{other, c})
-			}
-		}
-		slices.SortFunc(hits, func(a, b neighbor) int {
-			if c := cmp.Compare(b.score, a.score); c != 0 {
-				return c
-			}
-			return cmp.Compare(a.path, b.path)
-		})
-		for i := 0; i < len(hits) && i < evidenceNeighborLimit; i++ {
-			related[hits[i].path] = true
-		}
-	}
-	return related
-}
-
-func (p *pipeline) dependsOnChangedEvidence(doc database.Document, fm map[string]any, content string, changed, related map[string]bool) bool {
-	for _, key := range []string{"related", "contradicted_by"} {
-		for _, target := range frontmatter.StringList(fm, key) {
-			if changed[filepath.ToSlash(strings.TrimSpace(target))] {
-				return true
-			}
-		}
-	}
-	for _, mention := range p.entities.matches(doc.Path, content) {
-		if changed[mention.path] {
-			return true
-		}
-		for _, source := range mention.sourcePaths {
-			if changed[source] {
-				return true
-			}
-		}
-	}
-	if related[doc.Path] {
-		return true
-	}
-	docSignature := p.sigs[doc.Path]
-	if len(docSignature) == 0 {
-		docSignature = similarity.Signature(content)
-	}
-	for path := range changed {
-		if similarity.Estimate(docSignature, p.sigs[path]) >= overlapThreshold {
-			return true
-		}
-	}
-	return false
 }
 
 // fail records a per-document error: persisted to the documents table,
@@ -998,21 +922,30 @@ func (p *pipeline) analyzeDoc(doc database.Document, fm map[string]any, candidat
 	ranked := rankCandidates(doc.Path, fm, candidates, docSig, p.sigs, docEmb, p.embeds, mentionsByPath, candidateLimit)
 	ranked = slices.DeleteFunc(ranked, func(c candidate) bool { return !p.currentlyVisible(c.doc.Path) })
 	mergeText, mergeBodies := p.mergeContext(ranked)
-	inbound, _ := p.db.InboundLinks(p.ctx, doc.Path)
-	inbound = filterLLMVisiblePaths(inbound, p.visiblePaths)
-	inbound = slices.DeleteFunc(inbound, func(path string) bool { return !p.currentlyVisible(path) })
-	siblings, _ := scanner.SiblingFiles(p.c, doc.Path)
+	inbound, err := p.llmVisibleInbound(doc.Path)
+	if err != nil {
+		return err
+	}
+	inbound = sortedUnique(inbound)
+	siblings, err := scanner.SiblingFiles(p.c, doc.Path)
+	if err != nil {
+		return err
+	}
+	siblingCtx, siblingPaths := siblingContext(siblings, content)
+	entityCtx, entityPaths := entityEvidenceContext(p.c, ranked)
+	validationCtx := frontmatterContext(doc, fm, p.knownDocs)
+	doc.AnalysisEvidenceJSON = marshalAnalysisEvidence(ranked, inbound, siblingPaths, mergeBodies, entityPaths, validationCtx)
 	contextText := fmt.Sprintf("Current path: %s\nFile modified: %s\nPath tags: %s\nDocument frontmatter: %s\n%s%s%s%s%s%s%s%sExisting documents (possible relations/merge candidates; annotated with title, tags and content similarity):\n%s",
 		doc.Path,
 		time.Unix(doc.ModifiedUnix, 0).UTC().Format("2006-01-02"),
 		doc.TagsJSON, cmp.Or(doc.FrontmatterJSON, "none"),
 		p.taxonomyPrompt(doc, fm),
-		frontmatterContext(doc, fm, p.knownDocs),
+		validationCtx,
 		localMetadataContext(localPatch),
-		entityEvidenceContext(p.c, ranked),
+		entityCtx,
 		p.rejectionContext(doc.Path),
 		inboundContext(inbound),
-		siblingContext(siblings, content),
+		siblingCtx,
 		overlapContext(ranked),
 		renderCandidates(ranked))
 	contextText += mergeText
@@ -1146,11 +1079,9 @@ func referencesMoved(doc database.Document, renames map[string]string) bool {
 	if doc.FrontmatterJSON != "" {
 		_ = json.Unmarshal([]byte(doc.FrontmatterJSON), &fm)
 	}
-	for _, key := range []string{"related", "contradicted_by"} {
-		for _, item := range frontmatter.StringList(fm, key) {
-			if _, ok := renames[filepath.ToSlash(strings.TrimSpace(item))]; ok {
-				return true
-			}
+	for _, item := range frontmatter.GraphLinkTargets(fm) {
+		if _, ok := renames[filepath.ToSlash(strings.TrimSpace(item))]; ok {
+			return true
 		}
 	}
 	var issues []string
@@ -1183,7 +1114,7 @@ func deterministicFix(docPath, content string, fm map[string]any, knownDocs []da
 	}
 	fixed := maps.Clone(fm)
 	var removed, retargeted []string
-	for _, key := range []string{"related", "contradicted_by"} {
+	for _, key := range frontmatter.GraphLinkKeys {
 		items := frontmatter.StringList(fm, key)
 		if len(items) == 0 {
 			continue
@@ -1282,10 +1213,8 @@ func visibleCandidates(docPath string, all []database.Document, visible map[stri
 func rankCandidates(docPath string, fm map[string]any, candidates []database.Document, docSig []uint64, sigs map[string][]uint64, docEmb []float32, embeds map[string][]float32, mentions map[string][]entityMention, limit int) []candidate {
 	docDir := filepath.ToSlash(filepath.Dir(docPath))
 	linked := map[string]bool{}
-	for _, key := range []string{"related", "contradicted_by"} {
-		for _, l := range frontmatter.StringList(fm, key) {
-			linked[filepath.ToSlash(strings.TrimSpace(l))] = true
-		}
+	for _, l := range frontmatter.GraphLinkTargets(fm) {
+		linked[filepath.ToSlash(strings.TrimSpace(l))] = true
 	}
 	scored := make([]candidate, 0, len(candidates))
 	for _, d := range candidates {
@@ -1504,8 +1433,8 @@ func (p *pipeline) rejectionContext(path string) string {
 	return "Human reviewers previously REJECTED these suggestions for this note — do not re-propose them; a reviewer note is ground truth you may lack:\n" + strings.Join(lines, "\n") + "\n"
 }
 
-// inboundContext lists documents whose frontmatter already links to this one —
-// input for deciding whether a backlink belongs in `related`.
+// inboundContext lists documents with an indexed link to this one — input for
+// deciding whether a backlink belongs in `related`.
 func inboundContext(inbound []string) string {
 	if len(inbound) == 0 {
 		return ""
@@ -1515,7 +1444,7 @@ func inboundContext(inbound []string) string {
 
 // siblingContext lists same-directory files the document never mentions —
 // candidates for a missing reference (helper scripts, configs, examples).
-func siblingContext(siblings []string, content string) string {
+func siblingContext(siblings []string, content string) (string, []string) {
 	var missing []string
 	for _, name := range siblings {
 		if !strings.Contains(content, name) {
@@ -1523,9 +1452,9 @@ func siblingContext(siblings []string, content string) string {
 		}
 	}
 	if len(missing) == 0 {
-		return ""
+		return "", nil
 	}
-	return "Sibling files the document does not mention:\n- " + strings.Join(missing, "\n- ") + "\n"
+	return "Sibling files the document does not mention:\n- " + strings.Join(missing, "\n- ") + "\n", missing
 }
 
 // normalizeTags merges path-derived, frontmatter-declared and LLM-suggested

@@ -144,6 +144,13 @@ func forgejoAuth(ctx context.Context, host string) requestAuth {
 	input := "protocol=https\nhost=" + host + "\n\n"
 	cmd := exec.CommandContext(ctx, "git", "credential", "fill") // NOSONAR — user-local CLI resolves gh/git via PATH by design
 	cmd.Stdin = strings.NewReader(input)
+	// A non-interactive caller must never let the helper chain prompt — on a
+	// terminal or via a GUI askpass. A missing credential is an empty result,
+	// not a question.
+	cmd.Env = append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		"GCM_INTERACTIVE=never",
+	)
 	output, err := cmd.Output()
 	if err != nil {
 		return requestAuth{}

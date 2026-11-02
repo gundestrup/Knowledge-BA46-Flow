@@ -72,10 +72,32 @@ type Document struct {
 	FreshnessVerifyModel        string `json:"freshness_verify_model"`
 	FreshnessVerifyPromptSHA    string `json:"-"`
 	// SeenFmSHA256/SeenBodySHA256 record what the document looked like when
-	// the last analysis of either lane ran — the reference for the
+	// local analysis last ran — the reference for the
 	// changed-frontmatter-only vs changed-body breakdown.
 	SeenFmSHA256   string `json:"seen_fm_sha256"`
 	SeenBodySHA256 string `json:"seen_body_sha256"`
+	// External lane keeps its own seen pair — measuring frontmatter drift
+	// against the wrong lane's last analysis would silently under-fire the
+	// external dependents sweep.
+	SeenExternalFmSHA256   string `json:"-"`
+	SeenExternalBodySHA256 string `json:"-"`
+	// Lane-local acknowledgement for evidence invalidations. The backing
+	// column retains its historical removal name, but advances for both
+	// tombstones and reference-topology changes.
+	SeenRemovalGeneration         int64 `json:"-"`
+	SeenExternalRemovalGeneration int64 `json:"-"`
+	// AnalysisEvidenceJSON records which other documents the local analysis
+	// actually consumed: candidate paths/scores, path-only inbound/sibling
+	// sets and rendered validation context. Empty for legacy rows.
+	AnalysisEvidenceJSON string `json:"-"`
+	// ExternalAnalysisEvidenceJSON keeps the independent external lane's
+	// prompt evidence separate from local analysis.
+	ExternalAnalysisEvidenceJSON string `json:"-"`
+	// MissingSince is the scan timestamp at which the file disappeared —
+	// retained for diagnostics; MissingGeneration is the monotonic removal
+	// event identity used for lane-local acknowledgement.
+	MissingSince      string `json:"-"`
+	MissingGeneration int64  `json:"-"`
 	// Expand/Freshness/Embedded lineage keep optional passes incremental against
 	// their current input fingerprints; full source SHA remains available above.
 	ExpandSHA256    string `json:"expand_sha256"`
@@ -173,436 +195,6 @@ func Open(ctx context.Context, path string) (*DB, error) {
 		return nil, err
 	}
 	return d, nil
-}
-
-// migrate creates the schema on first run (idempotent via IF NOT EXISTS).
-// documents.status cycles through: pending -> analyzed | error | missing.
-// suggestions.status cycles through: pending -> accepted | rejected ->
-// applied | failed; 'superseded' means the source doc changed under it.
-// The FK on suggestions.document_path uses ON UPDATE/DELETE CASCADE so renamed
-// documents keep their suggestions and deleted rows take suggestions with them.
-// schemaVersion stamps the shape migrate() produces — bump it on every schema
-// change. A database stamped newer than this build is refused at Open so an
-// old binary cannot silently half-migrate a future layout.
-const schemaVersion = 15
-
-func (d *DB) migrate(ctx context.Context) error {
-	var stamped int
-	if err := d.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&stamped); err != nil {
-		return err
-	}
-	if stamped > schemaVersion {
-		return fmt.Errorf("database schema version %d is newer than this build supports (%d); upgrade KBM-flow", stamped, schemaVersion)
-	}
-	_, err := d.ExecContext(ctx, `
-CREATE TABLE IF NOT EXISTS documents (
- path TEXT PRIMARY KEY,
- sha256 TEXT NOT NULL,
- analyzed_sha256 TEXT NOT NULL DEFAULT '',
- analyzed_model TEXT NOT NULL DEFAULT '',
- analyzed_semantic_sha256 TEXT NOT NULL DEFAULT '',
- external_sha256 TEXT NOT NULL DEFAULT '',
- external_model TEXT NOT NULL DEFAULT '',
- external_semantic_sha256 TEXT NOT NULL DEFAULT '',
- enriched_sha256 TEXT NOT NULL DEFAULT '',
- enriched_model TEXT NOT NULL DEFAULT '',
- sig BLOB,
- embedding BLOB,
- size INTEGER NOT NULL,
- modified_unix INTEGER NOT NULL,
- title TEXT NOT NULL DEFAULT '',
- summary TEXT NOT NULL DEFAULT '',
- tags_json TEXT NOT NULL DEFAULT '[]',
- status TEXT NOT NULL DEFAULT 'pending',
- last_error TEXT NOT NULL DEFAULT '',
- first_seen_at TEXT NOT NULL,
- last_seen_at TEXT NOT NULL,
- analyzed_at TEXT,
- frontmatter_json TEXT NOT NULL DEFAULT '',
- frontmatter_issues TEXT NOT NULL DEFAULT '[]',
- link_issues TEXT NOT NULL DEFAULT '[]',
-	fm_sha256 TEXT NOT NULL DEFAULT '',
-	body_sha256 TEXT NOT NULL DEFAULT '',
- semantic_sha256 TEXT NOT NULL DEFAULT '',
- semantic_frontmatter_sha256 TEXT NOT NULL DEFAULT '',
- semantic_body_sha256 TEXT NOT NULL DEFAULT '',
- analysis_input_sha256 TEXT NOT NULL DEFAULT '',
- enrichment_input_sha256 TEXT NOT NULL DEFAULT '',
- expand_input_sha256 TEXT NOT NULL DEFAULT '',
- freshness_input_sha256 TEXT NOT NULL DEFAULT '',
- freshness_web_verify INTEGER NOT NULL DEFAULT 0,
- freshness_verify_model TEXT NOT NULL DEFAULT '',
- freshness_verify_prompt_sha256 TEXT NOT NULL DEFAULT '',
- seen_fm_sha256 TEXT NOT NULL DEFAULT '',
- seen_body_sha256 TEXT NOT NULL DEFAULT '',
- expand_sha256 TEXT NOT NULL DEFAULT '',
- expand_model TEXT NOT NULL DEFAULT '',
- freshness_sha256 TEXT NOT NULL DEFAULT '',
- freshness_model TEXT NOT NULL DEFAULT '',
- embedded_sha256 TEXT NOT NULL DEFAULT '',
- embedded_model TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS suggestions (
- id INTEGER PRIMARY KEY AUTOINCREMENT,
- document_path TEXT NOT NULL,
- source_sha256 TEXT NOT NULL,
- action TEXT NOT NULL CHECK(action IN ('none','move','merge','expand','delete')),
- target_path TEXT NOT NULL DEFAULT '',
- reason TEXT NOT NULL,
- confidence REAL NOT NULL DEFAULT 0,
- proposed_content TEXT NOT NULL DEFAULT '',
- origin TEXT NOT NULL DEFAULT 'analysis' CHECK(origin IN ('analysis','enrich','deterministic','expand','freshness','identity')),
- status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','rejected','applied','failed','superseded')),
- created_at TEXT NOT NULL,
- decided_at TEXT,
- decision_note TEXT NOT NULL DEFAULT '',
- applied_at TEXT,
- error TEXT NOT NULL DEFAULT '',
- FOREIGN KEY(document_path) REFERENCES documents(path) ON UPDATE CASCADE ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
-CREATE INDEX IF NOT EXISTS idx_suggestions_status ON suggestions(status);
-CREATE TABLE IF NOT EXISTS renames (
- old_path TEXT PRIMARY KEY,
- new_path TEXT NOT NULL,
- moved_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS jobs (
- id INTEGER PRIMARY KEY AUTOINCREMENT,
- op TEXT NOT NULL CHECK(op IN ('scan','analyze','run','report','link-check','enrich','embed','expand','freshness','all')),
- status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','done','failed')),
- detail TEXT NOT NULL DEFAULT '',
- error TEXT NOT NULL DEFAULT '',
- created_at TEXT NOT NULL,
- finished_at TEXT,
- heartbeat_at TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS repo_report_snapshot (
- id INTEGER PRIMARY KEY CHECK(id = 1),
- generated_at TEXT NOT NULL,
- data_json TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS repo_report_history (
- id INTEGER PRIMARY KEY AUTOINCREMENT,
- generated_at TEXT NOT NULL,
- summary_json TEXT NOT NULL
-);
-`)
-	if err != nil {
-		return err
-	}
-	if err := d.upgradeJobsForReport(ctx); err != nil {
-		return err
-	}
-	if err := d.upgradeJobsHeartbeat(ctx); err != nil {
-		return err
-	}
-	if err := d.upgradeJobsForLinkCheck(ctx); err != nil {
-		return err
-	}
-	if err := d.upgradeJobsForTasks(ctx); err != nil {
-		return err
-	}
-	if err := d.upgradeDocumentColumns(ctx); err != nil {
-		return err
-	}
-	// upgradeTaskConstraints copies every column, so it must run only after
-	// the additive column upgrades above have filled any gaps.
-	if err := d.upgradeSuggestionColumns(ctx); err != nil {
-		return err
-	}
-	if err := d.upgradeApplyColumns(ctx); err != nil {
-		return err
-	}
-	if err := d.upgradeTaskConstraints(ctx); err != nil {
-		return err
-	}
-	if _, err := d.ExecContext(ctx, stageResultsSchema); err != nil {
-		return err
-	}
-	if _, err := d.ExecContext(ctx, queueSchema); err != nil {
-		return err
-	}
-	if err := d.upgradeIdentitySchema(ctx); err != nil {
-		return err
-	}
-	// v11: decided_at means "left the review queue" — rows superseded or failed
-	// before that column existed get a synthetic timestamp so the progress
-	// graph's backlog series (created − handled) stops counting them open.
-	// created_at approximates the supersede day for bulk pipeline runs.
-	if stamped < 11 {
-		if _, err := d.ExecContext(ctx, `UPDATE suggestions SET decided_at=created_at WHERE decided_at IS NULL AND status<>'pending'`); err != nil {
-			return err
-		}
-	}
-	_, err = d.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion))
-	return err
-}
-
-// upgradeJobsHeartbeat adds the heartbeat column to databases created before
-// cross-process op guarding. Rows without a heartbeat count as dead runners.
-func (d *DB) upgradeJobsHeartbeat(ctx context.Context) error {
-	var present bool
-	rows, err := d.QueryContext(ctx, `SELECT name FROM pragma_table_info('jobs')`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return err
-		}
-		if name == "heartbeat_at" {
-			present = true
-		}
-	}
-	if err := rows.Err(); err != nil || present {
-		return err
-	}
-	_, err = d.ExecContext(ctx, `ALTER TABLE jobs ADD COLUMN heartbeat_at TEXT NOT NULL DEFAULT ''`)
-	return err
-}
-
-// upgradeDocumentColumns adds columns to databases created before their
-// features landed. ALTER TABLE ADD COLUMN is a metadata-only change in
-// SQLite — existing rows get the column default.
-func (d *DB) upgradeDocumentColumns(ctx context.Context) error {
-	rows, err := d.QueryContext(ctx, `SELECT name FROM pragma_table_info('documents')`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	cols := map[string]bool{}
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return err
-		}
-		cols[name] = true
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, stmt := range []struct {
-		col string
-		ddl string
-	}{
-		{"frontmatter_json", `ALTER TABLE documents ADD COLUMN frontmatter_json TEXT NOT NULL DEFAULT ''`},
-		{"frontmatter_issues", `ALTER TABLE documents ADD COLUMN frontmatter_issues TEXT NOT NULL DEFAULT '[]'`},
-		{"link_issues", `ALTER TABLE documents ADD COLUMN link_issues TEXT NOT NULL DEFAULT '[]'`},
-		{"analyzed_model", `ALTER TABLE documents ADD COLUMN analyzed_model TEXT NOT NULL DEFAULT ''`},
-		{"analyzed_semantic_sha256", `ALTER TABLE documents ADD COLUMN analyzed_semantic_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"external_sha256", `ALTER TABLE documents ADD COLUMN external_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"external_model", `ALTER TABLE documents ADD COLUMN external_model TEXT NOT NULL DEFAULT ''`},
-		{"external_semantic_sha256", `ALTER TABLE documents ADD COLUMN external_semantic_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"enriched_sha256", `ALTER TABLE documents ADD COLUMN enriched_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"enriched_model", `ALTER TABLE documents ADD COLUMN enriched_model TEXT NOT NULL DEFAULT ''`},
-		{"sig", `ALTER TABLE documents ADD COLUMN sig BLOB`},
-		{"embedding", `ALTER TABLE documents ADD COLUMN embedding BLOB`},
-		{"fm_sha256", `ALTER TABLE documents ADD COLUMN fm_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"body_sha256", `ALTER TABLE documents ADD COLUMN body_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"semantic_sha256", `ALTER TABLE documents ADD COLUMN semantic_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"semantic_frontmatter_sha256", `ALTER TABLE documents ADD COLUMN semantic_frontmatter_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"semantic_body_sha256", `ALTER TABLE documents ADD COLUMN semantic_body_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"analysis_input_sha256", `ALTER TABLE documents ADD COLUMN analysis_input_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"enrichment_input_sha256", `ALTER TABLE documents ADD COLUMN enrichment_input_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"expand_input_sha256", `ALTER TABLE documents ADD COLUMN expand_input_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"freshness_input_sha256", `ALTER TABLE documents ADD COLUMN freshness_input_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"freshness_web_verify", `ALTER TABLE documents ADD COLUMN freshness_web_verify INTEGER NOT NULL DEFAULT 0`},
-		{"freshness_verify_model", `ALTER TABLE documents ADD COLUMN freshness_verify_model TEXT NOT NULL DEFAULT ''`},
-		{"freshness_verify_prompt_sha256", `ALTER TABLE documents ADD COLUMN freshness_verify_prompt_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"seen_fm_sha256", `ALTER TABLE documents ADD COLUMN seen_fm_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"seen_body_sha256", `ALTER TABLE documents ADD COLUMN seen_body_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"expand_sha256", `ALTER TABLE documents ADD COLUMN expand_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"expand_model", `ALTER TABLE documents ADD COLUMN expand_model TEXT NOT NULL DEFAULT ''`},
-		{"freshness_sha256", `ALTER TABLE documents ADD COLUMN freshness_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"freshness_model", `ALTER TABLE documents ADD COLUMN freshness_model TEXT NOT NULL DEFAULT ''`},
-		{"embedded_sha256", `ALTER TABLE documents ADD COLUMN embedded_sha256 TEXT NOT NULL DEFAULT ''`},
-		{"embedded_model", `ALTER TABLE documents ADD COLUMN embedded_model TEXT NOT NULL DEFAULT ''`},
-	} {
-		if !cols[stmt.col] {
-			if _, err := d.ExecContext(ctx, stmt.ddl); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// upgradeSuggestionColumns adds columns to databases created before their
-// features landed: origin (two-pass analyzer; pre-existing rows are
-// LLM-produced so 'analysis' is the right backfill default) plus the
-// decision/apply bookkeeping columns from the review workflow.
-func (d *DB) upgradeSuggestionColumns(ctx context.Context) error {
-	rows, err := d.QueryContext(ctx, `SELECT name FROM pragma_table_info('suggestions')`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	cols := map[string]bool{}
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return err
-		}
-		cols[name] = true
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, stmt := range []struct {
-		col string
-		ddl string
-	}{
-		{"origin", `ALTER TABLE suggestions ADD COLUMN origin TEXT NOT NULL DEFAULT 'analysis'`},
-		{"decided_at", `ALTER TABLE suggestions ADD COLUMN decided_at TEXT`},
-		{"decision_note", `ALTER TABLE suggestions ADD COLUMN decision_note TEXT NOT NULL DEFAULT ''`},
-		{"applied_at", `ALTER TABLE suggestions ADD COLUMN applied_at TEXT`},
-		{"error", `ALTER TABLE suggestions ADD COLUMN error TEXT NOT NULL DEFAULT ''`},
-	} {
-		if !cols[stmt.col] {
-			if _, err := d.ExecContext(ctx, stmt.ddl); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// upgradeJobsForReport rebuilds the original jobs table to extend its op
-// constraint while preserving every existing job and its id. The heartbeat
-// column is added afterwards by upgradeJobsHeartbeat.
-func (d *DB) upgradeJobsForReport(ctx context.Context) error {
-	return d.rebuildJobsForOp(ctx, "'report'", "'scan','analyze','run','report'", false)
-}
-
-// upgradeJobsForLinkCheck rebuilds the jobs table to admit the 'link-check'
-// op while preserving every existing job, its id and its heartbeat. Runs
-// after upgradeJobsHeartbeat so the copy always carries that column.
-func (d *DB) upgradeJobsForLinkCheck(ctx context.Context) error {
-	return d.rebuildJobsForOp(ctx, "'link-check'", "'scan','analyze','run','report','link-check'", true)
-}
-
-// upgradeJobsForTasks admits the per-task ops: an optional fast-model
-// enrichment pass, embedding refresh, stub expansion and the external-lane
-// freshness check.
-func (d *DB) upgradeJobsForTasks(ctx context.Context) error {
-	return d.rebuildJobsForOp(ctx, "'expand'",
-		"'scan','analyze','run','report','link-check','enrich','embed','expand','freshness','all'", true)
-}
-
-// rebuildJobsForOp recreates the jobs table when its CHECK constraint does
-// not admit marker. withHeartbeat copies the column upgradeJobsHeartbeat
-// adds; the earliest rebuild predates it.
-func (d *DB) rebuildJobsForOp(ctx context.Context, marker, opCSV string, withHeartbeat bool) error {
-	ddl := `CREATE TABLE jobs_rebuild (
- id INTEGER PRIMARY KEY AUTOINCREMENT,
- op TEXT NOT NULL CHECK(op IN (` + opCSV + `)),
- status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','done','failed')),
- detail TEXT NOT NULL DEFAULT '',
- error TEXT NOT NULL DEFAULT '',
- created_at TEXT NOT NULL,
- finished_at TEXT);`
-	cols := "id,op,status,detail,error,created_at,finished_at"
-	if withHeartbeat {
-		ddl = strings.Replace(ddl, "finished_at TEXT);", "finished_at TEXT,\n heartbeat_at TEXT NOT NULL DEFAULT '');", 1)
-		cols += ",heartbeat_at"
-	}
-	return d.rebuildTable(ctx, "jobs", marker, ddl, cols, "")
-}
-
-// upgradeTaskConstraints widens the suggestions.origin and stage_results.stage
-// CHECK constraints to cover the expand/freshness/embed tasks. 'freshness' is
-// the marker: it appears in neither legacy CHECK, while 'expand' already sits
-// in the suggestions.action list.
-func (d *DB) upgradeTaskConstraints(ctx context.Context) error {
-	err := d.rebuildTable(ctx, "suggestions", "'identity'", `CREATE TABLE suggestions_rebuild (
- id INTEGER PRIMARY KEY AUTOINCREMENT,
- document_path TEXT NOT NULL,
- source_sha256 TEXT NOT NULL,
- action TEXT NOT NULL CHECK(action IN ('none','move','merge','expand','delete')),
- target_path TEXT NOT NULL DEFAULT '',
- reason TEXT NOT NULL,
- confidence REAL NOT NULL DEFAULT 0,
- proposed_content TEXT NOT NULL DEFAULT '',
- origin TEXT NOT NULL DEFAULT 'analysis' CHECK(origin IN ('analysis','enrich','deterministic','expand','freshness','identity')),
- status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','rejected','applied','failed','superseded')),
- created_at TEXT NOT NULL,
- decided_at TEXT,
- decision_note TEXT NOT NULL DEFAULT '',
- applied_at TEXT,
- error TEXT NOT NULL DEFAULT '',
- apply_batch_id TEXT NOT NULL DEFAULT '',
- apply_attempted_at TEXT NOT NULL DEFAULT '',
- FOREIGN KEY(document_path) REFERENCES documents(path) ON UPDATE CASCADE ON DELETE CASCADE
-);`, "id,document_path,source_sha256,action,target_path,reason,confidence,proposed_content,origin,status,created_at,decided_at,decision_note,applied_at,error,apply_batch_id,apply_attempted_at",
-		`CREATE INDEX IF NOT EXISTS idx_suggestions_status ON suggestions(status);`)
-	if err != nil {
-		return err
-	}
-	return d.rebuildTable(ctx, "stage_results", "'freshness'", `CREATE TABLE stage_results_rebuild (
- id INTEGER PRIMARY KEY AUTOINCREMENT,
- document_path TEXT NOT NULL,
- source_sha256 TEXT NOT NULL,
- stage TEXT NOT NULL CHECK(stage IN ('enrich','analysis','expand','freshness','embed')),
- model TEXT NOT NULL,
- outcome TEXT NOT NULL CHECK(outcome IN ('success','error','skipped')),
- patch_outcome TEXT NOT NULL DEFAULT '',
- patch_json TEXT NOT NULL DEFAULT 'null',
- derived_fields_json TEXT NOT NULL DEFAULT '[]',
- metadata_json TEXT NOT NULL DEFAULT '{}',
- suggestions INTEGER NOT NULL DEFAULT 0,
- rejected_json TEXT NOT NULL DEFAULT '[]',
- error TEXT NOT NULL DEFAULT '',
- duration_ms INTEGER NOT NULL DEFAULT 0,
- created_at TEXT NOT NULL,
- FOREIGN KEY(document_path) REFERENCES documents(path) ON UPDATE CASCADE ON DELETE CASCADE
-);`, "id,document_path,source_sha256,stage,model,outcome,patch_outcome,patch_json,derived_fields_json,metadata_json,suggestions,rejected_json,error,duration_ms,created_at",
-		`CREATE INDEX IF NOT EXISTS idx_stage_results_document ON stage_results(document_path,stage,id);`)
-}
-
-// rebuildTable recreates a table when its schema lacks marker — SQLite cannot
-// alter a CHECK constraint, so the table is rebuilt in one transaction,
-// preserving every row and id, then post SQL (index recreation) runs in the
-// same transaction. All SQL fragments are compile-time constants from the
-// callers, never user input.
-func (d *DB) rebuildTable(ctx context.Context, table, marker, create, cols, post string) error {
-	var schema string
-	err := d.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&schema)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if strings.Contains(strings.ToLower(schema), marker) {
-		return nil
-	}
-	tx, err := d.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, create); err != nil {
-		return err
-	}
-	// #nosec G202 -- cols is a compile-time constant from the callers
-	if _, err := tx.ExecContext(ctx, `INSERT INTO `+table+`_rebuild(`+cols+`) SELECT `+cols+` FROM `+table); err != nil { // NOSONAR — table/cols are compile-time constants
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `DROP TABLE `+table); err != nil { // NOSONAR — table is a compile-time constant
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `ALTER TABLE `+table+`_rebuild RENAME TO `+table); err != nil { // NOSONAR — table is a compile-time constant
-		return err
-	}
-	if post != "" {
-		if _, err := tx.ExecContext(ctx, post); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
 }
 
 // UpsertScanned inserts a freshly scanned file or updates its source and
@@ -818,7 +410,7 @@ size=excluded.size,modified_unix=excluded.modified_unix,
 tags_json=CASE WHEN ? THEN excluded.tags_json ELSE documents.tags_json END,
 frontmatter_json=excluded.frontmatter_json,frontmatter_issues=excluded.frontmatter_issues,
 sig=excluded.sig,embedding=CASE WHEN ? THEN NULL ELSE documents.embedding END,
-last_seen_at=excluded.last_seen_at,status=?,last_error=CASE WHEN ? THEN '' ELSE documents.last_error END`,
+last_seen_at=excluded.last_seen_at,status=?,missing_since='',last_error=CASE WHEN ? THEN '' ELSE documents.last_error END`,
 		doc.Path, doc.SHA256, doc.Size, doc.ModifiedUnix, doc.TagsJSON, doc.FrontmatterJSON,
 		doc.FrontmatterIssues, doc.Signature, seen, seen, doc.FmSHA256, doc.BodySHA256,
 		doc.SemanticSHA256, doc.SemanticFrontmatterSHA, doc.SemanticBodySHA256,
@@ -841,113 +433,6 @@ decided_at=COALESCE(decided_at,?) WHERE document_path=? AND status IN ('pending'
 	return err
 }
 
-// Renames returns every recorded move as old_path → new_path — the prefilter
-// map for finding documents whose references need retargeting.
-func (d *DB) Renames(ctx context.Context) (map[string]string, error) {
-	rows, err := d.QueryContext(ctx, `SELECT old_path,new_path FROM renames`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]string{}
-	for rows.Next() {
-		var o, n string
-		if err := rows.Scan(&o, &n); err != nil {
-			return nil, err
-		}
-		out[o] = n
-	}
-	return out, rows.Err()
-}
-
-// RetargetPath resolves where a path went after renames: it follows the
-// renames map (a→b→c collapses to the live endpoint) and returns false when
-// the trail ends at a missing or unknown document — a deleted file offers no
-// retarget. Bounded hops keep a corrupted map from looping forever.
-func (d *DB) RetargetPath(ctx context.Context, path string) (string, bool) {
-	target, _, ok := d.RetargetEvidence(ctx, path)
-	return target, ok
-}
-
-// RetargetEvidence also returns the UUID recorded at the move. Callers must
-// check that identity against the live target, not trust a stale scan alone.
-func (d *DB) RetargetEvidence(ctx context.Context, path string) (string, string, bool) {
-	var originalStatus string
-	err := d.QueryRowContext(ctx, `SELECT status FROM documents WHERE path=?`, path).Scan(&originalStatus)
-	if err == nil && originalStatus != "missing" {
-		return "", "", false
-	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", "", false
-	}
-	cur := path
-	expectedID := ""
-	seen := make(map[string]bool)
-	// Follow the renames map to the end of the chain — intermediate hops no
-	// longer exist as document rows (the row was re-keyed onward), so only
-	// the final endpoint is checked for liveness. The hop bound protects
-	// against a corrupted cyclic map.
-	for i := 0; i < 8; i++ {
-		if seen[cur] {
-			return "", "", false
-		}
-		seen[cur] = true
-		var next, id string
-		if err := d.QueryRowContext(ctx, `SELECT new_path,document_id FROM renames WHERE old_path=?`, cur).Scan(&next, &id); err != nil {
-			if !errors.Is(err, sql.ErrNoRows) {
-				return "", "", false
-			}
-			if cur == path {
-				return "", "", false
-			}
-			var status string
-			if err := d.QueryRowContext(ctx, `SELECT status FROM documents WHERE path=?`, cur).Scan(&status); err != nil || status == "missing" {
-				return "", "", false
-			}
-			if expectedID != "" && !d.uniqueIdentityAt(ctx, cur, expectedID) {
-				return "", "", false
-			}
-			return cur, expectedID, true
-		}
-		if id != "" {
-			if expectedID != "" && expectedID != id {
-				return "", "", false
-			}
-			expectedID = id
-		}
-		cur = next
-	}
-	return "", "", false
-}
-
-// SaveLinkFix records deterministic rename-retarget repairs without stamping
-// any lineage — a link fix-up is maintenance, not an analysis or enrichment
-// pass, so no *_sha256/*_model column moves. Pending deterministic suggestions
-// for the document are superseded first: the freshly computed repair replaces
-// them (e.g. a retarget replacing a dead-link removal).
-func (d *DB) SaveLinkFix(ctx context.Context, doc Document, suggestions []Suggestion) error {
-	tx, err := d.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded',decided_at=COALESCE(decided_at,?) WHERE document_path=? AND status='pending' AND origin='deterministic'`, time.Now().UTC().Format(time.RFC3339), doc.Path); err != nil {
-		return err
-	}
-	if err := insertSuggestions(ctx, tx, doc, suggestions); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-// SetLinkIssues stores the scan-time internal-link findings for a document —
-// a JSON array of strings, '[]' when clean. Column changes are derived state,
-// so the update deliberately does not touch hash, status or suggestions.
-func (d *DB) SetLinkIssues(ctx context.Context, path, issuesJSON string) error {
-	_, err := d.ExecContext(ctx, `UPDATE documents SET link_issues=? WHERE path=?`, issuesJSON, path)
-	return err
-}
-
 // RefreshFrontmatter replaces the stored parse of a document after a managed
 // (kbm-block) file update. Only the parsed metadata changes — sha256 is the
 // canonical content hash, which a kbm update cannot change.
@@ -961,17 +446,64 @@ func (d *DB) RefreshFrontmatter(ctx context.Context, path, fmJSON, fmIssues stri
 // its analysis history. Queue-facing queries filter missing documents out (see
 // suggestions()), and UpsertScanned restores the status on resurrection.
 func (d *DB) MarkMissing(ctx context.Context, seen string) error {
-	_, err := d.ExecContext(ctx, `UPDATE documents SET status='missing' WHERE last_seen_at<>?`, seen)
-	return err
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx, `SELECT path FROM documents WHERE last_seen_at<>? AND status<>'missing'`, seen)
+	if err != nil {
+		return err
+	}
+	newlyMissing := 0
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		newlyMissing++
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if newlyMissing > 0 {
+		if err := bumpEvidenceGeneration(ctx, tx); err != nil {
+			return err
+		}
+		var generation int64
+		if err := tx.QueryRowContext(ctx, `SELECT removal_generation FROM evidence_state WHERE id=1`).Scan(&generation); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE documents SET status='missing', missing_since=?, missing_generation=? WHERE last_seen_at<>? AND status<>'missing'`, seen, generation, seen); err != nil {
+			return err
+		}
+	}
+	// A missing document's outbound references are dead weight — its rows are
+	// never rescanned, so drop them; resurrection recreates them on the next
+	// walk. Read paths already filter missing sources; this is hygiene, not
+	// correctness.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM document_references WHERE source_path IN (SELECT path FROM documents WHERE status='missing')`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM reference_versions WHERE source_path IN (SELECT path FROM documents WHERE status='missing')`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // documentColumns is the shared SELECT list for Document rows.
-const documentColumns = `path,sha256,analyzed_sha256,analyzed_model,analyzed_semantic_sha256,external_sha256,external_model,external_semantic_sha256,enriched_sha256,enriched_model,fm_sha256,body_sha256,semantic_sha256,semantic_frontmatter_sha256,semantic_body_sha256,analysis_input_sha256,enrichment_input_sha256,expand_input_sha256,freshness_input_sha256,freshness_web_verify,freshness_verify_model,freshness_verify_prompt_sha256,seen_fm_sha256,seen_body_sha256,expand_sha256,expand_model,freshness_sha256,freshness_model,embedded_sha256,embedded_model,size,modified_unix,title,summary,tags_json,status,last_error,frontmatter_json,frontmatter_issues,link_issues,sig,embedding`
+const documentColumns = `path,sha256,analyzed_sha256,analyzed_model,analyzed_semantic_sha256,external_sha256,external_model,external_semantic_sha256,enriched_sha256,enriched_model,fm_sha256,body_sha256,semantic_sha256,semantic_frontmatter_sha256,semantic_body_sha256,analysis_input_sha256,enrichment_input_sha256,expand_input_sha256,freshness_input_sha256,freshness_web_verify,freshness_verify_model,freshness_verify_prompt_sha256,seen_fm_sha256,seen_body_sha256,expand_sha256,expand_model,freshness_sha256,freshness_model,embedded_sha256,embedded_model,size,modified_unix,title,summary,tags_json,status,last_error,frontmatter_json,frontmatter_issues,link_issues,analysis_evidence_json,external_analysis_evidence_json,seen_external_fm_sha256,seen_external_body_sha256,seen_removal_generation,seen_external_removal_generation,missing_since,missing_generation,sig,embedding`
 
 // scanDocument reads one Document row in documentColumns order.
 func scanDocument(rows *sql.Rows) (Document, error) {
 	var x Document
-	err := rows.Scan(&x.Path, &x.SHA256, &x.AnalyzedSHA256, &x.AnalyzedModel, &x.AnalyzedSemanticSHA256, &x.ExternalSHA256, &x.ExternalModel, &x.ExternalSemanticSHA256, &x.EnrichedSHA256, &x.EnrichedModel, &x.FmSHA256, &x.BodySHA256, &x.SemanticSHA256, &x.SemanticFrontmatterSHA, &x.SemanticBodySHA256, &x.AnalysisInputSHA256, &x.EnrichmentInputSHA256, &x.ExpandInputSHA256, &x.FreshnessInputSHA256, &x.FreshnessWebVerify, &x.FreshnessVerifyModel, &x.FreshnessVerifyPromptSHA, &x.SeenFmSHA256, &x.SeenBodySHA256, &x.ExpandSHA256, &x.ExpandModel, &x.FreshnessSHA256, &x.FreshnessModel, &x.EmbeddedSHA256, &x.EmbeddedModel, &x.Size, &x.ModifiedUnix, &x.Title, &x.Summary, &x.TagsJSON, &x.Status, &x.LastError, &x.FrontmatterJSON, &x.FrontmatterIssues, &x.LinkIssues, &x.Signature, &x.Embedding)
+	err := rows.Scan(&x.Path, &x.SHA256, &x.AnalyzedSHA256, &x.AnalyzedModel, &x.AnalyzedSemanticSHA256, &x.ExternalSHA256, &x.ExternalModel, &x.ExternalSemanticSHA256, &x.EnrichedSHA256, &x.EnrichedModel, &x.FmSHA256, &x.BodySHA256, &x.SemanticSHA256, &x.SemanticFrontmatterSHA, &x.SemanticBodySHA256, &x.AnalysisInputSHA256, &x.EnrichmentInputSHA256, &x.ExpandInputSHA256, &x.FreshnessInputSHA256, &x.FreshnessWebVerify, &x.FreshnessVerifyModel, &x.FreshnessVerifyPromptSHA, &x.SeenFmSHA256, &x.SeenBodySHA256, &x.ExpandSHA256, &x.ExpandModel, &x.FreshnessSHA256, &x.FreshnessModel, &x.EmbeddedSHA256, &x.EmbeddedModel, &x.Size, &x.ModifiedUnix, &x.Title, &x.Summary, &x.TagsJSON, &x.Status, &x.LastError, &x.FrontmatterJSON, &x.FrontmatterIssues, &x.LinkIssues, &x.AnalysisEvidenceJSON, &x.ExternalAnalysisEvidenceJSON, &x.SeenExternalFmSHA256, &x.SeenExternalBodySHA256, &x.SeenRemovalGeneration, &x.SeenExternalRemovalGeneration, &x.MissingSince, &x.MissingGeneration, &x.Signature, &x.Embedding)
 	return x, err
 }
 
@@ -984,7 +516,8 @@ func scanDocument(rows *sql.Rows) (Document, error) {
 // document, for example after a prompt or taxonomy policy change; both
 // options stay opt-in.
 func (d *DB) Pending(ctx context.Context, analysisModel, fastModel string, reanalyze bool, forceAll ...bool) ([]Document, error) {
-	return d.pending(ctx, "analysis_input_sha256", "analyzed_sha256", "analyzed_model", analysisModel, "enrichment_input_sha256", "enriched_sha256", fastModel, reanalyze, forceAll...)
+	twoModel := fastModel != "" && fastModel != analysisModel
+	return d.pending(ctx, "analysis_input_sha256", "analyzed_sha256", "analyzed_model", analysisModel, "enrichment_input_sha256", "enriched_sha256", fastModel, twoModel, reanalyze, forceAll...)
 }
 
 // PendingExternal is Pending for the external lane: an enhanced run
@@ -994,28 +527,17 @@ func (d *DB) Pending(ctx context.Context, analysisModel, fastModel string, reana
 // local config has a distinct fast pass — not whether fastModel differs from
 // the external model.
 func (d *DB) PendingExternal(ctx context.Context, analysisModel, fastModel string, enrichOn, reanalyze bool, forceAll ...bool) ([]Document, error) {
-	twoModel := enrichOn && fastModel != ""
-	cond := `analysis_input_sha256<>external_sha256`
-	var args []any
-	if twoModel {
-		cond += ` OR enrichment_input_sha256<>enriched_sha256`
-	}
-	if reanalyze {
-		cond += ` OR external_model<>?`
-		args = append(args, analysisModel)
-		if twoModel {
-			cond += ` OR enriched_model<>?`
-			args = append(args, fastModel)
-		}
-	}
-	return d.documentsWhere(ctx, `(`+cond+`)`, args)
+	return d.pending(ctx, "analysis_input_sha256", "external_sha256", "external_model", analysisModel, "enrichment_input_sha256", "enriched_sha256", fastModel, enrichOn && fastModel != "", reanalyze, forceAll...)
 }
 
-func (d *DB) pending(ctx context.Context, inputCol, stampCol, modelCol, analysisModel, enrichInputCol, enrichStampCol, fastModel string, reanalyze bool, forceAll ...bool) ([]Document, error) {
+// pending builds the shared pending-work condition: a document queues when
+// its current input fingerprint differs from the lane stamp, when its
+// enrichment input differs from the enrichment stamp (twoModel only), or
+// when reanalyze is requested and the stamping model differs.
+func (d *DB) pending(ctx context.Context, inputCol, stampCol, modelCol, analysisModel, enrichInputCol, enrichStampCol, fastModel string, twoModel, reanalyze bool, forceAll ...bool) ([]Document, error) {
 	if len(forceAll) > 0 && forceAll[0] {
 		return d.documentsWhere(ctx, `1=1`, nil)
 	}
-	twoModel := fastModel != "" && fastModel != analysisModel
 	cond := inputCol + `<>` + stampCol
 	var args []any
 	if twoModel {
@@ -1258,57 +780,6 @@ func (d *DB) CandidatePaths(ctx context.Context, exclude string, limit int) ([]s
 	return out, rows.Err()
 }
 
-// InboundLinks returns the paths of documents whose frontmatter `related` or
-// `contradicted_by` lists path — the "who links here" view used to detect
-// missing backlinks. The LIKE prefilter may over-match; the Go verification
-// on the parsed frontmatter keeps only exact list entries.
-func (d *DB) InboundLinks(ctx context.Context, path string) ([]string, error) {
-	if indexed, ready, err := d.IndexedInboundLinks(ctx, path); err != nil || ready {
-		return indexed, err
-	}
-	rows, err := d.QueryContext(ctx, `SELECT path,frontmatter_json FROM documents
-WHERE status<>'missing' AND path<>? AND frontmatter_json LIKE '%' || ? || '%'`, path, path)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []string{}
-	for rows.Next() {
-		var p, fm string
-		if err := rows.Scan(&p, &fm); err != nil {
-			return nil, err
-		}
-		var fields map[string]any
-		if err := json.Unmarshal([]byte(fm), &fields); err != nil {
-			continue
-		}
-		if fmLinksTo(fields, path) {
-			out = append(out, p)
-		}
-	}
-	return out, rows.Err()
-}
-
-// fmLinksTo reports whether fields["related"] or fields["contradicted_by"]
-// contains target as an exact string entry (scalar or list).
-func fmLinksTo(fields map[string]any, target string) bool {
-	for _, key := range []string{"related", "contradicted_by"} {
-		switch v := fields[key].(type) {
-		case string:
-			if v == target {
-				return true
-			}
-		case []any:
-			for _, item := range v {
-				if s, ok := item.(string); ok && s == target {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
 // truncateRunes bounds a free-text field at max runes — reviewer notes and
 // error strings stay small enough to quote in a prompt or a job detail.
 func truncateRunes(s string, max int) string {
@@ -1415,7 +886,10 @@ func (d *DB) RejectedSuggestions(ctx context.Context, path string, limit int) ([
 // suggestions as 'pending'. 'none' suggestions are dropped. The transaction
 // makes it all-or-nothing: a crash can't leave half-saved state.
 func (d *DB) SaveAnalysis(ctx context.Context, doc Document, model, title, summary string, tags []string, suggestions []Suggestion, results ...StageResult) error {
-	return d.saveAnalysis(ctx, doc, "analyzed_sha256", "analyzed_model", "analyzed_semantic_sha256", model, title, summary, tags, suggestions, results...)
+	return d.saveAnalysis(ctx, doc,
+		"analyzed_sha256", "analyzed_model", "analyzed_semantic_sha256",
+		"seen_fm_sha256", "seen_body_sha256", "analysis_evidence_json", "seen_removal_generation",
+		model, title, summary, tags, suggestions, results...)
 }
 
 // SaveExternalAnalysis is SaveAnalysis for the external lane: an enhanced run
@@ -1424,10 +898,13 @@ func (d *DB) SaveAnalysis(ctx context.Context, doc Document, model, title, summa
 // new or model-drifted. Suggestion handling stays identical — pending
 // 'analysis' suggestions are superseded and the new ones are inserted.
 func (d *DB) SaveExternalAnalysis(ctx context.Context, doc Document, model, title, summary string, tags []string, suggestions []Suggestion, results ...StageResult) error {
-	return d.saveAnalysis(ctx, doc, "external_sha256", "external_model", "external_semantic_sha256", model, title, summary, tags, suggestions, results...)
+	return d.saveAnalysis(ctx, doc,
+		"external_sha256", "external_model", "external_semantic_sha256",
+		"seen_external_fm_sha256", "seen_external_body_sha256", "external_analysis_evidence_json", "seen_external_removal_generation",
+		model, title, summary, tags, suggestions, results...)
 }
 
-func (d *DB) saveAnalysis(ctx context.Context, doc Document, shaCol, modelCol, semanticCol, model, title, summary string, tags []string, suggestions []Suggestion, results ...StageResult) error {
+func (d *DB) saveAnalysis(ctx context.Context, doc Document, shaCol, modelCol, semanticCol, seenFmCol, seenBodyCol, evidenceCol, seenRemovalCol, model, title, summary string, tags []string, suggestions []Suggestion, results ...StageResult) error {
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -1438,8 +915,12 @@ func (d *DB) saveAnalysis(ctx context.Context, doc Document, shaCol, modelCol, s
 	if inputSHA == "" {
 		inputSHA = fallbackSemanticSHA(doc)
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE documents SET `+shaCol+`=?,`+modelCol+`=?,`+semanticCol+`=?,title=?,summary=?,tags_json=?,status='analyzed',last_error='',analyzed_at=?,seen_fm_sha256=?,seen_body_sha256=? WHERE path=?`, // #nosec G202 NOSONAR -- columns are compile-time constants, never user input
-		inputSHA, model, fallbackSemanticSHA(doc), title, summary, string(tj), time.Now().UTC().Format(time.RFC3339), doc.FmSHA256, doc.BodySHA256, doc.Path); err != nil {
+	seenRemovalGeneration := doc.SeenRemovalGeneration
+	if seenRemovalCol == "seen_external_removal_generation" {
+		seenRemovalGeneration = doc.SeenExternalRemovalGeneration
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE documents SET `+shaCol+`=?,`+modelCol+`=?,`+semanticCol+`=?,title=?,summary=?,tags_json=?,status='analyzed',last_error='',analyzed_at=?,`+seenFmCol+`=?,`+seenBodyCol+`=?,`+evidenceCol+`=?,`+seenRemovalCol+`=? WHERE path=?`, // #nosec G202 NOSONAR -- columns are compile-time constants, never user input
+		inputSHA, model, fallbackSemanticSHA(doc), title, summary, string(tj), time.Now().UTC().Format(time.RFC3339), doc.FmSHA256, doc.BodySHA256, doc.AnalysisEvidenceJSON, seenRemovalGeneration, doc.Path); err != nil {
 		return err
 	}
 	// Retire the pending analysis suggestions this pass replaces. Keep a

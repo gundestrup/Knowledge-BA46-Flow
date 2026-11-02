@@ -28,13 +28,35 @@ func unloadModel(ctx context.Context, model any) error {
 	return nil
 }
 
+// currentlyVisible is the live on-disk visibility check (unlike visiblePaths,
+// the scan-time snapshot): a path currently readable and not privacy-excluded.
+// Results are memoized for the run — the sweep consults this per document, so
+// re-reading every file per check would double the sweep's I/O for no gain.
 func (p *pipeline) currentlyVisible(path string) bool {
-	content, err := scanner.ReadDocument(p.c, path)
-	if err != nil {
-		return false
+	if visible, ok := p.visibleNow[path]; ok {
+		return visible
 	}
-	fields, _, err := frontmatter.Parse(content)
-	return err == nil && !frontmatter.NoLLMContext(fields)
+	visible := false
+	if content, err := scanner.ReadDocument(p.c, path); err == nil {
+		fields, _, err := frontmatter.Parse(content)
+		visible = err == nil && !frontmatter.NoLLMContext(fields)
+	}
+	if p.visibleNow == nil {
+		p.visibleNow = make(map[string]bool)
+	}
+	p.visibleNow[path] = visible
+	return visible
+}
+
+// llmVisibleInbound returns the paths linking to target that may appear in a
+// prompt: visible in the scan snapshot and still LLM-eligible on disk now.
+func (p *pipeline) llmVisibleInbound(target string) ([]string, error) {
+	inbound, err := p.db.InboundLinks(p.ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	inbound = filterLLMVisiblePaths(inbound, p.visiblePaths)
+	return slices.DeleteFunc(inbound, func(path string) bool { return !p.currentlyVisible(path) }), nil
 }
 
 func (p *pipeline) validateSuggestion(s database.Suggestion, content string, mergeBodies map[string]string, multipleMoves bool) error {

@@ -323,8 +323,24 @@ Analysis runs in up to three stages per document:
    may be merge targets. Partial target bodies are never sent as complete.
 
 When scan finds a new or changed visible note, the analyzer also refreshes
-unchanged notes with a direct mention/link to that evidence, a high-overlap
-duplicate match, or an unusually close embedding neighbor. The embedding arm is
+unchanged notes whose analysis evidence changed. Each analysis records which
+documents its prompt actually consumed — candidate annotations, separate
+inbound/sibling path sets, rendered frontmatter validation context, body-derived
+candidate scores, merge bodies and entity excerpts — so refresh is exact at
+each evidence level. Inbound paths are compared as sets: a title edit to a
+source that still links here does not refresh the target, but an added or
+removed link refreshes only the target whose inbound context changed. Local
+and external analyses maintain independent evidence records and frontmatter
+stamps. A catalog/index edit does not propagate solely because notes link to
+the index; Catalog backlinks are not treated as entity-body evidence.
+Legacy rows without the new evidence shape use a conservative heuristic
+sweep until analyzed; bounded embedding/signature projection remains for
+model candidates a prompt might newly cite, and never-analyzed seeds keep
+heuristic propagation. Deletion and reference-topology events use monotonic
+generations acknowledged per lane, so they are idempotent, retryable after
+failures, and do not requeue the same dependents on every later run.
+Entity-name matching weighs rarity — a filename word present in more than
+~2% of the corpus never becomes an alias. The embedding arm is
 rank-based rather than an absolute score: each changed note contributes at most
 its 16 nearest neighbors, and only pairs that also clear the 95th percentile of
 the corpus's own sampled cosine distribution — calibrated per run against the

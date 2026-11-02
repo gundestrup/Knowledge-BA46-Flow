@@ -129,6 +129,12 @@ Catalog of CSS frameworks.
 	}) {
 		t.Fatalf("inline-code link syntax became a catalog alias: %+v", codeExample)
 	}
+	catalogBacklink := index.matches("notes/catalog-backlink.md", "Catalog: [UIkit](uikit.md)")
+	if slices.ContainsFunc(catalogBacklink, func(match entityMention) bool {
+		return match.path == "frameworks/css/uikit.md"
+	}) {
+		t.Fatalf("navigational Catalog backlink became body evidence: %+v", catalogBacklink)
+	}
 	cssMentioned := index.matches("notes/css.md", "CSS needs a reset.")
 	if slices.ContainsFunc(cssMentioned, func(match entityMention) bool {
 		return strings.HasPrefix(match.path, "frameworks/css/") && match.path != "frameworks/css/README.md"

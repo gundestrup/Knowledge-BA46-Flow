@@ -1771,6 +1771,210 @@ func TestMigrationAddsFreshnessVerifyPromptStamp(t *testing.T) {
 	}
 }
 
+func TestMigrationV16RestoresEvidenceColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, col := range []string{
+		"analysis_evidence_json", "seen_external_fm_sha256",
+		"seen_external_body_sha256", "missing_since",
+	} {
+		if _, err := raw.Exec(`ALTER TABLE documents DROP COLUMN ` + col); err != nil {
+			t.Fatalf("drop %s: %v", col, err)
+		}
+	}
+	if _, err := raw.Exec(`PRAGMA user_version=15`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cols := make(map[string]bool)
+	rows, err := db.Query(`PRAGMA table_info(documents)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, dataType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk); err != nil {
+			t.Fatal(err)
+		}
+		cols[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for _, col := range []string{
+		"analysis_evidence_json", "seen_external_fm_sha256",
+		"seen_external_body_sha256", "missing_since",
+	} {
+		if !cols[col] {
+			t.Fatalf("migration did not restore %s", col)
+		}
+	}
+}
+
+func TestMigrationV17RestoresLaneAndEvidenceState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	ctx := t.Context()
+	db, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := Document{
+		Path: "note.md", SHA256: "source", SemanticSHA256: "semantic",
+		AnalysisInputSHA256: "input", FmSHA256: "fm", BodySHA256: "body", TagsJSON: `[]`,
+	}
+	if _, err := db.UpsertScanned(ctx, doc, "scan1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveAnalysis(ctx, doc, "local", "Note", "Summary", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveExternalAnalysis(ctx, doc, "external", "Note", "Summary", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, col := range []string{
+		"external_analysis_evidence_json", "seen_removal_generation",
+		"seen_external_removal_generation", "missing_generation",
+	} {
+		if _, err := raw.Exec(`ALTER TABLE documents DROP COLUMN ` + col); err != nil {
+			t.Fatalf("drop %s: %v", col, err)
+		}
+	}
+	if _, err := raw.Exec(`DROP TABLE evidence_state`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`PRAGMA user_version=16`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cols := make(map[string]bool)
+	rows, err := db.Query(`PRAGMA table_info(documents)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, dataType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk); err != nil {
+			_ = rows.Close()
+			t.Fatal(err)
+		}
+		cols[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		t.Fatal(err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, col := range []string{
+		"external_analysis_evidence_json", "seen_removal_generation",
+		"seen_external_removal_generation", "missing_generation",
+	} {
+		if !cols[col] {
+			t.Fatalf("migration did not restore %s", col)
+		}
+	}
+	var generation int64
+	if err := db.QueryRow(`SELECT removal_generation FROM evidence_state WHERE id=1`).Scan(&generation); err != nil || generation != 0 {
+		t.Fatalf("removal state generation=%d err=%v, want 0", generation, err)
+	}
+	localPending, err := db.Pending(ctx, "local", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalPending, err := db.PendingExternal(ctx, "external", "", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(localPending) != 0 || len(externalPending) != 0 {
+		t.Fatalf("additive schema migration requeued unchanged lineages: local=%d external=%d", len(localPending), len(externalPending))
+	}
+	localSweep, err := db.NeedsRemovalSweep(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalSweep, err := db.NeedsRemovalSweep(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if localSweep || externalSweep {
+		t.Fatalf("additive schema migration created phantom evidence sweeps: local=%v external=%v", localSweep, externalSweep)
+	}
+}
+
+func TestMigrationV17BackfillsLegacyExternalEvidence(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := Document{Path: "note.md", SHA256: "source", TagsJSON: `[]`}
+	if _, err := db.UpsertScanned(ctx, doc, "scan1"); err != nil {
+		t.Fatal(err)
+	}
+	legacyEvidence := `{"fm":["legacy-target.md"],"full":[]}`
+	if _, err := db.ExecContext(ctx, `UPDATE documents SET external_sha256='external-stamp',
+seen_fm_sha256='legacy-fm',seen_body_sha256='legacy-body',analysis_evidence_json=?,
+seen_external_fm_sha256='',seen_external_body_sha256='',external_analysis_evidence_json='' WHERE path='note.md'`, legacyEvidence); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var fm, body, evidence string
+	if err := db.QueryRow(`SELECT seen_external_fm_sha256,seen_external_body_sha256,external_analysis_evidence_json
+FROM documents WHERE path='note.md'`).Scan(&fm, &body, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if fm != "legacy-fm" || body != "legacy-body" || evidence != legacyEvidence {
+		t.Fatalf("legacy external evidence backfill fm=%q body=%q evidence=%q", fm, body, evidence)
+	}
+}
+
 // Fault-injection tests: SQLite RAISE(ABORT) triggers fail a specific
 // statement inside our transactions — the recovery contract is that the
 // error surfaces and the transaction leaves no half-written state, the same
@@ -2504,5 +2708,293 @@ expand_sha256=expand_input_sha256`); err != nil {
 	}
 	if stale != "STALE" {
 		t.Fatalf("stale lineage was rescued: %q", stale)
+	}
+}
+
+func TestMarkMissingCleansReferencesAndTracksRemovalGeneration(t *testing.T) {
+	ctx := t.Context()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "km.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	doc := Document{Path: "a.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: `[]`}
+	if _, err := db.UpsertScanned(ctx, doc, "scan1"); err != nil {
+		t.Fatal(err)
+	}
+	keep := Document{Path: "keep.md", SHA256: "keep", Size: 4, ModifiedUnix: 1, TagsJSON: `[]`}
+	if _, err := db.UpsertScanned(ctx, keep, "scan2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceReferences(ctx, "a.md", "one", []Reference{
+		{WrittenTarget: "b.md", TargetPath: "b.md", Kind: "body"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkMissing(ctx, "scan2"); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := db.SourceReferences(ctx, "a.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 0 {
+		t.Fatalf("missing source kept %d references", len(refs))
+	}
+	var versions int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM reference_versions WHERE source_path='a.md'`).Scan(&versions); err != nil {
+		t.Fatal(err)
+	}
+	if versions != 0 {
+		t.Fatalf("missing source kept %d reference-version rows", versions)
+	}
+	generation, err := db.RemovalGeneration(ctx)
+	if err != nil || generation != 2 {
+		t.Fatalf("evidence generation=%d err=%v, want 2 (reference change + deletion)", generation, err)
+	}
+	missing, err := db.MissingDocuments(ctx)
+	if err != nil || len(missing) != 1 || missing[0].Path != "a.md" || missing[0].Generation != generation {
+		t.Fatalf("missing events=%+v err=%v", missing, err)
+	}
+	needsLocal, err := db.NeedsRemovalSweep(ctx, false)
+	if err != nil || !needsLocal {
+		t.Fatalf("local removal sweep needed=%v err=%v, want true", needsLocal, err)
+	}
+	if err := db.MarkRemovalChecked(ctx, "keep.md", false, generation); err != nil {
+		t.Fatal(err)
+	}
+	needsLocal, err = db.NeedsRemovalSweep(ctx, false)
+	if err != nil || needsLocal {
+		t.Fatalf("local removal sweep needed after acknowledgement=%v err=%v, want false", needsLocal, err)
+	}
+	needsExternal, err := db.NeedsRemovalSweep(ctx, true)
+	if err != nil || !needsExternal {
+		t.Fatalf("external removal sweep needed=%v err=%v, want true", needsExternal, err)
+	}
+	if _, err := db.UpsertScanned(ctx, keep, "scan3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkMissing(ctx, "scan3"); err != nil {
+		t.Fatal(err)
+	}
+	generationAgain, err := db.RemovalGeneration(ctx)
+	if err != nil || generationAgain != generation {
+		t.Fatalf("repeated scan advanced removal generation to %d, want %d (err=%v)", generationAgain, generation, err)
+	}
+	if _, err := db.UpsertScanned(ctx, doc, "scan4"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceReferences(ctx, "a.md", "one", []Reference{
+		{WrittenTarget: "b.md", TargetPath: "b.md", Kind: "body"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	refs, err = db.SourceReferences(ctx, "a.md")
+	if err != nil || len(refs) != 1 {
+		t.Fatalf("resurrection did not restore outbound references: %+v err=%v", refs, err)
+	}
+}
+
+func TestReplaceReferencesAdvancesEvidenceGenerationOnlyForTopologyChanges(t *testing.T) {
+	ctx := t.Context()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "km.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	doc := Document{Path: "source.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: `[]`}
+	if _, err := db.UpsertScanned(ctx, doc, "scan1"); err != nil {
+		t.Fatal(err)
+	}
+	initial := []Reference{
+		{WrittenTarget: "target.md", TargetPath: "target.md", Kind: "body", SourceSHA256: "one"},
+		{WrittenTarget: "target.md", TargetPath: "target.md", Kind: "body", SourceSHA256: "one"},
+	}
+	if err := db.ReplaceReferences(ctx, "source.md", "one", initial); err != nil {
+		t.Fatal(err)
+	}
+	generation, err := db.RemovalGeneration(ctx)
+	if err != nil || generation != 1 {
+		t.Fatalf("initial topology generation=%d err=%v, want 1", generation, err)
+	}
+	// A body-only edit with the same outgoing link set updates the source
+	// version but does not invalidate every document's inbound evidence.
+	if err := db.ReplaceReferences(ctx, "source.md", "two", []Reference{
+		{WrittenTarget: "target.md", TargetPath: "target.md", Kind: "body", SourceSHA256: "two"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sameGeneration, err := db.RemovalGeneration(ctx)
+	if err != nil || sameGeneration != generation {
+		t.Fatalf("same topology advanced generation to %d, want %d (err=%v)", sameGeneration, generation, err)
+	}
+	if err := db.ReplaceReferences(ctx, "source.md", "three", []Reference{
+		{WrittenTarget: "other.md", TargetPath: "other.md", Kind: "body", SourceSHA256: "three"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	changedGeneration, err := db.RemovalGeneration(ctx)
+	if err != nil || changedGeneration != generation+1 {
+		t.Fatalf("changed topology generation=%d err=%v, want %d", changedGeneration, err, generation+1)
+	}
+}
+
+func TestRenameRetargetsSourceReferences(t *testing.T) {
+	ctx := t.Context()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "km.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	old := Document{Path: "old.md", SHA256: "same", Size: 1, ModifiedUnix: 1, TagsJSON: `[]`}
+	if _, err := db.UpsertScanned(ctx, old, "scan1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceReferences(ctx, "old.md", "same", []Reference{
+		{WrittenTarget: "b.md", TargetPath: "b.md", Kind: "body"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Same content at a new path with the old path absent → rename detection.
+	moved := Document{Path: "new.md", SHA256: "same", Size: 1, ModifiedUnix: 2, TagsJSON: `[]`}
+	if _, err := db.UpsertScanned(ctx, moved, "scan2", func(p string) bool { return p == "old.md" }); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := db.SourceReferences(ctx, "new.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 1 || refs[0].TargetPath != "b.md" {
+		t.Fatalf("rename did not retarget source references: %+v", refs)
+	}
+	if stale, _ := db.SourceReferences(ctx, "old.md"); len(stale) != 0 {
+		t.Fatalf("old path kept %d references", len(stale))
+	}
+	var oldVersions, newVersions int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM reference_versions WHERE source_path='old.md'`).Scan(&oldVersions); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM reference_versions WHERE source_path='new.md'`).Scan(&newVersions); err != nil {
+		t.Fatal(err)
+	}
+	if oldVersions != 0 || newVersions != 1 {
+		t.Fatalf("rename reference-version rows old=%d new=%d; want old=0 new=1", oldVersions, newVersions)
+	}
+}
+
+func TestSaveAnalysisStoresLaneEvidenceSeparately(t *testing.T) {
+	ctx := t.Context()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "km.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	doc := Document{
+		Path: "note.md", SHA256: "source", AnalysisInputSHA256: "input",
+		SemanticSHA256: "semantic", FmSHA256: "fm", BodySHA256: "body", TagsJSON: `[]`,
+	}
+	if _, err := db.UpsertScanned(ctx, doc, "scan1"); err != nil {
+		t.Fatal(err)
+	}
+	doc.AnalysisEvidenceJSON = `{"fm":["local-target.md"],"full":[]}`
+	if err := db.SaveAnalysis(ctx, doc, "local", "Note", "Summary", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	doc.AnalysisEvidenceJSON = `{"fm":["external-target.md"],"full":[]}`
+	if err := db.SaveExternalAnalysis(ctx, doc, "external", "Note", "Summary", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	var local, external string
+	if err := db.QueryRow(`SELECT analysis_evidence_json,external_analysis_evidence_json FROM documents WHERE path='note.md'`).Scan(&local, &external); err != nil {
+		t.Fatal(err)
+	}
+	if local != `{"fm":["local-target.md"],"full":[]}` || external != `{"fm":["external-target.md"],"full":[]}` {
+		t.Fatalf("lane evidence crossed: local=%q external=%q", local, external)
+	}
+}
+
+func TestIndexedInboundLinksReadyAmbiguousAndFallback(t *testing.T) {
+	ctx := t.Context()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "km.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	bID := "22222222-2222-4222-8222-222222222222"
+	docs := []Document{
+		{Path: "a.md", SHA256: "a1", Size: 1, ModifiedUnix: 1, TagsJSON: `[]`,
+			FrontmatterJSON: `{"document_id":"11111111-1111-4111-8111-111111111111"}`},
+		{Path: "b.md", SHA256: "b1", Size: 1, ModifiedUnix: 1, TagsJSON: `[]`,
+			FrontmatterJSON: `{"document_id":"` + bID + `"}`},
+		{Path: "e.md", SHA256: "e1", Size: 1, ModifiedUnix: 1, TagsJSON: `[]`,
+			FrontmatterJSON: `{"document_id":"33333333-3333-4333-8333-333333333333"}`},
+	}
+	for _, doc := range docs {
+		if _, err := db.UpsertScanned(ctx, doc, "scan1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// a.md links b.md by path; e.md links by document_id only — the indexed
+	// query must resolve both arms.
+	if err := db.ReplaceReferences(ctx, "a.md", "a1", []Reference{
+		{WrittenTarget: "b.md", TargetPath: "b.md", TargetID: bID, Kind: "related"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceReferences(ctx, "b.md", "b1", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceReferences(ctx, "e.md", "e1", []Reference{
+		{WrittenTarget: "old-name.md", TargetPath: "", TargetID: bID, Kind: "body"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	links, ready, err := db.IndexedInboundLinks(ctx, "b.md")
+	if err != nil || !ready {
+		t.Fatalf("indexed inbound failed: ready=%v err=%v", ready, err)
+	}
+	if len(links) != 2 || links[0] != "a.md" || links[1] != "e.md" {
+		t.Fatalf("indexed inbound=%v, want [a.md e.md] (path and identity match)", links)
+	}
+	if helper, err := db.InboundLinks(ctx, "b.md"); err != nil || len(helper) != 2 {
+		t.Fatalf("InboundLinks should use the ready index: %v err=%v", helper, err)
+	}
+	// A second live document claiming b.md's identity makes id-based matching
+	// ambiguous — the query must fail closed rather than guess a target.
+	dupe := Document{Path: "dupe.md", SHA256: "d1", Size: 1, ModifiedUnix: 1, TagsJSON: `[]`,
+		FrontmatterJSON: `{"document_id":"` + bID + `"}`}
+	if _, err := db.UpsertScanned(ctx, dupe, "scan1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceReferences(ctx, "dupe.md", "d1", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := db.IndexedInboundLinks(ctx, "b.md"); err == nil ||
+		!strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("duplicate document_id should fail closed, err=%v", err)
+	}
+	if _, err := db.InboundLinks(ctx, "b.md"); err == nil {
+		t.Fatal("InboundLinks should surface the ambiguity error")
+	}
+	if _, err := db.Exec(`DELETE FROM documents WHERE path='dupe.md'`); err != nil {
+		t.Fatal(err)
+	}
+	// A scanned document without a reference-version row makes the index
+	// incomplete: InboundLinks falls back to the frontmatter scan, which sees
+	// only explicit related/contradicted_by entries.
+	fmOnly := Document{Path: "d.md", SHA256: "d2", Size: 1, ModifiedUnix: 1, TagsJSON: `[]`,
+		FrontmatterJSON: `{"related":["b.md"]}`}
+	if _, err := db.UpsertScanned(ctx, fmOnly, "scan2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ready, err := db.IndexedInboundLinks(ctx, "b.md"); err != nil || ready {
+		t.Fatalf("incomplete index should report not-ready: ready=%v err=%v", ready, err)
+	}
+	fallback, err := db.InboundLinks(ctx, "b.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fallback) != 1 || fallback[0] != "d.md" {
+		t.Fatalf("frontmatter fallback=%v, want [d.md] only", fallback)
 	}
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
+	"errors"
 
 	"knowledge-ba46-flow/internal/frontmatter"
 )
@@ -92,6 +92,11 @@ func renameObserved(ctx context.Context, tx *sql.Tx, doc Document, seen string, 
 	if _, err := tx.ExecContext(ctx, `UPDATE documents SET path=? WHERE path=?`, doc.Path, previous[0]); err != nil {
 		return false, err
 	}
+	// Updating the document path cascades its source-reference rows. The
+	// resulting inbound path sets may change for notes it referenced.
+	if err := bumpEvidenceGeneration(ctx, tx); err != nil {
+		return false, err
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO renames(old_path,new_path,moved_at,document_id) VALUES(?,?,?,?)`,
 		previous[0], doc.Path, seen, id); err != nil {
 		return false, err
@@ -113,83 +118,81 @@ func (d *DB) uniqueIdentityAt(ctx context.Context, path, id string) bool {
 	return err == nil && count == 1
 }
 
-type Reference struct {
-	WrittenTarget string `json:"written_target"`
-	TargetPath    string `json:"target_path"`
-	TargetID      string `json:"target_document_id"`
-	Kind          string `json:"kind"`
-	SourceSHA256  string `json:"source_sha256"`
-}
-
-func (d *DB) SourceReferences(ctx context.Context, source string) ([]Reference, error) {
-	rows, err := d.QueryContext(ctx, `SELECT written_target,target_path,target_document_id,kind,source_sha256 FROM document_references WHERE source_path=?`, source)
+// Renames returns every recorded move as old_path → new_path — the prefilter
+// map for finding documents whose references need retargeting.
+func (d *DB) Renames(ctx context.Context) (map[string]string, error) {
+	rows, err := d.QueryContext(ctx, `SELECT old_path,new_path FROM renames`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []Reference{}
+	out := map[string]string{}
 	for rows.Next() {
-		var ref Reference
-		if err := rows.Scan(&ref.WrittenTarget, &ref.TargetPath, &ref.TargetID, &ref.Kind, &ref.SourceSHA256); err != nil {
+		var o, n string
+		if err := rows.Scan(&o, &n); err != nil {
 			return nil, err
 		}
-		out = append(out, ref)
+		out[o] = n
 	}
 	return out, rows.Err()
 }
 
-func (d *DB) ReplaceReferences(ctx context.Context, source, hash string, refs []Reference) error {
-	tx, err := d.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM document_references WHERE source_path=?`, source); err != nil {
-		return err
-	}
-	for _, ref := range refs {
-		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO document_references
-(source_path,written_target,target_path,target_document_id,kind,source_sha256) VALUES(?,?,?,?,?,?)`,
-			source, ref.WrittenTarget, ref.TargetPath, ref.TargetID, ref.Kind, hash); err != nil {
-			return err
-		}
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO reference_versions(source_path,source_sha256) VALUES(?,?)
-ON CONFLICT(source_path) DO UPDATE SET source_sha256=excluded.source_sha256`, source, hash); err != nil {
-		return err
-	}
-	return tx.Commit()
+// RetargetPath resolves where a path went after renames: it follows the
+// renames map (a→b→c collapses to the live endpoint) and returns false when
+// the trail ends at a missing or unknown document — a deleted file offers no
+// retarget. Bounded hops keep a corrupted map from looping forever.
+func (d *DB) RetargetPath(ctx context.Context, path string) (string, bool) {
+	target, _, ok := d.RetargetEvidence(ctx, path)
+	return target, ok
 }
 
-func (d *DB) IndexedInboundLinks(ctx context.Context, path string) ([]string, bool, error) {
-	var incomplete int
-	err := d.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM documents d WHERE d.status<>'missing'
-AND NOT EXISTS(SELECT 1 FROM reference_versions v WHERE v.source_path=d.path AND v.source_sha256=d.sha256))`).Scan(&incomplete)
-	if err != nil || incomplete != 0 {
-		return nil, false, err
+// RetargetEvidence also returns the UUID recorded at the move. Callers must
+// check that identity against the live target, not trust a stale scan alone.
+func (d *DB) RetargetEvidence(ctx context.Context, path string) (string, string, bool) {
+	var originalStatus string
+	err := d.QueryRowContext(ctx, `SELECT status FROM documents WHERE path=?`, path).Scan(&originalStatus)
+	if err == nil && originalStatus != "missing" {
+		return "", "", false
 	}
-	var raw string
-	if err := d.QueryRowContext(ctx, `SELECT frontmatter_json FROM documents WHERE path=? AND status<>'missing'`, path).Scan(&raw); err != nil && err != sql.ErrNoRows {
-		return nil, false, err
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", "", false
 	}
-	id := DocumentIdentity(raw)
-	if id != "" && !d.uniqueIdentityAt(ctx, path, id) {
-		return nil, true, fmt.Errorf("ambiguous document_id for %s", path)
-	}
-	rows, err := d.QueryContext(ctx, `SELECT DISTINCT r.source_path FROM document_references r
-JOIN documents d ON d.path=r.source_path AND d.sha256=r.source_sha256 AND d.status<>'missing'
-WHERE r.source_path<>? AND (r.target_path=? OR (?<>'' AND r.target_document_id=?)) ORDER BY r.source_path`, path, path, id, id)
-	if err != nil {
-		return nil, false, err
-	}
-	defer rows.Close()
-	out := []string{}
-	for rows.Next() {
-		var source string
-		if err := rows.Scan(&source); err != nil {
-			return nil, false, err
+	cur := path
+	expectedID := ""
+	seen := make(map[string]bool)
+	// Follow the renames map to the end of the chain — intermediate hops no
+	// longer exist as document rows (the row was re-keyed onward), so only
+	// the final endpoint is checked for liveness. The hop bound protects
+	// against a corrupted cyclic map.
+	for i := 0; i < 8; i++ {
+		if seen[cur] {
+			return "", "", false
 		}
-		out = append(out, source)
+		seen[cur] = true
+		var next, id string
+		if err := d.QueryRowContext(ctx, `SELECT new_path,document_id FROM renames WHERE old_path=?`, cur).Scan(&next, &id); err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return "", "", false
+			}
+			if cur == path {
+				return "", "", false
+			}
+			var status string
+			if err := d.QueryRowContext(ctx, `SELECT status FROM documents WHERE path=?`, cur).Scan(&status); err != nil || status == "missing" {
+				return "", "", false
+			}
+			if expectedID != "" && !d.uniqueIdentityAt(ctx, cur, expectedID) {
+				return "", "", false
+			}
+			return cur, expectedID, true
+		}
+		if id != "" {
+			if expectedID != "" && expectedID != id {
+				return "", "", false
+			}
+			expectedID = id
+		}
+		cur = next
 	}
-	return out, true, rows.Err()
+	return "", "", false
 }

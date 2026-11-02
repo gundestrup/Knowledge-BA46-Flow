@@ -36,9 +36,26 @@ type pendingEntityAlias struct {
 	label      string
 }
 
+type pendingDistinctWord struct {
+	raw        string
+	normalized string
+	targetPath string
+	sourcePath string
+}
+
 type entityIndex struct {
-	byPhrase map[string][]entityAlias
-	pending  []pendingEntityAlias
+	byPhrase        map[string][]entityAlias
+	pending         []pendingEntityAlias
+	wordDF          map[string]int
+	pendingDistinct []pendingDistinctWord
+}
+
+// distinctWordDFLimit caps how many documents may contain a filename word
+// before it stops counting as an entity alias: a word present in more than
+// ~2% of the corpus carries no naming signal, and aliasing it would fan
+// evidence dependents across hundreds of notes that merely share vocabulary.
+func distinctWordDFLimit(visibleDocs int) int {
+	return max(4, visibleDocs/50)
 }
 
 var genericEntityTerms = map[string]bool{
@@ -51,10 +68,11 @@ var genericEntityTerms = map[string]bool{
 }
 
 func newEntityIndex() *entityIndex {
-	return &entityIndex{byPhrase: make(map[string][]entityAlias)}
+	return &entityIndex{byPhrase: make(map[string][]entityAlias), wordDF: make(map[string]int)}
 }
 
 func (i *entityIndex) addDocument(path string, fields map[string]any, content string) {
+	i.countWords(content)
 	parts := strings.Split(filepath.ToSlash(path), "/")
 	if len(parts) > 1 && strings.EqualFold(strings.TrimSuffix(parts[len(parts)-1], filepath.Ext(parts[len(parts)-1])), "readme") {
 		i.addAlias(parts[len(parts)-2], path)
@@ -255,8 +273,46 @@ func entitySlug(text string) string {
 	return strings.Join(out, "-")
 }
 
+// countWords feeds the corpus document-frequency table used to gate
+// filename-word aliases; it shares the prose/normalization pipeline of
+// matches so both sides see the same vocabulary.
+func (i *entityIndex) countWords(content string) {
+	_, body, err := frontmatter.Parse(content)
+	if err != nil {
+		return
+	}
+	seen := make(map[string]bool)
+	for _, line := range proseLines(body) {
+		for _, w := range entityWords(line.text) {
+			seen[w.normalized] = true
+		}
+	}
+	for w := range seen {
+		i.wordDF[w]++
+	}
+}
+
 func (i *entityIndex) addDistinctWords(text, path string) {
-	i.addDistinctWordsFrom(text, path, path)
+	for _, word := range entityWords(text) {
+		if len([]rune(word.normalized)) >= 5 && !genericEntityTerms[word.normalized] {
+			i.pendingDistinct = append(i.pendingDistinct, pendingDistinctWord{
+				raw: word.raw, normalized: word.normalized, targetPath: path, sourcePath: path,
+			})
+		}
+	}
+}
+
+// resolveDistinctWords admits the deferred filename-word aliases that are
+// rare enough to carry naming signal; common vocabulary never enters the
+// index. Called once the corpus pass has filled wordDF.
+func (i *entityIndex) resolveDistinctWords(visibleDocs int) {
+	limit := distinctWordDFLimit(visibleDocs)
+	for _, p := range i.pendingDistinct {
+		if i.wordDF[p.normalized] <= limit {
+			i.addAliasFrom(p.raw, p.targetPath, p.sourcePath)
+		}
+	}
+	i.pendingDistinct = nil
 }
 
 func (i *entityIndex) addDistinctWordsFrom(text, path, sourcePath string) {
@@ -438,6 +494,12 @@ func (i *entityIndex) matches(currentPath, content string) []entityMention {
 	var matches []entityMention
 	for _, sourceLine := range proseLines(body) {
 		line := sourceLine.text
+		// Catalog back-links are navigational boilerplate, not evidence that
+		// the note substantively discusses the index target. Treating their
+		// label as an entity mention fans index edits out to every catalog row.
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "catalog:") {
+			continue
+		}
 		words := entityWords(line)
 		for start := range words {
 			keyParts := make([]string, 0, 5)
@@ -475,8 +537,9 @@ func (i *entityIndex) matches(currentPath, content string) []entityMention {
 	return matches
 }
 
-func entityEvidenceContext(c config.Config, ranked []candidate) string {
+func entityEvidenceContext(c config.Config, ranked []candidate) (string, []string) {
 	var lines []string
+	var rendered []string
 	for _, target := range ranked {
 		if len(lines) == 2 {
 			break
@@ -497,12 +560,13 @@ func entityEvidenceContext(c config.Config, ranked []candidate) string {
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("- %s: %s", target.doc.Path, strings.Join(excerpts, " | ")))
+		rendered = append(rendered, target.doc.Path)
 	}
 	if len(lines) == 0 {
-		return ""
+		return "", nil
 	}
 	return "Exact-name evidence from candidate notes (hints, not proof of a relationship):\n" +
-		strings.Join(lines, "\n") + "\n"
+		strings.Join(lines, "\n") + "\n", rendered
 }
 
 func entityExcerpts(body string, mentions []entityMention) []string {

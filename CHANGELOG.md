@@ -9,6 +9,72 @@ tag is prepared.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-02
+
+### Changed
+
+- Evidence-dependent refresh is now exact: each analysis records the
+  evidence its prompt actually consumed (schema v17) — ranked candidate
+  annotations, body-derived scores and excerpts, merge bodies, plus separate
+  exact sets for inbound paths and unmentioned siblings. Validation/link
+  context is fingerprinted as rendered, so a frontmatter title edit to an
+  inbound source does not fire when the path list itself is unchanged, while
+  adding/removing a real relationship refreshes only its affected targets.
+  Local and external lanes keep separate evidence records. Legacy rows retain
+  a conservative heuristic fallback until stamped. Catalog/index edits no
+  longer fan out solely because of link topology — a `Catalog:` backlink
+  does not count as entity-body evidence; refresh is limited to changed
+  inbound sets, recorded prompt evidence and bounded semantic projection.
+  Embedding/signature projection remains bounded for candidates the prompt
+  might newly cite, and never-analyzed seeds retain heuristic propagation.
+- Filename-word entity aliases are gated by corpus document frequency:
+  a stem word present in more than ~2% of documents carries no naming
+  signal and no longer seeds dependents or prompt entity evidence. Adding
+  a note like `db-migration-runbook.md` no longer re-analyzes every note
+  that merely says "migration"; rare names still propagate normally.
+- Job summaries now decompose the analyze count into pending work and
+  evidence-dependents (`Analyzed N; queue X direct + Y evidence dependents`), so
+  a large queue is self-explanatory. Scanning also drops the dead reference
+  rows of documents that went missing, and a detected rename retargets the
+  moved document's own outbound reference rows instead of leaving them on
+  the old path.
+- External analysis keeps its own `seen_external_*` evidence stamps so
+  external-lane drift is measured against the last external run, not the
+  last local one. Deletion and reference-topology changes share a monotonic
+  evidence generation acknowledged independently by each lane; refresh is
+  idempotent, retryable after a failed run, and not tied to wall-clock
+  ordering. Missing-source references are cleaned up, and rename operations
+  retarget the moved document's own reference rows.
+- Regression coverage for the evidence model's upgrade paths: pre-versioned
+  (flattened) evidence records still recover newly added inbound linkers
+  and deletion consumers conservatively, and a re-analyzed legacy row is
+  restamped with the exact v2 record — verified end to end including a
+  stable no-op follow-up run. Unrecorded rows fall back to the entity and
+  signature heuristic arms, while unrelated unrecorded documents stay out
+  of the queue. The reference index is exercised on its ready path
+  (path- and document_id-matched inbound lookups), its ambiguous-identity
+  fail-closed branch, and its incomplete-index frontmatter fallback.
+- Structural cleanup of the shared change-detection machinery: one canonical
+  `frontmatter.GraphLinkKeys`/`GraphLinkTargets` replaces seven hand-rolled
+  related/contradicted_by readers across scanner, database, proposal and
+  analyzer; one `isLanePending` predicate is shared by the queue, the sweep
+  and the estimate; `PendingExternal` reuses the parameterized `pending`
+  builder; inbound-link visibility filtering is a single helper with a
+  memoized live check; and the dependents sweep threads its seed sets
+  through one `sweepSeeds` bundle instead of 9-12 parameter lists. The
+  evidence machinery moved to `internal/analyzer/evidence.go`, and the
+  schema migration, evidence-generation and reference-table code to
+  `migrate.go`, `evidence_state.go` and `references.go` under
+  `internal/database`. No behavior change.
+
+### Fixed
+
+- `forgejoAuth`'s `git credential fill` subprocess could block on an
+  interactive credential prompt (terminal or GUI askpass) when no credential
+  is stored — hanging both test runs and headless report jobs. The subprocess
+  now runs with `GIT_TERMINAL_PROMPT=0` and `GCM_INTERACTIVE=never`, so a
+  missing credential is an empty result, never a question.
+
 ## [0.2.0] - 2026-10-31
 
 ### Added

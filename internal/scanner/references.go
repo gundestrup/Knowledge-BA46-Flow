@@ -97,7 +97,7 @@ func (w *repoWalker) collectReferences(rel string, fields map[string]any, body s
 		}
 		refs = append(refs, ref)
 	}
-	for _, kind := range []string{"related", "contradicted_by"} {
+	for _, kind := range frontmatter.GraphLinkKeys {
 		for _, target := range frontmatter.StringList(fields, kind) {
 			if _, err := paths.CleanRelative(target); err == nil {
 				record(kind, target, target, w.paths[target])

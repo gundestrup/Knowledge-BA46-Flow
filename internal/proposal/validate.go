@@ -132,7 +132,7 @@ func ValidateLinks(content string, lookup func(string) error) error {
 	if err != nil {
 		return err
 	}
-	for _, key := range []string{"related", "contradicted_by"} {
+	for _, key := range frontmatter.GraphLinkKeys {
 		for _, link := range frontmatter.StringList(fields, key) {
 			local, err := paths.CleanRelative(link)
 			if err != nil {

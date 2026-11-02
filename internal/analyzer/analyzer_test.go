@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -984,6 +986,525 @@ func TestNewNamedEvidenceReanalyzesUnchangedSource(t *testing.T) {
 	}
 }
 
+func TestBodyOnlyChangeRefreshesOnlyConsumedBodyEvidence(t *testing.T) {
+	c, db := setup(t)
+	target := filepath.Join(c.RepositoryPath, "quasar.md")
+	consumer := filepath.Join(c.RepositoryPath, "consumer.md")
+	unrelated := filepath.Join(c.RepositoryPath, "unrelated.md")
+	if err := os.WriteFile(target, []byte("---\ntitle: Quasar\n---\n# Quasar\n\n"+strings.Repeat("targetword ", 40)+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(consumer, []byte("# Consumer\n\nQuasar is the important system for this note.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unrelated, []byte("# Unrelated\n\n"+strings.Repeat("unrelatedword ", 40)+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	firstModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if first, err := RunProgress(t.Context(), c, db, Generators{Analysis: firstModel}, RunOptions{}); err != nil || first.Processed != 4 {
+		t.Fatalf("initial analysis=%+v error=%v", first, err)
+	}
+
+	// Body-only edit leaves frontmatter unchanged. Only the note that actually
+	// received the target's entity excerpt should refresh.
+	if err := os.WriteFile(target, []byte("---\ntitle: Quasar\n---\n# Quasar\n\n"+strings.Repeat("rewrittenword ", 40)+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	secondModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	second, err := RunProgress(t.Context(), c, db, Generators{Analysis: secondModel}, RunOptions{})
+	if err != nil || second.Processed != 2 || second.Dependents != 1 {
+		t.Fatalf("body-only edit should reprocess the changed doc plus its actual evidence consumer: %+v error=%v", second, err)
+	}
+	consumerSeen := false
+	for _, prompt := range secondModel.prompts {
+		if strings.Contains(prompt, "Current path: consumer.md") {
+			consumerSeen = true
+		}
+		if strings.Contains(prompt, "Current path: unrelated.md") {
+			t.Fatal("unrelated note re-analyzed on another note's body-only edit")
+		}
+	}
+	if !consumerSeen {
+		t.Fatal("body evidence consumer did not refresh")
+	}
+}
+
+func TestFrontmatterChangeRefreshesLinkDependents(t *testing.T) {
+	c, db := setup(t)
+	linker := filepath.Join(c.RepositoryPath, "linker.md")
+	target := filepath.Join(c.RepositoryPath, "target.md")
+	if err := os.WriteFile(linker, []byte("# Linker\n\nSee [Target](target.md).\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("---\ntitle: Old title\n---\n# Old title\n\nBody.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	firstModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if first, err := RunProgress(t.Context(), c, db, Generators{Analysis: firstModel}, RunOptions{}); err != nil || first.Processed != 3 {
+		t.Fatalf("initial analysis=%+v error=%v", first, err)
+	}
+
+	// Frontmatter edit changes the annotation the linker's prompt sees —
+	// the linker must be re-analyzed as an evidence dependent.
+	if err := os.WriteFile(target, []byte("---\ntitle: New title\n---\n# New title\n\nBody.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	secondModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	second, err := RunProgress(t.Context(), c, db, Generators{Analysis: secondModel}, RunOptions{})
+	// Target plus every doc whose recorded evidence includes its
+	// annotation — the linker and the fixture's a.md, whose ranked
+	// candidate set covered target.
+	if err != nil || second.Processed != 3 {
+		t.Fatalf("frontmatter edit should reprocess target and dependents: %+v error=%v", second, err)
+	}
+	linkerPrompts := 0
+	for _, prompt := range secondModel.prompts {
+		if strings.Contains(prompt, "Current path: linker.md") {
+			linkerPrompts++
+		}
+	}
+	if linkerPrompts != 1 {
+		t.Fatalf("linker dependent expected once after frontmatter change, got %d", linkerPrompts)
+	}
+}
+
+func TestInboundEvidenceChangesOnlyWhenLinkTopologyChanges(t *testing.T) {
+	c, db := setup(t)
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(c.RepositoryPath, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("target.md", "---\ntitle: Target\n---\n# Target\n\nUnrelated target prose.\n")
+	write("z-source.md", "---\ntitle: Old source\nrelated:\n  - target.md\n---\n# Source\n\nDistinctive source material.\n")
+	for i := 0; i < 20; i++ {
+		write(fmt.Sprintf("a-noise-%02d.md", i), fmt.Sprintf("# Noise %d\n\nUnique unrelated token%d material.\n", i, i))
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	reply := `{"title":"Processed","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: &fakeLLM{reply: reply}}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	targetDoc, err := db.Documents(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var targetRow database.Document
+	for _, doc := range targetDoc {
+		if doc.Path == "target.md" {
+			targetRow = doc
+			break
+		}
+	}
+	ev, ok := parseAnalysisEvidenceRecord(targetRow.AnalysisEvidenceJSON)
+	if !ok || !slices.Contains(ev.Inbound, "z-source.md") || slices.Contains(ev.Fm, "z-source.md") {
+		t.Fatalf("expected inbound path-only evidence outside ranked annotations: %+v", ev)
+	}
+
+	// A title edit to an incoming source does not change the target's inbound
+	// path list; the target did not see that source's title in its prompt.
+	write("z-source.md", "---\ntitle: New source\nrelated:\n  - target.md\n---\n# Source\n\nDistinctive source material.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	titleEditModel := &fakeLLM{reply: reply}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: titleEditModel}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, prompt := range titleEditModel.prompts {
+		if strings.Contains(prompt, "Current path: target.md") {
+			t.Fatal("inbound target was refreshed although its path-only evidence was unchanged")
+		}
+	}
+
+	// Removing the relationship changes the actual inbound context and must
+	// refresh the target, even though neither its source nor own body changed.
+	write("z-source.md", "---\ntitle: New source\n---\n# Source\n\nDistinctive source material.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	inboundAfterRemoval, err := db.InboundLinks(t.Context(), "target.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inboundAfterRemoval) != 0 {
+		t.Fatalf("scanner did not update inbound index after link removal: %v", inboundAfterRemoval)
+	}
+	topologyModel := &fakeLLM{reply: reply}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: topologyModel}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	targetPrompts := 0
+	for _, prompt := range topologyModel.prompts {
+		if strings.Contains(prompt, "Current path: target.md") {
+			targetPrompts++
+		}
+	}
+	if targetPrompts != 1 {
+		t.Fatalf("target should refresh once when inbound topology changes, got %d", targetPrompts)
+	}
+}
+
+func TestCommonFilenameWordsDoNotFanOutDependents(t *testing.T) {
+	c, db := setup(t)
+	// Five notes that merely share the word "migration" — a new note named
+	// for that word must not re-analyze them: the word is vocabulary, not a
+	// name. One note also mentions the rare word "uikify" and stays a
+	// genuine dependent.
+	for i := 0; i < 5; i++ {
+		name := fmt.Sprintf("note-%d.md", i)
+		body := fmt.Sprintf("# Note %d\n\nThe migration plan is documented elsewhere.\n", i)
+		if i == 0 {
+			body = "# Note 0\n\nUse uikify for this interface; migration notes are elsewhere.\n"
+		}
+		if err := os.WriteFile(filepath.Join(c.RepositoryPath, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	firstModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: firstModel}, RunOptions{}); err != nil {
+		t.Fatalf("initial analysis error=%v", err)
+	}
+	if err := os.WriteFile(filepath.Join(c.RepositoryPath, "db-migration-uikify-runbook.md"),
+		[]byte("# DB migration runbook\n\nSteps for the migration.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	secondModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	second, err := RunProgress(t.Context(), c, db, Generators{Analysis: secondModel}, RunOptions{})
+	if err != nil {
+		t.Fatalf("run error=%v", err)
+	}
+	// New note plus exactly one dependent — the rare-word match, not the
+	// five common-word mentions.
+	if second.Processed != 2 {
+		t.Fatalf("expected new note + rare-word dependent only, got %+v", second)
+	}
+	refreshed := 0
+	for _, prompt := range secondModel.prompts {
+		if strings.Contains(prompt, "Current path: note-0.md") {
+			refreshed++
+		}
+		for i := 1; i < 5; i++ {
+			if strings.Contains(prompt, fmt.Sprintf("Current path: note-%d.md", i)) {
+				t.Fatalf("note-%d re-analyzed on shared vocabulary", i)
+			}
+		}
+	}
+	if refreshed != 1 {
+		t.Fatalf("rare-word dependent expected once, got %d", refreshed)
+	}
+}
+
+func TestCatalogIndexEditRefreshesOnlyNewInboundTargets(t *testing.T) {
+	c, db := setup(t)
+	// Production case: an index page that every section note links back to.
+	index := filepath.Join(c.RepositoryPath, "lessons", "README.md")
+	if err := os.MkdirAll(filepath.Dir(index), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeIndex := func(extra string) {
+		content := "---\ndocument_id: 33333333-3333-4333-8333-333333333333\ntitle: Lessons index\n---\n# Lessons index\n\n| Note | Related |\n| --- | --- |\n" + extra
+		if err := os.WriteFile(index, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeIndex("| [One](one.md) | - |\n")
+	for _, name := range []string{"one.md", "two.md", "three.md", "four.md", "five.md"} {
+		body := "# Shared note\n\nCatalog: [overview](README.md)\n\nCommon catalog navigation text.\n"
+		if err := os.WriteFile(filepath.Join(c.RepositoryPath, "lessons", name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Keep the README outside the ranked candidate window for old notes. This
+	// isolates the link-topology change from semantic candidate evidence.
+	for i := 0; i < 20; i++ {
+		name := fmt.Sprintf("noise-%02d.md", i)
+		body := "# Shared note\n\nCatalog: [overview](README.md)\n\nCommon catalog navigation text.\n"
+		if err := os.WriteFile(filepath.Join(c.RepositoryPath, "lessons", name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An unrelated note neither links to nor ranks the index.
+	if err := os.WriteFile(filepath.Join(c.RepositoryPath, "lessons", "other.md"),
+		[]byte("# Other\n\nUnrelated content about databases.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	firstModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: firstModel}, RunOptions{}); err != nil {
+		t.Fatalf("initial analysis error=%v", err)
+	}
+	// Net change: four appended catalog rows. The index's frontmatter stays
+	// unchanged; only the four new target inbound sets change.
+	writeIndex("| [One](one.md) | - |\n| [Two](two.md) | - |\n| [Three](three.md) | - |\n| [Four](four.md) | - |\n| [Five](five.md) | - |\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	secondModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	second, err := RunProgress(t.Context(), c, db, Generators{Analysis: secondModel}, RunOptions{})
+	if err != nil {
+		t.Fatalf("run error=%v", err)
+	}
+	var processedPaths []string
+	for _, prompt := range secondModel.prompts {
+		for _, line := range strings.Split(prompt, "\n") {
+			if strings.HasPrefix(line, "Current path: ") {
+				processedPaths = append(processedPaths, strings.TrimPrefix(line, "Current path: "))
+				break
+			}
+		}
+	}
+	// The index plus the four notes newly added to its inbound list. The
+	// existing row and all other catalog linkers keep the same context.
+	if second.Processed != 5 || second.Dependents != 4 {
+		t.Fatalf("expected index + four changed inbound contexts, got %+v paths=%v", second, processedPaths)
+	}
+	for _, prompt := range secondModel.prompts {
+		if strings.Contains(prompt, "Current path: lessons/one.md") ||
+			strings.Contains(prompt, "Current path: lessons/other.md") ||
+			strings.Contains(prompt, "Current path: lessons/noise-") {
+			t.Fatalf("unchanged catalog linker re-analyzed on index-row edit")
+		}
+	}
+}
+
+func TestDeletedDocumentSeedsEvidenceDependents(t *testing.T) {
+	c, db := setup(t)
+	linker := filepath.Join(c.RepositoryPath, "linker.md")
+	target := filepath.Join(c.RepositoryPath, "target.md")
+	if err := os.WriteFile(linker, []byte("# Linker\n\nSee [Target](target.md).\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("# Target\n\nBody.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	firstModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if first, err := RunProgress(t.Context(), c, db, Generators{Analysis: firstModel}, RunOptions{}); err != nil || first.Processed != 3 {
+		t.Fatalf("initial analysis=%+v error=%v", first, err)
+	}
+
+	// Deleting a cited note is evidence drift: every doc that consumed it —
+	// at either level — refreshes, but nothing else does.
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	estimate, err := EstimateAnalysis(t.Context(), c, db, RunOptions{})
+	if err != nil {
+		t.Fatalf("estimate error=%v", err)
+	}
+	if estimate.Pending != 0 || estimate.Dependents != 2 || estimate.Total != 2 {
+		t.Fatalf("deletion estimate should include evidence consumers, got %+v", estimate)
+	}
+	needsSweep, err := db.NeedsRemovalSweep(t.Context(), false)
+	if err != nil || !needsSweep {
+		t.Fatalf("estimate must not acknowledge removal events: needed=%v err=%v", needsSweep, err)
+	}
+	failedModel := &fakeLLM{err: errors.New("temporary model failure")}
+	failed, err := RunProgress(t.Context(), c, db, Generators{Analysis: failedModel}, RunOptions{})
+	if err != nil || failed.Failed != 2 {
+		t.Fatalf("failed dependent run=%+v error=%v, want two retryable document failures", failed, err)
+	}
+	needsSweep, err = db.NeedsRemovalSweep(t.Context(), false)
+	if err != nil || !needsSweep {
+		t.Fatalf("failed dependent analysis must remain retryable: needed=%v err=%v", needsSweep, err)
+	}
+	secondModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	second, err := RunProgress(t.Context(), c, db, Generators{Analysis: secondModel}, RunOptions{})
+	if err != nil {
+		t.Fatalf("run error=%v", err)
+	}
+	if second.Processed != 2 || second.Dependents != 2 {
+		t.Fatalf("deletion should refresh only evidence consumers, got %+v", second)
+	}
+	seen := map[string]bool{}
+	for _, prompt := range secondModel.prompts {
+		for _, path := range []string{"linker.md", "a.md"} {
+			if strings.Contains(prompt, "Current path: "+path) {
+				seen[path] = true
+			}
+		}
+	}
+	if !seen["linker.md"] || !seen["a.md"] {
+		t.Fatalf("expected evidence consumers refreshed after deletion, got %v", seen)
+	}
+	// The tombstone remains in SQLite, but the local lane acknowledged this
+	// deletion generation. A later run must not repeatedly re-analyze stale
+	// frontmatter references to the same missing path.
+	thirdModel := &fakeLLM{reply: secondModel.reply}
+	third, err := RunProgress(t.Context(), c, db, Generators{Analysis: thirdModel}, RunOptions{})
+	if err != nil || third.Processed != 0 || third.Dependents != 0 {
+		t.Fatalf("deletion evidence should be idempotent after one sweep: %+v error=%v", third, err)
+	}
+	needsExternal, err := db.NeedsRemovalSweep(t.Context(), true)
+	if err != nil || !needsExternal {
+		t.Fatalf("local acknowledgement must not consume external deletion work: needed=%v err=%v", needsExternal, err)
+	}
+}
+
+func TestExternalLaneMeasuresDriftAgainstOwnSeenStamp(t *testing.T) {
+	c, db := setup(t)
+	c.OllamaModelExternal = "ext-model"
+	linker := filepath.Join(c.RepositoryPath, "linker.md")
+	target := filepath.Join(c.RepositoryPath, "target.md")
+	if err := os.WriteFile(linker, []byte("# Linker\n\nSee [Target](target.md).\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("---\ntitle: Old\n---\n# Old\n\nBody.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	externalModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: externalModel}, RunOptions{External: true}); err != nil {
+		t.Fatalf("external run error=%v", err)
+	}
+	var originalExternalEvidence string
+	if err := db.QueryRow(`SELECT external_analysis_evidence_json FROM documents WHERE path='target.md'`).Scan(&originalExternalEvidence); err != nil {
+		t.Fatal(err)
+	}
+	if originalExternalEvidence == "" {
+		t.Fatal("external lane did not store its own evidence")
+	}
+
+	// Frontmatter edit, then a local run: the local lane's seen stamps move
+	// to the new frontmatter while the external lane's stay behind.
+	if err := os.WriteFile(target, []byte("---\ntitle: New\n---\n# New\n\nBody.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	localModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: localModel}, RunOptions{}); err != nil {
+		t.Fatalf("local run error=%v", err)
+	}
+	var localEvidence, externalEvidence, localSeenFm, externalSeenFm string
+	if err := db.QueryRow(`SELECT analysis_evidence_json,external_analysis_evidence_json,seen_fm_sha256,seen_external_fm_sha256
+FROM documents WHERE path='target.md'`).Scan(&localEvidence, &externalEvidence, &localSeenFm, &externalSeenFm); err != nil {
+		t.Fatal(err)
+	}
+	if localEvidence == "" || externalEvidence == "" || externalEvidence != originalExternalEvidence {
+		t.Fatalf("local analysis overwrote external evidence: local=%q external=%q original_external=%q", localEvidence, externalEvidence, originalExternalEvidence)
+	}
+	if localSeenFm == externalSeenFm {
+		t.Fatalf("expected per-lane frontmatter stamps to diverge after local-only update; both=%q", localSeenFm)
+	}
+
+	// A second local run has nothing left: no pending and no fm drift vs
+	// seen_fm. The external lane still sees the same edit as fm drift.
+	localModel2 := &fakeLLM{reply: localModel.reply}
+	second, err := RunProgress(t.Context(), c, db, Generators{Analysis: localModel2}, RunOptions{})
+	if err != nil || second.Processed != 0 {
+		t.Fatalf("local lane should be fully current, got %+v error=%v", second, err)
+	}
+	externalModel2 := &fakeLLM{reply: localModel.reply}
+	third, err := RunProgress(t.Context(), c, db, Generators{Analysis: externalModel2}, RunOptions{External: true})
+	if err != nil {
+		t.Fatalf("external run error=%v", err)
+	}
+	linkerPrompts := 0
+	for _, prompt := range externalModel2.prompts {
+		if strings.Contains(prompt, "Current path: linker.md") {
+			linkerPrompts++
+		}
+	}
+	if linkerPrompts != 1 {
+		t.Fatalf("external lane should refresh the linker on its own fm drift, got %d; run=%+v", linkerPrompts, third)
+	}
+}
+
+func TestMarshalAnalysisEvidenceRecordsOnlyInjected(t *testing.T) {
+	ranked := []candidate{
+		{doc: database.Document{Path: "ranked.md"}},
+		{doc: database.Document{Path: "mentioned.md"}, mentions: []entityMention{{path: "mentioned.md"}}},
+		{doc: database.Document{Path: "scored.md"}, sim: 0.2, rel: 0.7},
+	}
+	raw := marshalAnalysisEvidence(ranked, []string{"inbound.md"}, []string{"sib.md"},
+		map[string]string{"merge.md": "body"}, []string{"entity-prose.md"},
+		"Frontmatter validation context")
+	fmSet, fullSet, ok := parseAnalysisEvidence(raw)
+	if !ok {
+		t.Fatal("evidence did not round-trip")
+	}
+	for _, path := range []string{"ranked.md", "mentioned.md", "scored.md"} {
+		if !fmSet[path] {
+			t.Fatalf("fm evidence missing %s: %s", path, raw)
+		}
+	}
+	if fmSet["inbound.md"] || fmSet["sib.md"] {
+		t.Fatalf("path-only context was conflated with annotation evidence: %s", raw)
+	}
+	for _, path := range []string{"merge.md", "entity-prose.md", "scored.md"} {
+		if !fullSet[path] {
+			t.Fatalf("full evidence missing %s: %s", path, raw)
+		}
+	}
+	// A mentioned-but-unrendered candidate is annotation-level only — the
+	// render cap decides what actually entered the prompt.
+	if fullSet["mentioned.md"] {
+		t.Fatalf("unrendered entity mention must not record body evidence: %s", raw)
+	}
+	ev, ok := parseAnalysisEvidenceRecord(raw)
+	if !ok || ev.Version != 2 || ev.ValidationContext != "Frontmatter validation context" ||
+		!equalStrings(ev.Inbound, []string{"inbound.md"}) || !equalStrings(ev.Siblings, []string{"sib.md"}) {
+		t.Fatalf("validation context/version not recorded: %+v", ev)
+	}
+}
+
+func TestSiblingEvidenceContainsOnlyRenderedNames(t *testing.T) {
+	context, paths := siblingContext([]string{"helper.rb", "used.rb", "config.yml"}, "This note uses used.rb.\n")
+	if !strings.Contains(context, "helper.rb") || !strings.Contains(context, "config.yml") || strings.Contains(context, "used.rb") {
+		t.Fatalf("unexpected sibling context: %q", context)
+	}
+	if len(paths) != 2 || paths[0] != "helper.rb" || paths[1] != "config.yml" {
+		t.Fatalf("sibling evidence=%v, want only rendered names", paths)
+	}
+}
+
+func TestResultSummarySeparatesDirectAndDependentQueue(t *testing.T) {
+	r := Result{Processed: 6, DirectPending: 3, Dependents: 3, Failed: 1}
+	got := r.Summary("analysis-model", "fast-model")
+	for _, part := range []string{
+		"Analyzed 6",
+		"queue 3 direct + 3 evidence dependents",
+		"failed 1",
+	} {
+		if !strings.Contains(got, part) {
+			t.Fatalf("summary %q missing %q", got, part)
+		}
+	}
+}
+
 func TestChangedEvidenceRefreshesSourcePendingOnlyForEnrichment(t *testing.T) {
 	c, db := setup(t)
 	c.OllamaModelFast = "fast"
@@ -1030,5 +1551,187 @@ func TestChangedEvidenceRefreshesSourcePendingOnlyForEnrichment(t *testing.T) {
 	if original, err := os.ReadFile(source); err != nil ||
 		frontmatter.Canonical(string(original)) != frontmatter.Canonical(sourceText) {
 		t.Fatalf("dependency refresh changed source: %q error=%v", original, err)
+	}
+}
+
+func TestLegacyEvidenceRecoversNewInboundLinkAndRestamps(t *testing.T) {
+	c, db := setup(t)
+	writeDoc(t, c.RepositoryPath, "target.md", "# Target\n\nNotes on harbor seal colonies.\n")
+	writeDoc(t, c.RepositoryPath, "linker.md", "# Linker\n\nAside: [Target](target.md).\nFermentation crocks and brine ratios.\n")
+	writeDoc(t, c.RepositoryPath, "steady.md", "# Steady\n\nQuiet note about moss gardens.\n")
+	writeDoc(t, c.RepositoryPath, "peer.md", "# Peer\n\nAside: [Steady](steady.md).\nCold-frame sowing calendar.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	firstModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: firstModel}, RunOptions{}); err != nil {
+		t.Fatalf("initial analysis error=%v", err)
+	}
+	// Downgrade to the pre-versioned evidence format: candidates and inbound
+	// linkers were flattened into one set with no inbound/sibling/context
+	// keys. The sweep must recover newly added inbound paths conservatively
+	// without treating every flattened path as body evidence.
+	legacy := `{"fm":["a.md","linker.md"],"full":["linker.md"]}`
+	if _, err := db.Exec(`UPDATE documents SET analysis_evidence_json=? WHERE path='target.md'`, legacy); err != nil {
+		t.Fatal(err)
+	}
+	steadyLegacy := `{"fm":["a.md","peer.md"],"full":["peer.md"]}`
+	if _, err := db.Exec(`UPDATE documents SET analysis_evidence_json=? WHERE path='steady.md'`, steadyLegacy); err != nil {
+		t.Fatal(err)
+	}
+	writeDoc(t, c.RepositoryPath, "rivet-log.md", "---\nrelated: [target.md]\n---\n# Rivet log\n\nCopper kettle upkeep with rivets and solder flux.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	secondModel := &fakeLLM{reply: firstModel.reply}
+	second, err := RunProgress(t.Context(), c, db, Generators{Analysis: secondModel}, RunOptions{})
+	if err != nil {
+		t.Fatalf("run error=%v", err)
+	}
+	processed := map[string]bool{}
+	for _, prompt := range secondModel.prompts {
+		for _, line := range strings.Split(prompt, "\n") {
+			if strings.HasPrefix(line, "Current path: ") {
+				processed[strings.TrimPrefix(line, "Current path: ")] = true
+			}
+		}
+	}
+	// The new document is direct work; target.md is an evidence dependent
+	// because its inbound set gained a path absent from the flattened record.
+	// steady.md's inbound set is fully recorded, so it stays quiet.
+	if second.Processed != 2 || second.Dependents != 1 {
+		t.Fatalf("expected new doc + one legacy-evidence dependent, got %+v paths=%v", second, processed)
+	}
+	if !processed["target.md"] || !processed["rivet-log.md"] {
+		t.Fatalf("expected rivet-log and target processed, got %v", processed)
+	}
+	if processed["steady.md"] || processed["linker.md"] || processed["peer.md"] || processed["a.md"] {
+		t.Fatalf("unchanged documents re-analyzed on a bounded inbound change: %v", processed)
+	}
+	// The conversion: a re-analyzed legacy row is restamped with the exact
+	// v2 record — its real inbound set, not the flattened approximation.
+	var raw string
+	if err := db.QueryRow(`SELECT analysis_evidence_json FROM documents WHERE path='target.md'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	ev, ok := parseAnalysisEvidenceRecord(raw)
+	if !ok || ev.Version < 2 {
+		t.Fatalf("legacy evidence was not upgraded on re-analysis: %q", raw)
+	}
+	if !slices.Contains(ev.Inbound, "linker.md") || !slices.Contains(ev.Inbound, "rivet-log.md") {
+		t.Fatalf("converted evidence lost the inbound set: %+v", ev)
+	}
+	var steadyRaw string
+	if err := db.QueryRow(`SELECT analysis_evidence_json FROM documents WHERE path='steady.md'`).Scan(&steadyRaw); err != nil {
+		t.Fatal(err)
+	}
+	if steadyRaw != steadyLegacy {
+		t.Fatalf("unaffected legacy row was rewritten: %q", steadyRaw)
+	}
+	// The converted row is now exact — a later run with no new input must not
+	// sweep it back into the queue.
+	thirdModel := &fakeLLM{reply: firstModel.reply}
+	third, err := RunProgress(t.Context(), c, db, Generators{Analysis: thirdModel}, RunOptions{})
+	if err != nil || third.Processed != 0 || third.Dependents != 0 {
+		t.Fatalf("converted evidence should be stable: %+v error=%v", third, err)
+	}
+}
+
+func TestLegacyEvidenceRemovalStillRefreshesConsumer(t *testing.T) {
+	c, db := setup(t)
+	writeDoc(t, c.RepositoryPath, "consumer.md", "# Consumer\n\nNotes on tidal gauges.\n")
+	writeDoc(t, c.RepositoryPath, "gone.md", "# Gone\n\nBrass fitting catalogue excerpts.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	firstModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: firstModel}, RunOptions{}); err != nil {
+		t.Fatalf("initial analysis error=%v", err)
+	}
+	// A consumer stamped by the pre-versioned recorder: gone.md is part of its
+	// flattened evidence, so deleting gone.md must still refresh it.
+	legacy := `{"fm":["a.md","gone.md"],"full":["gone.md"]}`
+	if _, err := db.Exec(`UPDATE documents SET analysis_evidence_json=? WHERE path='consumer.md'`, legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(c.RepositoryPath, "gone.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	secondModel := &fakeLLM{reply: firstModel.reply}
+	second, err := RunProgress(t.Context(), c, db, Generators{Analysis: secondModel}, RunOptions{})
+	if err != nil {
+		t.Fatalf("run error=%v", err)
+	}
+	// consumer.md (legacy record) and a.md (exact record) both consumed
+	// gone.md's annotation; deletion refreshes both.
+	if second.Processed != 2 || second.Dependents != 2 {
+		t.Fatalf("deletion should refresh legacy and exact consumers, got %+v", second)
+	}
+	var raw string
+	if err := db.QueryRow(`SELECT analysis_evidence_json FROM documents WHERE path='consumer.md'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if ev, ok := parseAnalysisEvidenceRecord(raw); !ok || ev.Version < 2 {
+		t.Fatalf("legacy consumer was not restamped after removal refresh: %q", raw)
+	}
+}
+
+func TestUnrecordedEvidenceFallsBackToHeuristicSweep(t *testing.T) {
+	c, db := setup(t)
+	writeDoc(t, c.RepositoryPath, "zebra.md",
+		"---\ntitle: Zebra Protocol\n---\n# Zebra Protocol\n\nDefines packet rituals.\n")
+	writeDoc(t, c.RepositoryPath, "mentioner.md",
+		"# Mentioner\n\nThis note extends the Zebra Protocol work for field kits.\n")
+	writeDoc(t, c.RepositoryPath, "sig-source.md",
+		"# Sig source\n\nharbor kettle velvet orbit mango cinder brine lattice ember fjord.\n")
+	writeDoc(t, c.RepositoryPath, "sig-echo.md",
+		"# Sig echo\n\nharbor kettle velvet orbit mango cinder brine lattice ember fjord.\n")
+	writeDoc(t, c.RepositoryPath, "plain.md", "# Plain\n\nThrown porcelain glaze recipes.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	firstModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: firstModel}, RunOptions{}); err != nil {
+		t.Fatalf("initial analysis error=%v", err)
+	}
+	// Rows predating the evidence column have no recording at all: the sweep
+	// must fall back to the conservative heuristic arms until they restamp.
+	if _, err := db.Exec(`UPDATE documents SET analysis_evidence_json='' WHERE path IN ('mentioner.md','sig-echo.md','plain.md')`); err != nil {
+		t.Fatal(err)
+	}
+	writeDoc(t, c.RepositoryPath, "zebra.md",
+		"---\ntitle: Zebra Protocol\nsummary: Packet ritual reference\n---\n# Zebra Protocol\n\nDefines packet rituals.\n")
+	writeDoc(t, c.RepositoryPath, "sig-source.md",
+		"# Sig source\n\nharbor kettle velvet orbit mango cinder brine lattice ember tundra.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	secondModel := &fakeLLM{reply: firstModel.reply}
+	second, err := RunProgress(t.Context(), c, db, Generators{Analysis: secondModel}, RunOptions{})
+	if err != nil {
+		t.Fatalf("run error=%v", err)
+	}
+	processed := map[string]bool{}
+	for _, prompt := range secondModel.prompts {
+		for _, line := range strings.Split(prompt, "\n") {
+			if strings.HasPrefix(line, "Current path: ") {
+				processed[strings.TrimPrefix(line, "Current path: ")] = true
+			}
+		}
+	}
+	// Without a recording, the heuristic arms stand in: the entity mention of
+	// zebra.md and the signature overlap with sig-source.md each refresh their
+	// unrecorded consumer. plain.md has no evidence connection and stays out.
+	if !processed["mentioner.md"] || !processed["sig-echo.md"] {
+		t.Fatalf("unrecorded consumers were not refreshed by heuristic arms: %v", processed)
+	}
+	if processed["plain.md"] {
+		t.Fatalf("unrelated unrecorded document re-analyzed: %v", processed)
+	}
+	if second.Dependents < 2 {
+		t.Fatalf("expected at least the two heuristic dependents, got %+v", second)
 	}
 }

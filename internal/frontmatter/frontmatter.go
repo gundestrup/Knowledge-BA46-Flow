@@ -9,6 +9,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -452,7 +453,7 @@ func Validate(fields map[string]any) []string {
 		switch {
 		case key == "tags":
 			issues = append(issues, checkStringList(key, value, true)...)
-		case key == "related" || key == "contradicted_by":
+		case slices.Contains(GraphLinkKeys, key):
 			for _, item := range listItems(key, value, &issues) {
 				if _, err := paths.CleanRelative(strings.TrimSpace(item)); err != nil {
 					issues = append(issues, fmt.Sprintf("%s entry %q is not a valid repository-relative path", key, item))
@@ -613,6 +614,8 @@ func listItems(key string, value any, issues *[]string) []string {
 	switch v := value.(type) {
 	case string:
 		return []string{v}
+	case []string:
+		return v
 	case []any:
 		out := make([]string, 0, len(v))
 		for _, item := range v {
@@ -679,6 +682,24 @@ func boolean(value any) (bool, bool) {
 func StringList(fields map[string]any, key string) []string {
 	var issues []string
 	return listItems(key, fields[key], &issues)
+}
+
+// GraphLinkKeys are the frontmatter fields that declare document-to-document
+// relationships. `related` is an extra key this tool curates; the MCP server
+// ignores it. Keep one canonical list — every reader of graph edges (scanner
+// reference rows, prompt context, dependents sweep, link validation) walks
+// the same set.
+var GraphLinkKeys = []string{"related", "contradicted_by"}
+
+// GraphLinkTargets returns the declared graph targets across GraphLinkKeys —
+// scalar-or-list tolerant like StringList. Use it instead of re-listing the
+// key names so a new relationship key propagates everywhere at once.
+func GraphLinkTargets(fields map[string]any) []string {
+	var out []string
+	for _, key := range GraphLinkKeys {
+		out = append(out, StringList(fields, key)...)
+	}
+	return out
 }
 
 // Render serializes fields back into a frontmatter block followed by body —

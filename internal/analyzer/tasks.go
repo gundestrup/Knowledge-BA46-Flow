@@ -247,15 +247,7 @@ func RunTask(ctx context.Context, c config.Config, db *database.DB, gens Generat
 	if len(docs) == 0 {
 		return out, nil
 	}
-	p := &pipeline{
-		ctx: ctx, c: c, db: db, gens: gens, opts: opts,
-		emit: func(pr Progress) {
-			if opts.Progress != nil {
-				opts.Progress(pr)
-			}
-		},
-		fastModel: c.FastModel(),
-	}
+	p := newPipeline(ctx, c, db, gens, opts, runModels{fast: c.FastModel()}, false)
 	if err := p.loadCorpus(); err != nil {
 		return out, err
 	}
@@ -817,10 +809,8 @@ func stubTemplate(root *os.Root, docPath string) (string, error) {
 // the analysis ranker: expand only needs link targets, not similarity.
 func renderTaskCandidates(docPath string, fm map[string]any, known []database.Document, visible map[string]bool) string {
 	linked := map[string]bool{}
-	for _, key := range []string{"related", "contradicted_by"} {
-		for _, l := range frontmatter.StringList(fm, key) {
-			linked[filepath.ToSlash(strings.TrimSpace(l))] = true
-		}
+	for _, l := range frontmatter.GraphLinkTargets(fm) {
+		linked[filepath.ToSlash(strings.TrimSpace(l))] = true
 	}
 	var lines []string
 	for _, d := range known {
