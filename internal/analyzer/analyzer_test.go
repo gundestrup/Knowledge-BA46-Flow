@@ -1837,3 +1837,103 @@ func TestDependentReasonNamesArmAndTrigger(t *testing.T) {
 		t.Fatalf("linker.md should emit a dependent event with its trigger, got %+v", events)
 	}
 }
+
+// A recorded sibling that disappears is provable context loss — the prompt
+// rendered it as an unmentioned neighbor. The dependent reason must name it.
+// Uses a non-document sibling (.rb) so no document-lifecycle arm can fire.
+func TestRemovedSiblingRefreshesConsumerWithReason(t *testing.T) {
+	c, db := setup(t)
+	note := filepath.Join(c.RepositoryPath, "note.md")
+	sibling := filepath.Join(c.RepositoryPath, "helper.rb")
+	trigger := filepath.Join(c.RepositoryPath, "trigger.md")
+	if err := os.WriteFile(note, []byte("# Note\n\nPlain content.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sibling, []byte("puts 'snippet'\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(trigger, []byte("# Trigger\n\nV1.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	model := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: model}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// A non-document sibling's deletion produces no document seed — the sweep
+	// runs because trigger.md changed; note.md fires on the missing sibling.
+	if err := os.Remove(sibling); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(trigger, []byte("# Trigger\n\nV2 body changed.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	var events []Progress
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: model}, RunOptions{
+		Progress: func(pr Progress) { events = append(events, pr) },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, pr := range events {
+		if pr.Outcome == "dependent" && pr.Path == "note.md" {
+			found = true
+			if pr.Detail != "sibling removed: helper.rb" {
+				t.Fatalf("expected sibling-removal reason, got %q", pr.Detail)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("note.md should queue on sibling removal, got %+v", events)
+	}
+}
+
+// Validation context is prompt-visible evidence: fixing a broken link the
+// prompt rendered as an issue changes the context and refreshes the doc —
+// with the reason naming the arm.
+func TestResolvedLinkIssueRefreshesViaValidationContext(t *testing.T) {
+	c, db := setup(t)
+	note := filepath.Join(c.RepositoryPath, "note.md")
+	gone := filepath.Join(c.RepositoryPath, "gone.md")
+	if err := os.WriteFile(note, []byte("# Note\n\nSee [Gone](gone.md).\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	model := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: model}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// The missing link target appears — the rendered validation context the
+	// note's prompt consumed is now different.
+	if err := os.WriteFile(gone, []byte("# Gone\n\nNow exists.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	var events []Progress
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: model}, RunOptions{
+		Progress: func(pr Progress) { events = append(events, pr) },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, pr := range events {
+		if pr.Outcome == "dependent" && pr.Path == "note.md" {
+			found = true
+			if pr.Detail != "validation context changed" {
+				t.Fatalf("expected validation-context reason, got %q", pr.Detail)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("note.md should queue on validation-context change, got %+v", events)
+	}
+}
