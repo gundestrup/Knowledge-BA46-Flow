@@ -21,8 +21,10 @@ import (
 // analysisEvidence records which documents an analysis prompt actually
 // consumed. Fm/Full distinguish candidate annotations and body-derived
 // evidence; inbound and sibling paths are stored separately because they are
-// path-only context and should invalidate on set changes, not source-content
-// changes. ValidationContext captures the rendered local link/metadata issues.
+// path-only context. Inbound paths invalidate on set changes, not
+// source-content changes; sibling paths invalidate only when a recorded
+// sibling disappears — additions are projected through the semantic arms.
+// ValidationContext captures the rendered local link/metadata issues.
 type analysisEvidence struct {
 	Version           int      `json:"v,omitempty"`
 	Fm                []string `json:"fm"`
@@ -404,9 +406,17 @@ func (p *pipeline) recordedContextChanged(doc *database.Document, fm map[string]
 	if err != nil {
 		return false, err
 	}
+	// Only a recorded sibling disappearing is provable context loss (deleted,
+	// renamed, or now-mentioned). A newly added sibling is merely a candidate
+	// the prompt might newly cite — relevance, not adjacency, decides that, so
+	// additions are projected through the semantic arms below instead of
+	// refreshing every neighbor in the directory.
 	_, siblingPaths := siblingContext(siblings, content)
-	if !equalStrings(ev.Siblings, siblingPaths) {
-		return true, nil
+	rendered := stringSet(siblingPaths)
+	for _, s := range ev.Siblings {
+		if !rendered[s] {
+			return true, nil
+		}
 	}
 	return ev.ValidationContext != frontmatterContext(*doc, fm, p.knownDocs), nil
 }

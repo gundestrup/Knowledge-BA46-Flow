@@ -9,6 +9,16 @@ tag is prepared.
 
 ## [Unreleased]
 
+### Changed
+
+- Adding a file to a directory no longer re-analyzes every v2-stamped
+  neighbor. Recorded sibling evidence now invalidates only when a rendered
+  sibling disappears (deletion, rename); additions are merely candidates the
+  prompt might newly cite, so they are projected through the semantic arms —
+  entity mentions, signature overlap, embedding neighbors — which refresh
+  only the bounded set of genuinely related notes instead of the whole
+  directory. A new unrelated file queues only itself.
+
 ## [0.3.0] - 2026-11-02
 
 ### Changed

@@ -1735,3 +1735,53 @@ func TestUnrecordedEvidenceFallsBackToHeuristicSweep(t *testing.T) {
 		t.Fatalf("expected at least the two heuristic dependents, got %+v", second)
 	}
 }
+
+// A new file in a directory is not, by itself, evidence for its neighbors:
+// it only enters prompts as a candidate, so relevance decides who refreshes.
+// Unrelated additions must not fan out (the old sibling-set equality queued
+// every stamped neighbor); an addition the document actually mentions is
+// semantically relevant and refreshes exactly that consumer.
+func TestNewSiblingRequiresSemanticRelevance(t *testing.T) {
+	c, db := setup(t)
+	writeFile := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(c.RepositoryPath, name), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile("alpha.md", "# Alpha\n\nWe use zebra widgets daily.\n")
+	writeFile("beta.md", "# Beta\n\nOrdinary notes about gardens.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	model := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: model}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile("quasar-topology.md", "# Quasar Topology\n\nLattice field notes.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	est, err := EstimateAnalysis(t.Context(), c, db, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if est.Pending != 1 || est.Dependents != 0 {
+		t.Fatalf("unrelated sibling should queue only itself: %+v", est)
+	}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: model}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile("zebra-widgets.md", "# Zebra Widgets\n\nRegistry of widget shapes and colors.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	est, err = EstimateAnalysis(t.Context(), c, db, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if est.Pending != 1 || est.Dependents != 1 {
+		t.Fatalf("relevant new file should refresh only its consumer: %+v", est)
+	}
+}
