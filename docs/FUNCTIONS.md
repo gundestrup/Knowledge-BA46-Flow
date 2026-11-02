@@ -458,6 +458,17 @@ an active job.
 CLI SIGINT/SIGTERM cancels in-flight requests and lets job completion record
 the interruption. Already stored suggestions remain available; nothing is applied.
 
+## `restamp-evidence`
+
+Rebuilds recorded prompt evidence (`analysis_evidence_json`) for documents
+analyzed before evidence recording existed — the knowledge-migration path
+that avoids re-analysis. It recomputes the deterministic context (ranked
+candidates, inbound link sets, unmentioned siblings, entity paths,
+validation context) and acknowledges the current removal generation; merge
+bodies are model-chosen and left absent, biasing rows toward refresh rather
+than missed invalidation. No model calls. `--external` restamps the
+external lane's evidence columns instead.
+
 ## `run`
 
 Runs `scan` followed by `analyze`, and records a completed or failed full-cycle

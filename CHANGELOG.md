@@ -9,6 +9,14 @@ tag is prepared.
 
 ## [Unreleased]
 
+### Added
+
+- `restamp-evidence`: rebuilds recorded v2 prompt evidence for rows analyzed
+  before evidence recording existed — deterministic reconstruction of
+  candidates, inbound links, siblings, entity paths and validation context,
+  no model calls. Legacy rows stop taking the conservative heuristic sweep
+  immediately instead of after a re-analysis pass.
+
 ### Changed
 
 - Dependents now report _why_ they queue: each evidence-dependent emits a
