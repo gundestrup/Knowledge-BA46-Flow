@@ -1789,3 +1789,51 @@ func TestNewSiblingRequiresSemanticRelevance(t *testing.T) {
 		t.Fatalf("relevant new file should refresh only its consumer: %+v", est)
 	}
 }
+
+// Dependent queue attribution: each swept doc emits a 'dependent' event
+// naming the firing arm and the triggering document, so "why was this
+// re-analyzed" is visible in job progress without inspecting the database.
+func TestDependentReasonNamesArmAndTrigger(t *testing.T) {
+	c, db := setup(t)
+	linker := filepath.Join(c.RepositoryPath, "linker.md")
+	target := filepath.Join(c.RepositoryPath, "target.md")
+	if err := os.WriteFile(linker, []byte("# Linker\n\nSee [Target](target.md).\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("# Target\n\nBody.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	model := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: model}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	var events []Progress
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: model}, RunOptions{
+		Progress: func(pr Progress) { events = append(events, pr) },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, pr := range events {
+		if pr.Outcome == "dependent" && pr.Path == "linker.md" {
+			found = true
+			if !strings.Contains(pr.Detail, "target.md") || pr.Detail == "" {
+				t.Fatalf("dependent reason must name the trigger: %q", pr.Detail)
+			}
+			t.Logf("linker.md dependent because: %s", pr.Detail)
+		}
+	}
+	if !found {
+		t.Fatalf("linker.md should emit a dependent event with its trigger, got %+v", events)
+	}
+}
