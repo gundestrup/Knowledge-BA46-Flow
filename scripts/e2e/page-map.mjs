@@ -60,7 +60,6 @@ try {
     textarea: "txt",
     summary: "sum",
   };
-  let lastSec = null;
   let printed = 0;
   const seenSections = [];
   for (const it of items) {
@@ -71,7 +70,6 @@ try {
         (it.t === "div" && it.id)) &&
       it.id;
     if (isAnchor) {
-      lastSec = it.id;
       seenSections.push(it);
       console.log(
         `\n#${it.id}  y=${it.y}  ${it.w}x${it.h}  — ${it.text.slice(0, 50)}`,
