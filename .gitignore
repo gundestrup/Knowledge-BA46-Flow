@@ -21,3 +21,6 @@ config.local.json
 # OS noise
 .DS_Store
 /dist/
+
+# Working/analysis documents, not repo content
+*.docx
