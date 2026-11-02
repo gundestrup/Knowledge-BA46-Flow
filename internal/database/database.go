@@ -665,7 +665,7 @@ func (d *DB) ModelStamps(ctx context.Context) (map[string]ModelStamp, error) {
 	out := map[string]ModelStamp{}
 	for _, col := range []string{"analyzed_model", "external_model", "enriched_model", "embedded_model", "expand_model", "freshness_model"} {
 		var stamp ModelStamp
-		err := d.QueryRowContext(ctx, `SELECT `+col+`,count(*) FROM documents WHERE `+col+`<>'' AND status<>'missing' GROUP BY `+col+` ORDER BY 2 DESC LIMIT 1`).Scan(&stamp.Model, &stamp.Docs) // #nosec G202 -- columns are compile-time constants
+		err := d.QueryRowContext(ctx, `SELECT `+col+`,count(*) FROM documents WHERE `+col+`<>'' AND status<>'missing' GROUP BY `+col+` ORDER BY 2 DESC LIMIT 1`).Scan(&stamp.Model, &stamp.Docs) // #nosec G202 NOSONAR -- columns are compile-time constants
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
@@ -703,7 +703,7 @@ freshness_verify_prompt_sha256=CASE WHEN ? THEN ? ELSE freshness_verify_prompt_s
 	}
 	query += ` WHERE path=?`
 	args = append(args, doc.Path)
-	if _, err = tx.ExecContext(ctx, query, args...); err != nil {
+	if _, err = tx.ExecContext(ctx, query, args...); err != nil { // #nosec G202 NOSONAR -- columns are compile-time constants from taskColumns, values are bound args
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE suggestions SET status='superseded',decided_at=COALESCE(decided_at,?) WHERE document_path=? AND status='pending' AND origin=?`, time.Now().UTC().Format(time.RFC3339), doc.Path, task); err != nil {
@@ -739,12 +739,12 @@ freshness_verify_prompt_sha256=CASE WHEN ? THEN ? ELSE freshness_verify_prompt_s
 	}
 	query += ` WHERE path=?`
 	args = append(args, doc.Path)
-	_, err = d.ExecContext(ctx, query, args...)
+	_, err = d.ExecContext(ctx, query, args...) // #nosec G202 NOSONAR -- columns are compile-time constants from taskColumns, values are bound args
 	return err
 }
 
 func (d *DB) documentsWhere(ctx context.Context, condition string, args []any) ([]Document, error) {
-	rows, err := d.QueryContext(ctx, `SELECT `+documentColumns+` FROM documents WHERE `+condition+` AND status<>'missing' ORDER BY path`, args...)
+	rows, err := d.QueryContext(ctx, `SELECT `+documentColumns+` FROM documents WHERE `+condition+` AND status<>'missing' ORDER BY path`, args...) // #nosec G202 NOSONAR -- column list and condition fragments are compile-time constants, values are bound args
 	if err != nil {
 		return nil, err
 	}
