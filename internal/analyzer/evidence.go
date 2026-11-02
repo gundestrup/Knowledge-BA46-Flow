@@ -320,6 +320,24 @@ func (p *pipeline) removedPaths() (map[string]int64, error) {
 // (Fm) are not dependencies: they invalidate only on structural loss.
 func (p *pipeline) isEvidenceDependent(doc *database.Document, seeds *sweepSeeds) (dep bool, detail string, skip bool, err error) {
 	ev, recorded := parseAnalysisEvidenceRecord(p.laneEvidenceJSON(*doc))
+	if !recorded && p.laneSHA(*doc) != "" {
+		// Never restamped: reconstruct exactly instead of taking the
+		// conservative heuristic sweep. Real runs persist the record;
+		// estimates only preview the same evaluation.
+		fresh, err := p.restampDoc(*doc)
+		if err != nil {
+			return false, "", false, err
+		}
+		if fresh != "" {
+			ev, _ = parseAnalysisEvidenceRecord(fresh)
+			recorded = true
+			if seeds.acknowledgeRemovals {
+				if err := p.db.RestampEvidence(p.ctx, doc.Path, p.external, fresh, p.removalGeneration); err != nil {
+					return false, "", false, err
+				}
+			}
+		}
+	}
 	fmEv := stringSet(ev.Fm)
 	fullEv := stringSet(ev.Full)
 	seenGeneration := p.laneRemovalGeneration(*doc)
@@ -610,36 +628,52 @@ func RestampEvidence(ctx context.Context, c config.Config, db *database.DB, opts
 		if p.laneEvidenceJSON(doc) != "" || p.laneSHA(doc) == "" || !p.visiblePaths[doc.Path] {
 			continue
 		}
-		content, readErr := scanner.ReadDocument(p.c, doc.Path)
-		fm, _, err := frontmatter.Parse(content)
-		if readErr != nil || err != nil || frontmatter.NoLLMContext(fm) {
+		ev, err := p.restampDoc(doc)
+		if err != nil {
+			return restamped, err
+		}
+		if ev == "" {
 			continue
 		}
-		docSig := p.sigs[doc.Path]
-		if len(docSig) == 0 {
-			docSig = similarity.Signature(content)
-		}
-		mentionsByPath := make(map[string][]entityMention)
-		for _, mention := range p.entities.matches(doc.Path, content) {
-			mentionsByPath[mention.path] = append(mentionsByPath[mention.path], mention)
-		}
-		ranked := rankCandidates(doc.Path, fm, visibleCandidates(doc.Path, p.allDocs, p.visiblePaths), docSig, p.sigs, p.embeds[doc.Path], p.embeds, mentionsByPath, candidateLimit)
-		ranked = slices.DeleteFunc(ranked, func(c candidate) bool { return !p.currentlyVisible(c.doc.Path) })
-		inbound, err := p.llmVisibleInbound(doc.Path)
-		if err != nil {
-			return restamped, err
-		}
-		siblings, err := scanner.SiblingFiles(p.c, doc.Path)
-		if err != nil {
-			return restamped, err
-		}
-		_, siblingPaths := siblingContext(siblings, content)
-		_, entityPaths := entityEvidenceContext(p.c, ranked)
-		ev := marshalAnalysisEvidence(ranked, sortedUnique(inbound), siblingPaths, nil, entityPaths, frontmatterContext(doc, fm, p.knownDocs))
 		if err := db.RestampEvidence(ctx, doc.Path, p.external, ev, generation); err != nil {
 			return restamped, err
 		}
 		restamped++
 	}
 	return restamped, nil
+}
+
+// restampDoc reconstructs a v2 evidence record for one analyzed document.
+// Returns "" when the doc is unreadable or LLM-ineligible — callers keep
+// their fallback path in that case.
+func (p *pipeline) restampDoc(doc database.Document) (string, error) {
+	content, err := scanner.ReadDocument(p.c, doc.Path)
+	if err != nil {
+		return "", nil
+	}
+	fm, _, err := frontmatter.Parse(content)
+	if err != nil || frontmatter.NoLLMContext(fm) {
+		return "", nil
+	}
+	docSig := p.sigs[doc.Path]
+	if len(docSig) == 0 {
+		docSig = similarity.Signature(content)
+	}
+	mentionsByPath := make(map[string][]entityMention)
+	for _, mention := range p.entities.matches(doc.Path, content) {
+		mentionsByPath[mention.path] = append(mentionsByPath[mention.path], mention)
+	}
+	ranked := rankCandidates(doc.Path, fm, visibleCandidates(doc.Path, p.allDocs, p.visiblePaths), docSig, p.sigs, p.embeds[doc.Path], p.embeds, mentionsByPath, candidateLimit)
+	ranked = slices.DeleteFunc(ranked, func(c candidate) bool { return !p.currentlyVisible(c.doc.Path) })
+	inbound, err := p.llmVisibleInbound(doc.Path)
+	if err != nil {
+		return "", err
+	}
+	siblings, err := scanner.SiblingFiles(p.c, doc.Path)
+	if err != nil {
+		return "", err
+	}
+	_, siblingPaths := siblingContext(siblings, content)
+	_, entityPaths := entityEvidenceContext(p.c, ranked)
+	return marshalAnalysisEvidence(ranked, sortedUnique(inbound), siblingPaths, nil, entityPaths, frontmatterContext(doc, fm, p.knownDocs)), nil
 }

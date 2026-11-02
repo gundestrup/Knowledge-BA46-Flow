@@ -15,7 +15,11 @@ tag is prepared.
   before evidence recording existed — deterministic reconstruction of
   candidates, inbound links, siblings, entity paths and validation context,
   no model calls. Legacy rows stop taking the conservative heuristic sweep
-  immediately instead of after a re-analysis pass.
+  immediately instead of after a re-analysis pass. The dependents sweep now
+  does this inline: an unrecorded analyzed document gets its evidence
+  reconstructed and stamped at evaluation time — the conservative heuristic
+  fallback is only a last resort when reconstruction fails, so migration
+  pays down per-document with no separate command and no LLM calls.
 
 ### Fixed
 
