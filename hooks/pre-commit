@@ -24,6 +24,6 @@ fi
 if command -v semgrep >/dev/null && [ -z "$SEMGREP_SKIP" ]; then
   scan_files=$(printf '%s\n' "$staged" | grep -v '^internal/server/static/vendor/' || true)
   [ -n "$scan_files" ] && semgrep scan --config p/golang --config p/security-audit --metrics=off \
-    --timeout 30 --error --exclude-rule java.lang.security.audit.xss.jsf.autoescape-disabled.autoescape-disabled \
+    --timeout 30 --error \
     $scan_files || fail "semgrep findings on staged files"
 fi

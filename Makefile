@@ -61,9 +61,10 @@ vuln-check:
 # Semgrep SAST — same registry rulesets as the CI `semgrep` job. Needs the
 # semgrep CLI (brew/pipx) and network access to semgrep.dev for rules.
 # The JSF autoescape rule is a Java-only check that misfires on Alpine.js
-# @keydown.escape attributes in the embedded HTML — excluded here and in CI.
+# @keydown.escape attributes in the embedded HTML — path-scoped exclusion is
+# declared in .semgrepignore so Semgrep Cloud honors it too.
 semgrep:
-	semgrep scan --config p/golang --config p/security-audit --metrics=off --timeout 30 --error --exclude-rule java.lang.security.audit.xss.jsf.autoescape-disabled.autoescape-disabled
+	semgrep scan --config p/golang --config p/security-audit --metrics=off --timeout 30 --error
 
 version-sync:
 	npm run version:sync
