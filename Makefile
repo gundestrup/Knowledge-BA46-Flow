@@ -63,7 +63,7 @@ vuln-check:
 # The JSF autoescape rule is a Java-only check that misfires on Alpine.js
 # @keydown.escape attributes in the embedded HTML — excluded here and in CI.
 semgrep:
-	semgrep scan --config p/golang --config p/security-audit --metrics=off --error --exclude-rule java.lang.security.audit.xss.jsf.autoescape-disabled.autoescape-disabled
+	semgrep scan --config p/golang --config p/security-audit --metrics=off --timeout 30 --error --exclude-rule java.lang.security.audit.xss.jsf.autoescape-disabled.autoescape-disabled
 
 version-sync:
 	npm run version:sync
