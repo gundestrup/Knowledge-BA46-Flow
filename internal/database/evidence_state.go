@@ -79,3 +79,15 @@ func (d *DB) MarkRemovalChecked(ctx context.Context, path string, external bool,
 	_, err := d.ExecContext(ctx, `UPDATE documents SET `+seenCol+`=MAX(`+seenCol+`,?) WHERE path=?`, generation, path) // #nosec G202 -- seenCol is selected from fixed internal column names only.
 	return err
 }
+
+// RestampEvidence writes a reconstructed v2 evidence record and acknowledges
+// the current removal generation in one update — the no-LLM migration for
+// rows analyzed before evidence recording existed.
+func (d *DB) RestampEvidence(ctx context.Context, path string, external bool, evidence string, generation int64) error {
+	col, genCol := "analysis_evidence_json", "seen_removal_generation"
+	if external {
+		col, genCol = "external_analysis_evidence_json", "seen_external_removal_generation"
+	}
+	_, err := d.ExecContext(ctx, `UPDATE documents SET `+col+`=?,`+genCol+`=? WHERE path=?`, evidence, generation, path) // #nosec G202 NOSONAR -- lane columns are fixed strings, values bound
+	return err
+}

@@ -6,12 +6,14 @@ package analyzer
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
 
+	"knowledge-ba46-flow/internal/config"
 	"knowledge-ba46-flow/internal/database"
 	"knowledge-ba46-flow/internal/frontmatter"
 	"knowledge-ba46-flow/internal/scanner"
@@ -579,4 +581,65 @@ func (p *pipeline) dependsOnChangedEvidence(doc database.Document, fm map[string
 		}
 	}
 	return false, ""
+}
+
+// RestampEvidence rebuilds v2 evidence records for analyzed rows that lack
+// them — the knowledge migration for deployments upgraded before evidence
+// recording existed. Deterministic context (ranked candidates, inbound
+// links, unmentioned siblings, entity paths, validation context) is
+// reconstructed exactly; merge bodies are model-chosen and not
+// reconstructable, so they are omitted — the scored candidates already in
+// Full keep the bias toward refresh, never toward missed invalidation.
+// Rows also acknowledge the current removal generation so historical
+// deletions do not re-fire. No model calls.
+func RestampEvidence(ctx context.Context, c config.Config, db *database.DB, opts RunOptions) (int, error) {
+	models, err := resolveRunModels(c, opts)
+	if err != nil {
+		return 0, err
+	}
+	p := newPipeline(ctx, c, db, Generators{}, opts, models, false)
+	if err := p.loadCorpus(); err != nil {
+		return 0, err
+	}
+	generation, err := db.RemovalGeneration(ctx)
+	if err != nil {
+		return 0, err
+	}
+	restamped := 0
+	for _, doc := range p.allDocs {
+		if p.laneEvidenceJSON(doc) != "" || p.laneSHA(doc) == "" || !p.visiblePaths[doc.Path] {
+			continue
+		}
+		content, readErr := scanner.ReadDocument(p.c, doc.Path)
+		fm, _, err := frontmatter.Parse(content)
+		if readErr != nil || err != nil || frontmatter.NoLLMContext(fm) {
+			continue
+		}
+		docSig := p.sigs[doc.Path]
+		if len(docSig) == 0 {
+			docSig = similarity.Signature(content)
+		}
+		mentionsByPath := make(map[string][]entityMention)
+		for _, mention := range p.entities.matches(doc.Path, content) {
+			mentionsByPath[mention.path] = append(mentionsByPath[mention.path], mention)
+		}
+		ranked := rankCandidates(doc.Path, fm, visibleCandidates(doc.Path, p.allDocs, p.visiblePaths), docSig, p.sigs, p.embeds[doc.Path], p.embeds, mentionsByPath, candidateLimit)
+		ranked = slices.DeleteFunc(ranked, func(c candidate) bool { return !p.currentlyVisible(c.doc.Path) })
+		inbound, err := p.llmVisibleInbound(doc.Path)
+		if err != nil {
+			return restamped, err
+		}
+		siblings, err := scanner.SiblingFiles(p.c, doc.Path)
+		if err != nil {
+			return restamped, err
+		}
+		_, siblingPaths := siblingContext(siblings, content)
+		_, entityPaths := entityEvidenceContext(p.c, ranked)
+		ev := marshalAnalysisEvidence(ranked, sortedUnique(inbound), siblingPaths, nil, entityPaths, frontmatterContext(doc, fm, p.knownDocs))
+		if err := db.RestampEvidence(ctx, doc.Path, p.external, ev, generation); err != nil {
+			return restamped, err
+		}
+		restamped++
+	}
+	return restamped, nil
 }

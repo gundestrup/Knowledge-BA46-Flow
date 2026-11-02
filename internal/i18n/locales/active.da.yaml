@@ -335,6 +335,7 @@ cli.link_check.short: "Kontrollér external links i dokumenter, og registrér ve
 cli.validate.short: "Kontrollér repository structure mod taxonomy.yaml og linking conventions"
 cli.analyze.short: "Analysér changed documents med Ollama (LLM calls)"
 cli.run.short: "Scan, og analysér derefter changed documents"
+cli.restamp-evidence.short: "Genopbyg registreret prompt-evidens uden genanalyse"
 cli.enrich.short: "Kør kun fast enrichment pass (title/tags metadata)"
 cli.embed.short: "Genberegn embedding vectors for new/changed documents"
 cli.expand.short: "Expand stub documents ved hjælp af deres category STUB.md templates"

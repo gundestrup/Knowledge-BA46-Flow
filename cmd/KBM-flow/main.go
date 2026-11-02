@@ -74,6 +74,7 @@ func rootCmd() *cobra.Command {
 		validateCmd(),
 		analyzeCmd(),
 		runCmd(),
+		restampCmd(),
 		enrichCmd(),
 		embedCmd(),
 		expandCmd(),
@@ -873,4 +874,30 @@ func serveCmd() *cobra.Command {
 			return server.Listen(cmd.Context(), c, db)
 		},
 	}
+}
+
+// restampCmd rebuilds recorded prompt evidence for rows analyzed before
+// evidence recording existed — a knowledge migration that needs no model.
+func restampCmd() *cobra.Command {
+	var external bool
+	cmd := &cobra.Command{
+		Use:   "restamp-evidence",
+		Short: i18n.T("cli.restamp-evidence.short"),
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, db, err := openAll(cmd.Context())
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			n, err := analyzer.RestampEvidence(cmd.Context(), c, db, analyzer.RunOptions{External: external})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Restamped evidence for %d documents\n", n)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&external, "external", false, i18n.T("cli.flag.external_analyze"))
+	return cmd
 }

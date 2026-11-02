@@ -324,6 +324,7 @@ cli.link_check.short: "Check external links in documents and record verdicts (ne
 cli.validate.short: "Check repository structure against taxonomy.yaml and linking conventions"
 cli.analyze.short: "Analyze changed documents with Ollama (LLM calls)"
 cli.run.short: "Scan, then analyze changed documents"
+cli.restamp-evidence.short: "Rebuild recorded prompt evidence without re-analysis"
 cli.enrich.short: "Run only the fast enrichment pass (title/tags metadata)"
 cli.embed.short: "Recompute embedding vectors for new/changed documents"
 cli.expand.short: "Expand stub documents using their category STUB.md templates"
