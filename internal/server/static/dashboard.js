@@ -878,7 +878,7 @@ window.knowledgeDashboard = () => ({
 
   jobPercent(job) {
     const m = /(\d+)\/(\d+)/.exec(job?.detail || ""); // NOSONAR — linear match, no backtracking
-    return m ? Math.round((+m[1] / +m[2]) * 100) : null;
+    return m && +m[2] > 0 ? Math.round((+m[1] / +m[2]) * 100) : null;
   },
 
   async refreshJobs() {
