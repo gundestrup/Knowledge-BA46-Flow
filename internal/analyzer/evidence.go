@@ -115,26 +115,8 @@ func parseAnalysisEvidence(raw string) (fm, full map[string]bool, ok bool) {
 // sees a target's title/tags/summary, not its body. Documents without recorded
 // evidence (predating the column) fall back to the conservative heuristic
 // sweep until they are re-analyzed and stamped with their real evidence set.
-func intersectsAny(set, seeds map[string]bool) bool {
-	for path := range set {
-		if seeds[path] {
-			return true
-		}
-	}
-	return false
-}
-
 func intersectsAfter(set map[string]bool, seeds map[string]int64, generation int64) bool {
 	for path := range set {
-		if seeds[path] > generation {
-			return true
-		}
-	}
-	return false
-}
-
-func intersectsSliceAfter(paths []string, seeds map[string]int64, generation int64) bool {
-	for _, path := range paths {
 		if seeds[path] > generation {
 			return true
 		}
@@ -148,17 +130,17 @@ func intersectsSliceAfter(paths []string, seeds map[string]int64, generation int
 // Bundling them keeps the dependency arms named and the function signatures
 // stable when a new seed kind appears.
 type sweepSeeds struct {
-	changed             map[string]bool  // semantic/body drift → body-level evidence
-	changedFm           map[string]bool  // frontmatter drift → annotation-level evidence
-	changedNewFm        map[string]bool  // never-analyzed docs → heuristic-only seeds
-	analysisPending     map[string]bool  // already in the direct queue
-	directPaths         map[string]bool  // direct queue membership (dependent vs direct)
-	inbound             map[string]bool  // linkers to fm-changed targets (legacy arm)
-	inboundNew          map[string]bool  // linkers to brand-new targets
-	related             map[string]bool  // embedding-projection neighbors
-	removed             map[string]int64 // missing docs → removal generation
-	removedInbound      map[string]int64 // linkers to removed targets → generation
-	acknowledgeRemovals bool             // real runs stamp; estimates only preview
+	changed             map[string]bool   // semantic/body drift → body-level evidence
+	changedFm           map[string]bool   // frontmatter drift → annotation-level evidence
+	changedNewFm        map[string]bool   // never-analyzed docs → heuristic-only seeds
+	analysisPending     map[string]bool   // already in the direct queue
+	directPaths         map[string]bool   // direct queue membership (dependent vs direct)
+	inbound             map[string]bool   // linkers to fm-changed targets (legacy arm)
+	inboundNew          map[string]bool   // linkers to brand-new targets
+	related             map[string]string // embedding-projection neighbors → trigger doc
+	removed             map[string]int64  // missing docs → removal generation
+	removedInbound      map[string]int64  // linkers to removed targets → generation
+	acknowledgeRemovals bool              // real runs stamp; estimates only preview
 }
 
 // evidenceDependents sweeps for documents whose analysis context changed even
@@ -242,7 +224,7 @@ func (p *pipeline) sweepDocument(doc database.Document, seeds *sweepSeeds) (bool
 	if seeds.analysisPending[doc.Path] || p.isLanePending(doc) {
 		return false, nil
 	}
-	dependent, skip, err := p.isEvidenceDependent(&doc, seeds)
+	dependent, detail, skip, err := p.isEvidenceDependent(&doc, seeds)
 	if err != nil {
 		return false, err
 	}
@@ -255,6 +237,7 @@ func (p *pipeline) sweepDocument(doc database.Document, seeds *sweepSeeds) (bool
 	if !dependent || !p.currentlyVisible(doc.Path) {
 		return false, p.acknowledgeRemoval(doc.Path, seenGeneration, seeds.acknowledgeRemovals)
 	}
+	p.emit(Progress{Path: doc.Path, Outcome: "dependent", Detail: detail})
 	p.forceAnalysis[doc.Path] = true
 	return !seeds.directPaths[doc.Path], nil
 }
@@ -329,82 +312,109 @@ func (p *pipeline) removedPaths() (map[string]int64, error) {
 // Recorded evidence is exact; rows without a recording keep the conservative
 // heuristic sweep. skip means the doc is unreadable or excluded from LLM
 // context.
-func (p *pipeline) isEvidenceDependent(doc *database.Document, seeds *sweepSeeds) (dep, skip bool, err error) {
+// isEvidenceDependent reports whether the doc's recorded context lost or
+// gained relied-upon evidence — plus a human-readable reason and trigger for
+// queue attribution ("why was this doc re-analyzed"). Displayed candidates
+// (Fm) are not dependencies: they invalidate only on structural loss.
+func (p *pipeline) isEvidenceDependent(doc *database.Document, seeds *sweepSeeds) (dep bool, detail string, skip bool, err error) {
 	ev, recorded := parseAnalysisEvidenceRecord(p.laneEvidenceJSON(*doc))
 	fmEv := stringSet(ev.Fm)
 	fullEv := stringSet(ev.Full)
 	seenGeneration := p.laneRemovalGeneration(*doc)
 	exactEvidence := recorded && ev.Version >= 2
-	if exactEvidence && (intersectsAny(fmEv, seeds.changedFm) || intersectsAny(fullEv, seeds.changed) ||
-		intersectsAfter(fmEv, seeds.removed, seenGeneration) || intersectsAfter(fullEv, seeds.removed, seenGeneration)) {
-		return true, false, nil
+	if exactEvidence {
+		if p := firstHit(fullEv, seeds.changed); p != "" {
+			return true, "consumed evidence changed: " + p, false, nil
+		}
+		if p := firstHitAfter(fmEv, seeds.removed, seenGeneration); p != "" {
+			return true, "candidate removed: " + p, false, nil
+		}
+		if p := firstHitAfter(fullEv, seeds.removed, seenGeneration); p != "" {
+			return true, "consumed evidence removed: " + p, false, nil
+		}
 	}
 	if recorded && !exactEvidence &&
 		(intersectsAfter(fmEv, seeds.removed, seenGeneration) || intersectsAfter(fullEv, seeds.removed, seenGeneration)) {
-		return true, false, nil
+		return true, "recorded evidence removed", false, nil
 	}
 	content, err := scanner.ReadDocument(p.c, doc.Path)
 	if err != nil {
-		return false, true, nil
+		return false, "", true, nil
 	}
 	fm, _, err := frontmatter.Parse(content)
 	if err != nil || frontmatter.NoLLMContext(fm) {
-		return false, true, nil
+		return false, "", true, nil
 	}
 	if exactEvidence {
-		contextChanged, err := p.recordedContextChanged(doc, fm, content, ev)
+		contextChanged, detail, err := p.recordedContextChanged(doc, fm, content, ev)
 		if err != nil {
-			return false, false, err
+			return false, "", false, err
 		}
 		if contextChanged {
-			return true, false, nil
+			return true, detail, false, nil
 		}
 		// New seeds and semantic projections model evidence the prompt would
 		// newly cite; persisted evidence cannot contain it yet.
-		return seeds.inboundNew[doc.Path] ||
-			p.dependsOnChangedEvidence(*doc, fm, content, seeds.changed, seeds.changedNewFm, seeds.related), false, nil
+		if seeds.inboundNew[doc.Path] {
+			return true, "new inbound reference", false, nil
+		}
+		if hit, detail := p.dependsOnChangedEvidence(*doc, fm, content, seeds.changed, seeds.changedNewFm, seeds.related); hit {
+			return true, detail, false, nil
+		}
+		return false, "", false, nil
 	}
 	if recorded {
 		// Older evidence flattened candidates and inbound links together.
 		// Recover clear newly-added inbound paths, but do not interpret every
 		// old candidate path as proof that its body was injected.
-		inboundAdded, err := p.legacyInboundAdded(doc.Path, fmEv)
+		source, err := p.legacyInboundAdded(doc.Path, fmEv)
 		if err != nil {
-			return false, false, err
+			return false, "", false, err
 		}
-		if inboundAdded {
-			return true, false, nil
+		if source != "" {
+			return true, "new inbound reference (legacy evidence): " + source, false, nil
 		}
 	}
-	return seeds.inbound[doc.Path] || seeds.removedInbound[doc.Path] > seenGeneration ||
-		intersectsSliceAfter(fmLinkTargets(fm, "related", "contradicted_by", "links"), seeds.removed, seenGeneration) ||
-		p.dependsOnChangedEvidence(*doc, fm, content, seeds.changed, seeds.changedFm, seeds.related), false, nil
+	if seeds.inbound[doc.Path] {
+		return true, "inbound evidence changed", false, nil
+	}
+	if seeds.removedInbound[doc.Path] > seenGeneration {
+		return true, "inbound reference removed", false, nil
+	}
+	if p := firstHitAfter(stringSet(fmLinkTargets(fm, "related", "contradicted_by", "links")), seeds.removed, seenGeneration); p != "" {
+		return true, "linked document removed: " + p, false, nil
+	}
+	if hit, detail := p.dependsOnChangedEvidence(*doc, fm, content, seeds.changed, seeds.changedFm, seeds.related); hit {
+		return true, detail, false, nil
+	}
+	return false, "", false, nil
 }
 
-func (p *pipeline) legacyInboundAdded(path string, oldEvidence map[string]bool) (bool, error) {
+func (p *pipeline) legacyInboundAdded(path string, oldEvidence map[string]bool) (string, error) {
 	inbound, err := p.llmVisibleInbound(path)
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	for _, source := range inbound {
+	for _, source := range slices.Sorted(maps.Keys(stringSet(inbound))) {
 		if !oldEvidence[source] {
-			return true, nil
+			return source, nil
 		}
 	}
-	return false, nil
+	return "", nil
 }
 
-func (p *pipeline) recordedContextChanged(doc *database.Document, fm map[string]any, content string, ev analysisEvidence) (bool, error) {
+func (p *pipeline) recordedContextChanged(doc *database.Document, fm map[string]any, content string, ev analysisEvidence) (bool, string, error) {
 	inbound, err := p.llmVisibleInbound(doc.Path)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	if !equalStrings(ev.Inbound, inbound) {
-		return true, nil
+		return true, "inbound links changed (+" + strings.Join(minusStrings(inbound, ev.Inbound), ",") +
+			" -" + strings.Join(minusStrings(ev.Inbound, inbound), ",") + ")", nil
 	}
 	siblings, err := scanner.SiblingFiles(p.c, doc.Path)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	// Only a recorded sibling disappearing is provable context loss (deleted,
 	// renamed, or now-mentioned). A newly added sibling is merely a candidate
@@ -415,14 +425,49 @@ func (p *pipeline) recordedContextChanged(doc *database.Document, fm map[string]
 	rendered := stringSet(siblingPaths)
 	for _, s := range ev.Siblings {
 		if !rendered[s] {
-			return true, nil
+			return true, "sibling removed: " + s, nil
 		}
 	}
-	return ev.ValidationContext != frontmatterContext(*doc, fm, p.knownDocs), nil
+	if ev.ValidationContext != frontmatterContext(*doc, fm, p.knownDocs) {
+		return true, "validation context changed", nil
+	}
+	return false, "", nil
 }
 
 func equalStrings(a, b []string) bool {
 	return slices.Equal(sortedUnique(a), sortedUnique(b))
+}
+
+// firstHit returns a deterministic member of set present in seeds, or "".
+func firstHit(set, seeds map[string]bool) string {
+	for _, p := range slices.Sorted(maps.Keys(set)) {
+		if seeds[p] {
+			return p
+		}
+	}
+	return ""
+}
+
+// firstHitAfter is firstHit for generation-stamped seed maps.
+func firstHitAfter(set map[string]bool, seeds map[string]int64, generation int64) string {
+	for _, p := range slices.Sorted(maps.Keys(set)) {
+		if seeds[p] > generation {
+			return p
+		}
+	}
+	return ""
+}
+
+// minusStrings returns the sorted members of a absent from b.
+func minusStrings(a, b []string) []string {
+	bs := stringSet(b)
+	out := []string{}
+	for _, v := range a {
+		if !bs[v] {
+			out = append(out, v)
+		}
+	}
+	return sortedUnique(out)
 }
 
 func stringSet(values []string) map[string]bool {
@@ -471,8 +516,8 @@ func (p *pipeline) embeddingEvidenceFloor() float64 {
 // sweep selective across embedding models with very different cosine
 // distributions — under the old absolute threshold a dense model flagged a
 // quarter of all pairs and re-analyzed nearly the whole repository.
-func (p *pipeline) embeddingDependents(changed map[string]bool) map[string]bool {
-	related := map[string]bool{}
+func (p *pipeline) embeddingDependents(changed map[string]bool) map[string]string {
+	related := map[string]string{}
 	floor := p.embeddingEvidenceFloor()
 	type neighbor struct {
 		path  string
@@ -499,39 +544,39 @@ func (p *pipeline) embeddingDependents(changed map[string]bool) map[string]bool 
 			return cmp.Compare(a.path, b.path)
 		})
 		for i := 0; i < len(hits) && i < evidenceNeighborLimit; i++ {
-			related[hits[i].path] = true
+			related[hits[i].path] = path
 		}
 	}
 	return related
 }
 
-func (p *pipeline) dependsOnChangedEvidence(doc database.Document, fm map[string]any, content string, changed, changedFm, related map[string]bool) bool {
+func (p *pipeline) dependsOnChangedEvidence(doc database.Document, fm map[string]any, content string, changed, changedFm map[string]bool, related map[string]string) (bool, string) {
 	for _, target := range frontmatter.GraphLinkTargets(fm) {
-		if changedFm[filepath.ToSlash(strings.TrimSpace(target))] {
-			return true
+		if t := filepath.ToSlash(strings.TrimSpace(target)); changedFm[t] {
+			return true, "linked evidence changed: " + t
 		}
 	}
 	for _, mention := range p.entities.matches(doc.Path, content) {
 		if changedFm[mention.path] {
-			return true
+			return true, "entity evidence changed: " + mention.path
 		}
 		for _, source := range mention.sourcePaths {
 			if changedFm[source] {
-				return true
+				return true, "entity source changed: " + source
 			}
 		}
 	}
-	if related[doc.Path] {
-		return true
+	if trigger, ok := related[doc.Path]; ok {
+		return true, "embedding neighbor changed: " + trigger
 	}
 	docSignature := p.sigs[doc.Path]
 	if len(docSignature) == 0 {
 		docSignature = similarity.Signature(content)
 	}
-	for path := range changed {
+	for _, path := range slices.Sorted(maps.Keys(changed)) {
 		if similarity.Estimate(docSignature, p.sigs[path]) >= overlapThreshold {
-			return true
+			return true, "content overlap: " + path
 		}
 	}
-	return false
+	return false, ""
 }

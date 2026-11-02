@@ -1035,7 +1035,7 @@ func TestBodyOnlyChangeRefreshesOnlyConsumedBodyEvidence(t *testing.T) {
 	}
 }
 
-func TestFrontmatterChangeRefreshesLinkDependents(t *testing.T) {
+func TestTitleOnlyChangeRefreshesOnlyMentionConsumers(t *testing.T) {
 	c, db := setup(t)
 	linker := filepath.Join(c.RepositoryPath, "linker.md")
 	target := filepath.Join(c.RepositoryPath, "target.md")
@@ -1053,8 +1053,10 @@ func TestFrontmatterChangeRefreshesLinkDependents(t *testing.T) {
 		t.Fatalf("initial analysis=%+v error=%v", first, err)
 	}
 
-	// Frontmatter edit changes the annotation the linker's prompt sees —
-	// the linker must be re-analyzed as an evidence dependent.
+	// A title-only edit changes what prompts show for the target — but only
+	// docs that *consumed* it refresh: the linker mentions it as an entity
+	// (relied-upon annotation), while the fixture's a.md merely had it in its
+	// ranked candidate list (displayed, not a dependency) and must not fire.
 	if err := os.WriteFile(target, []byte("---\ntitle: New title\n---\n# New title\n\nBody.\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -1063,20 +1065,22 @@ func TestFrontmatterChangeRefreshesLinkDependents(t *testing.T) {
 	}
 	secondModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
 	second, err := RunProgress(t.Context(), c, db, Generators{Analysis: secondModel}, RunOptions{})
-	// Target plus every doc whose recorded evidence includes its
-	// annotation — the linker and the fixture's a.md, whose ranked
-	// candidate set covered target.
-	if err != nil || second.Processed != 3 {
-		t.Fatalf("frontmatter edit should reprocess target and dependents: %+v error=%v", second, err)
+	if err != nil || second.Processed != 2 {
+		t.Fatalf("title-only edit should reprocess target + its mention consumer: %+v error=%v", second, err)
 	}
-	linkerPrompts := 0
+	processed := map[string]bool{}
 	for _, prompt := range secondModel.prompts {
-		if strings.Contains(prompt, "Current path: linker.md") {
-			linkerPrompts++
+		for _, line := range strings.Split(prompt, "\n") {
+			if strings.HasPrefix(line, "Current path: ") {
+				processed[strings.TrimPrefix(line, "Current path: ")] = true
+			}
 		}
 	}
-	if linkerPrompts != 1 {
-		t.Fatalf("linker dependent expected once after frontmatter change, got %d", linkerPrompts)
+	if !processed["linker.md"] {
+		t.Fatalf("linker must refresh — it consumed the target as an entity mention")
+	}
+	if processed["a.md"] {
+		t.Fatalf("a.md must not re-analyze — the target was only a displayed candidate")
 	}
 }
 

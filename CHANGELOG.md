@@ -11,6 +11,20 @@ tag is prepared.
 
 ### Changed
 
+- Dependents now report _why_ they queue: each evidence-dependent emits a
+  `dependent` progress event naming the firing arm and the triggering
+  document — `consumed evidence changed: x.md`, `inbound links changed
+(+a.md -b.md)`, `entity evidence changed: y.md`, `content overlap: z.md`,
+  and so on. Job progress is now self-explanatory per document instead of
+  only in aggregate counts.
+- Displayed candidates no longer count as dependencies. The `fm` evidence
+  set (ranked candidate annotations) invalidates only on structural loss —
+  a deleted or removed candidate — not on a candidate's frontmatter drift.
+  A title-only edit to a popular note no longer re-analyzes every document
+  that had it in its candidate list. Relied-upon evidence (`full`: consumed
+  bodies, entity mentions, similarity-scored candidates) still invalidates
+  on content drift; link topology, sibling removal, new inbound references
+  and the semantic arms are unchanged.
 - Adding a file to a directory no longer re-analyzes every v2-stamped
   neighbor. Recorded sibling evidence now invalidates only when a rendered
   sibling disappears (deletion, rename); additions are merely candidates the
