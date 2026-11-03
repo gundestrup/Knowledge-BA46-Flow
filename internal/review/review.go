@@ -143,7 +143,7 @@ func Apply(ctx context.Context, c config.Config, db *database.DB) ([]ApplyResult
 			switch s.Action {
 			case "merge":
 				merges = append(merges, s)
-			case "move", "delete", "expand":
+			case "move", "delete":
 			default:
 				restamp[s.DocumentPath] = true
 			}

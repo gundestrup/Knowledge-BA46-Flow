@@ -1937,3 +1937,49 @@ func TestResolvedLinkIssueRefreshesViaValidationContext(t *testing.T) {
 		t.Fatalf("note.md should queue on validation-context change, got %+v", events)
 	}
 }
+
+// RestampEvidence migrates rows analyzed before evidence recording:
+// deterministic context is reconstructed into a v2 record and the removal
+// generation is acknowledged — no model calls needed.
+func TestRestampEvidenceRebuildsV2WithoutModel(t *testing.T) {
+	c, db := setup(t)
+	if err := os.WriteFile(filepath.Join(c.RepositoryPath, "note.md"),
+		[]byte("# Note\n\nLine one.\n\nLine two.\n\nLine three.\n\nLine four.\n\nLine five.\n\nLine six.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	model := &fakeLLM{reply: `{"title":"N","summary":"s","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: model}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a pre-v17 row: drop the evidence record and the removal ack.
+	if _, err := db.ExecContext(t.Context(),
+		`UPDATE documents SET analysis_evidence_json='', seen_removal_generation=0 WHERE path='note.md'`); err != nil {
+		t.Fatal(err)
+	}
+	n, err := RestampEvidence(t.Context(), c, db, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n < 1 {
+		t.Fatalf("expected at least one restamped doc, got %d", n)
+	}
+	var ev string
+	var gen int64
+	if err := db.QueryRowContext(t.Context(),
+		`SELECT analysis_evidence_json, seen_removal_generation FROM documents WHERE path='note.md'`).Scan(&ev, &gen); err != nil {
+		t.Fatal(err)
+	}
+	if parsed, ok := parseAnalysisEvidenceRecord(ev); !ok || parsed.Version < 2 {
+		t.Fatalf("expected a v2 evidence record, got %q", ev)
+	}
+	current, err := db.RemovalGeneration(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gen != current {
+		t.Fatalf("seen_removal_generation=%d must acknowledge current %d", gen, current)
+	}
+}

@@ -2998,3 +2998,46 @@ func TestIndexedInboundLinksReadyAmbiguousAndFallback(t *testing.T) {
 		t.Fatalf("frontmatter fallback=%v, want [d.md] only", fallback)
 	}
 }
+
+// RecordMergeRename retargets the reference graph: notes linking at the
+// absorbed path now point at the merged document, and the rename chain
+// resolves end-to-end.
+func TestMergeRenameRetargetsReferences(t *testing.T) {
+	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	ctx := t.Context()
+	for _, p := range []string{"linker.md", "note.md", "merged.md"} {
+		if _, err := db.UpsertScanned(ctx, Document{Path: p, SHA256: p, TagsJSON: "[]"}, "scan"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.ReplaceReferences(ctx, "linker.md", "one", []Reference{
+		{WrittenTarget: "note.md", TargetPath: "note.md", Kind: "related"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordMergeRename(ctx, "note.md", "merged.md", "t1"); err != nil {
+		t.Fatal(err)
+	}
+	var src string
+	if err := db.QueryRowContext(ctx,
+		`SELECT source_path FROM document_references WHERE target_path='merged.md'`).Scan(&src); err != nil {
+		t.Fatal(err)
+	}
+	if src != "linker.md" {
+		t.Fatalf("inbound reference should retarget to merged.md, got source %q", src)
+	}
+	if target, ok := db.RetargetPath(ctx, "note.md"); !ok || target != "merged.md" {
+		t.Fatalf("RetargetPath should resolve note.md→merged.md, got %q ok=%v", target, ok)
+	}
+	var status string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM documents WHERE path='note.md'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "missing" {
+		t.Fatalf("absorbed doc must be tombstoned, got %q", status)
+	}
+}

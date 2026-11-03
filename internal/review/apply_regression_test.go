@@ -202,7 +202,7 @@ func TestMergePreservesDestinationManagedMetadata(t *testing.T) {
 // external edit had landed.
 func TestApplyRestampsFrontmatterChange(t *testing.T) {
 	c, db, rows := applyFixture(t, "# Note\n\nBody here.\n", []database.Suggestion{{
-		Action: "none", Reason: "r", Confidence: 0.9, ProposedContent: "---\ntags: [x]\n---\n# Note\n\nBody here.\n",
+		Action: "expand", Reason: "r", Confidence: 0.9, ProposedContent: "---\ntags: [x]\n---\n# Note\n\nBody here.\n",
 	}})
 	prompts := filepath.Join(t.TempDir(), "prompts")
 	for name, text := range map[string]string{
@@ -271,5 +271,72 @@ func TestApplyMergeRecordsRename(t *testing.T) {
 	}
 	if target, ok := db.RetargetPath(t.Context(), "note.md"); !ok || target != "merged.md" {
 		t.Fatalf("RetargetPath should resolve note.md→merged.md, got %q ok=%v", target, ok)
+	}
+}
+
+// A body-changing apply is real new content: the doc must stay pending for
+// full analysis — only fm-only applies restamp. Pinned by the
+// semantic-body equality guard in MarkAppliedCurrent.
+func TestApplyBodyChangeStaysPending(t *testing.T) {
+	c := config.Config{RepositoryPath: t.TempDir(), MaxDocumentBytes: 200000, WriteScope: "all", Extensions: []string{".md"}}
+	prompts := filepath.Join(t.TempDir(), "prompts")
+	for name, text := range map[string]string{
+		"base.md": "B", "knowledge-base-mcp-server.md": "M",
+		"analyze.md": "A", "enrich.md": "E", "expand.md": "X", "freshness.md": "F",
+	} {
+		os.MkdirAll(prompts, 0755)
+		os.WriteFile(filepath.Join(prompts, name), []byte(text), 0644)
+	}
+	c.PromptDirectory = prompts
+	body := "Body here.\n\nLine two.\n\nLine three.\n\nLine four.\n\nLine five.\n\nLine six.\n"
+	if err := os.WriteFile(filepath.Join(c.RepositoryPath, "note.md"), []byte("# Note\n\n"+body), 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := database.Open(t.Context(), filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	docs, err := db.Documents(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc database.Document
+	for _, d := range docs {
+		if d.Path == "note.md" {
+			doc = d
+		}
+	}
+	sug := database.Suggestion{
+		Action: "expand", Reason: "r", Confidence: 0.9,
+		ProposedContent: "# Note\n\n" + body + "\nNew paragraph of substance.\n",
+	}
+	if err := db.SaveAnalysis(t.Context(), doc, "fake", "", "", nil, []database.Suggestion{sug}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.PendingSuggestions(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range rows {
+		if err := db.Decide(t.Context(), s.ID, "accepted", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Apply(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := db.Pending(t.Context(), "fake", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].Path != "note.md" {
+		t.Fatalf("body-changing apply must leave the doc pending, got %v", pending)
 	}
 }

@@ -96,8 +96,15 @@ func (d *DB) RestampEvidence(ctx context.Context, path string, external bool, ev
 // post-apply fingerprints: the file on disk equals the pipeline's product,
 // so it must not re-pend, and its fm drift must not seed dependents.
 func (d *DB) MarkAppliedCurrent(ctx context.Context, path string) error {
-	_, err := d.ExecContext(ctx, `UPDATE documents SET analyzed_sha256=analysis_input_sha256,
-		analyzed_semantic_sha256=semantic_sha256, seen_fm_sha256=semantic_frontmatter_sha256,
-		seen_body_sha256=semantic_body_sha256 WHERE path=?`, path)
+	// seen_fm always follows the applied write (fm drift was ours — never a
+	// dependent seed). analyzed/seen_body only catch up when the semantic
+	// body is unchanged — a body edit is real new content that stays pending.
+	_, err := d.ExecContext(ctx, `UPDATE documents SET seen_fm_sha256=semantic_frontmatter_sha256 WHERE path=?`, path)
+	if err != nil {
+		return err
+	}
+	_, err = d.ExecContext(ctx, `UPDATE documents SET analyzed_sha256=analysis_input_sha256,
+		analyzed_semantic_sha256=semantic_sha256, seen_body_sha256=semantic_body_sha256
+		WHERE path=? AND seen_body_sha256=semantic_body_sha256`, path)
 	return err
 }
