@@ -760,13 +760,12 @@ func (p *pipeline) expandSuggestion(doc database.Document, content string, parse
 		ProposedContent: parsed.ProposedContent,
 		Origin:          "expand",
 	}
-	if preserved, err := frontmatter.PreserveIdentity(content, sug.ProposedContent); err != nil {
+	preserved, err := frontmatter.PreserveIdentity(content, sug.ProposedContent)
+	if err != nil {
 		return nil, []string{"expand: " + err.Error()}
-	} else {
-		sug.ProposedContent, err = frontmatter.NormalizeOrder(preserved)
-		if err != nil {
-			return nil, []string{"expand: frontmatter normalization: " + err.Error()}
-		}
+	}
+	if sug.ProposedContent, err = frontmatter.NormalizeOrder(preserved); err != nil {
+		return nil, []string{"expand: frontmatter normalization: " + err.Error()}
 	}
 	if err := p.validateSuggestion(sug, content, nil, false); err != nil {
 		return nil, []string{"expand: " + err.Error()}

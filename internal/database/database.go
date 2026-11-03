@@ -782,12 +782,12 @@ func (d *DB) CandidatePaths(ctx context.Context, exclude string, limit int) ([]s
 
 // truncateRunes bounds a free-text field at max runes — reviewer notes and
 // error strings stay small enough to quote in a prompt or a job detail.
-func truncateRunes(s string, max int) string {
+func truncateRunes(s string, limit int) string {
 	r := []rune(s)
-	if len(r) <= max {
+	if len(r) <= limit {
 		return s
 	}
-	return string(r[:max])
+	return string(r[:limit])
 }
 
 // insertSuggestions appends pending suggestion rows inside tx, skipping

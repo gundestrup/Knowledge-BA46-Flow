@@ -291,15 +291,15 @@ func currentContent(c config.Config, rel string) (string, string) {
 		return "", "file not found or unreadable"
 	}
 	defer f.Close()
-	cap := c.MaxDocumentBytes
-	if cap <= 0 {
-		cap = 200000 // same default config.Load applies
+	limit := c.MaxDocumentBytes
+	if limit <= 0 {
+		limit = 200000 // same default config.Load applies
 	}
-	b, err := io.ReadAll(io.LimitReader(f, cap+1))
+	b, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return "", "file not found or unreadable"
 	}
-	if int64(len(b)) > cap {
+	if int64(len(b)) > limit {
 		return "", "file too large to diff"
 	}
 	return string(b), ""

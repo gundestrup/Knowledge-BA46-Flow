@@ -359,9 +359,9 @@ func analyzeCmd() *cobra.Command {
 			}
 			scanDetail := scanSummary(scanResult)
 			fmt.Fprintln(cmd.OutOrStdout(), scanDetail)
-			print := progressPrinter(cmd.OutOrStdout())
+			report := progressPrinter(cmd.OutOrStdout())
 			taskDetail, err := runAnalyze(ctx, c, db, analysisModel, analyzer.RunOptions{Reanalyze: reanalyze, ReanalyzeAll: reanalyzeAll, External: external, Model: model, EmbedModel: embedModel, AllowCloud: allowCloud, AllowRemote: allowRemote, Progress: func(p analyzer.Progress) {
-				print(p)
+				report(p)
 				_ = db.UpdateJobDetail(ctx, job.ID, p.String())
 			}})
 			if err == nil {
@@ -420,9 +420,9 @@ func runCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), detail)
-			print := progressPrinter(cmd.OutOrStdout())
+			report := progressPrinter(cmd.OutOrStdout())
 			progress := func(p analyzer.Progress) {
-				print(p)
+				report(p)
 				_ = db.UpdateJobDetail(ctx, job.ID, p.String())
 			}
 			analysisDetail, err := runAnalyze(ctx, c, db, analysisModel, analyzer.RunOptions{
@@ -496,13 +496,13 @@ func taskCmd(use, short, op string, allowExternal bool, run func(ctx context.Con
 			}
 			detail = scanSummary(scanResult)
 			fmt.Fprintln(cmd.OutOrStdout(), detail)
-			print := progressPrinter(cmd.OutOrStdout())
+			report := progressPrinter(cmd.OutOrStdout())
 			taskDetail, err := run(ctx, c, db, resolved, analyzer.RunOptions{
 				Reanalyze: reanalyze, ReanalyzeAll: reanalyzeAll, External: external,
 				Model: model, EmbedModel: embedModel, AllowCloud: allowCloud,
 				AllowRemote: allowRemote, WebVerify: webVerify,
 				Progress: func(p analyzer.Progress) {
-					print(p)
+					report(p)
 					_ = db.UpdateJobDetail(ctx, job.ID, p.String())
 				},
 			})
@@ -651,13 +651,13 @@ func tasksCmd() *cobra.Command {
 			}
 			detail = scanSummary(scanResult)
 			fmt.Fprintln(cmd.OutOrStdout(), detail)
-			print := progressPrinter(cmd.OutOrStdout())
+			report := progressPrinter(cmd.OutOrStdout())
 			opts := analyzer.RunOptions{
 				Reanalyze: reanalyze, ReanalyzeAll: reanalyzeAll, External: external,
 				Model: model, EmbedModel: embedModel, AllowCloud: allowCloud,
 				AllowRemote: allowRemote, WebVerify: webVerify,
 				Progress: func(p analyzer.Progress) {
-					print(p)
+					report(p)
 					_ = db.UpdateJobDetail(ctx, job.ID, p.String())
 				},
 			}

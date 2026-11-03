@@ -49,14 +49,14 @@ func Parse(content string) (map[string]any, string, error) {
 		limit = maxBytes
 	}
 	window := content[open[1]:limit]
-	close := closeFence.FindStringIndex(window)
-	if close == nil {
+	end := closeFence.FindStringIndex(window)
+	if end == nil {
 		return nil, content, fmt.Errorf("frontmatter opening fence has no closing fence within %d bytes", maxBytes)
 	}
-	// close[0] is the YAML end in both cases: when the match leads with '\n'
+	// end[0] is the YAML end in both cases: when the match leads with '\n'
 	// that byte belongs to the fence, and an empty-lead match sits at 0 anyway.
-	raw := window[:close[0]]
-	body := content[open[1]+close[1]:]
+	raw := window[:end[0]]
+	body := content[open[1]+end[1]:]
 	var fields map[string]any
 	if err := yaml.Unmarshal([]byte(raw), &fields); err != nil {
 		return nil, body, fmt.Errorf("malformed frontmatter YAML: %w", err)
@@ -102,12 +102,12 @@ func CanonicalParts(content string) (fm, body string) {
 		limit = maxBytes
 	}
 	window := trimmed[open[1]:limit]
-	close := closeFence.FindStringIndex(window)
-	if close == nil {
+	end := closeFence.FindStringIndex(window)
+	if end == nil {
 		return "", content
 	}
-	raw := window[:close[0]]
-	body = trimmed[open[1]+close[1]:]
+	raw := window[:end[0]]
+	body = trimmed[open[1]+end[1]:]
 	lines := strings.SplitAfter(raw, "\n")
 	topIndent := topLevelIndent(lines)
 	inKBM := false
@@ -146,7 +146,7 @@ func CanonicalParts(content string) (fm, body string) {
 		if strings.TrimSpace(raw) == "" {
 			return "", body
 		}
-		return bom + trimmed[:open[1]+close[1]], body
+		return bom + trimmed[:open[1]+end[1]], body
 	}
 	keptText := kept.String()
 	if !afterKBM {
@@ -161,7 +161,7 @@ func CanonicalParts(content string) (fm, body string) {
 	if strings.TrimSpace(keptText) == "" {
 		return "", body
 	}
-	return trimmed[:open[1]] + keptText + trimmed[open[1]+close[0]:open[1]+close[1]], body
+	return trimmed[:open[1]] + keptText + trimmed[open[1]+end[0]:open[1]+end[1]], body
 }
 
 // WriteManaged applies SetManaged to a repository file in place: read,
@@ -282,11 +282,11 @@ func setManagedBlock(content string, kbm map[string]any) (string, error) {
 		limit = maxBytes
 	}
 	window := trimmed[open[1]:limit]
-	close := closeFence.FindStringIndex(window)
-	if close == nil {
+	end := closeFence.FindStringIndex(window)
+	if end == nil {
 		return "", fmt.Errorf("unclosed frontmatter")
 	}
-	raw := window[:close[0]]
+	raw := window[:end[0]]
 
 	// Excise the existing kbm mapping, byte-for-byte, same rule as Canonical.
 	// Top-level keys may sit at a consistent non-zero indent (e.g. " kbm:");
@@ -334,12 +334,12 @@ func setManagedBlock(content string, kbm map[string]any) (string, error) {
 	if strings.TrimSpace(newFM) == "" {
 		// kbm was the only frontmatter content (or nothing remains):
 		// drop the now-empty fences, matching Canonical's collapse.
-		out = bom + trimmed[open[1]+close[1]:]
+		out = bom + trimmed[open[1]+end[1]:]
 	} else {
 		if !strings.HasSuffix(newFM, "\n") {
 			newFM += "\n"
 		}
-		out = bom + trimmed[:open[1]] + newFM + trimmed[open[1]+close[0]:open[1]+close[1]] + trimmed[open[1]+close[1]:]
+		out = bom + trimmed[:open[1]] + newFM + trimmed[open[1]+end[0]:open[1]+end[1]] + trimmed[open[1]+end[1]:]
 	}
 	return out, nil
 }
