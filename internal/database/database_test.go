@@ -11,86 +11,80 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
+
+// mustOpen creates a fresh database for a test and registers cleanup — the
+// shared setup so lifecycle tests don't repeat the open/check/defer boilerplate.
+func mustOpen(t *testing.T) *DB {
+	t.Helper()
+	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	return db
+}
 
 func TestDocumentLifecycle(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	doc := Document{Path: "a.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: `["a"]`}
 	changed, err := db.UpsertScanned(ctx, doc, "scan1")
-	if err != nil || !changed {
-		t.Fatalf("changed=%v err=%v", changed, err)
-	}
-	if err := db.SaveAnalysis(ctx, doc, "test-model", "A", "Summary", []string{"a", "tag"}, []Suggestion{{Action: "move", TargetPath: "b.md", Reason: "better", Confidence: .9}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.NoError(t, db.SaveAnalysis(ctx, doc, "test-model", "A", "Summary", []string{"a", "tag"}, []Suggestion{{Action: "move", TargetPath: "b.md", Reason: "better", Confidence: .9}}))
 	pending, err := db.Pending(ctx, "test-model", "test-model", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pending) != 0 {
-		t.Fatalf("pending=%v", pending)
-	}
+	require.NoError(t, err)
+	require.Empty(t, pending)
 	suggestions, err := db.PendingSuggestions(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(suggestions) != 1 {
-		t.Fatalf("suggestions=%v", suggestions)
-	}
-	if pending, err := db.Pending(ctx, "other-model", "other-model", false); err != nil || len(pending) != 0 {
-		t.Fatalf("model switch alone should not requeue: pending=%v err=%v", pending, err)
-	}
-	if pending, err := db.Pending(ctx, "other-model", "other-model", true); err != nil || len(pending) != 1 {
-		t.Fatalf("reanalyze should include model drift: pending=%v err=%v", pending, err)
-	}
-	if err := db.SaveAnalysis(ctx, doc, "other-model", "A2", "Summary", []string{"a"}, []Suggestion{{Action: "expand", Reason: "other model view", Confidence: .5}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.Len(t, suggestions, 1)
+	require.Empty(t, func() []Document {
+		p, e := db.Pending(ctx, "other-model", "other-model", false)
+		require.NoError(t, e)
+		return p
+	}(), "model switch alone should not requeue")
+	require.Len(t, func() []Document {
+		p, e := db.Pending(ctx, "other-model", "other-model", true)
+		require.NoError(t, e)
+		return p
+	}(), 1, "reanalyze should include model drift")
+	require.NoError(t, db.SaveAnalysis(ctx, doc, "other-model", "A2", "Summary", []string{"a"}, []Suggestion{{Action: "expand", Reason: "other model view", Confidence: .5}}))
 	suggestions, err = db.PendingSuggestions(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(suggestions) != 1 || suggestions[0].Action != "expand" {
-		t.Fatalf("re-analysis should supersede prior pending suggestions: %v", suggestions)
-	}
-	if prior, err := db.Suggestions(ctx, "superseded"); err != nil || len(prior) != 1 || prior[0].Action != "move" {
-		t.Fatalf("old suggestion should be superseded: %v err=%v", prior, err)
-	}
-	if pending, err := db.Pending(ctx, "other-model", "other-model", true); err != nil || len(pending) != 0 {
-		t.Fatalf("same model should stay analyzed: pending=%v err=%v", pending, err)
-	}
-	if forced, err := db.Pending(ctx, "other-model", "other-model", false, true); err != nil || len(forced) != 1 {
-		t.Fatalf("force-all should explicitly requeue stable documents: pending=%v err=%v", forced, err)
-	}
+	require.NoError(t, err)
+	require.Len(t, suggestions, 1)
+	require.Equal(t, "expand", suggestions[0].Action, "re-analysis should supersede prior pending suggestions")
+	prior, err := db.Suggestions(ctx, "superseded")
+	require.NoError(t, err)
+	require.Len(t, prior, 1)
+	require.Equal(t, "move", prior[0].Action, "old suggestion should be superseded")
+	require.Empty(t, func() []Document {
+		p, e := db.Pending(ctx, "other-model", "other-model", true)
+		require.NoError(t, e)
+		return p
+	}(), "same model should stay analyzed")
+	require.Len(t, func() []Document {
+		p, e := db.Pending(ctx, "other-model", "other-model", false, true)
+		require.NoError(t, e)
+		return p
+	}(), 1, "force-all should explicitly requeue stable documents")
 	var model string
-	if err := db.QueryRowContext(ctx, `SELECT analyzed_model FROM documents WHERE path='a.md'`).Scan(&model); err != nil || model != "other-model" {
-		t.Fatalf("analyzed_model=%q err=%v", model, err)
-	}
-	if err := db.Decide(ctx, suggestions[0].ID, "accepted", ""); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT analyzed_model FROM documents WHERE path='a.md'`).Scan(&model))
+	require.Equal(t, "other-model", model)
+	require.NoError(t, db.Decide(ctx, suggestions[0].ID, "accepted", ""))
 	accepted, err := db.Accepted(ctx)
-	if err != nil || len(accepted) != 1 {
-		t.Fatalf("accepted=%v err=%v", accepted, err)
-	}
+	require.NoError(t, err)
+	require.Len(t, accepted, 1)
 	doc.SHA256 = "two"
 	changed, err = db.UpsertScanned(ctx, doc, "scan2")
-	if err != nil || !changed {
-		t.Fatalf("changed=%v err=%v", changed, err)
-	}
+	require.NoError(t, err)
+	require.True(t, changed)
 	pending, err = db.Pending(ctx, "test-model", "test-model", false)
-	if err != nil || len(pending) != 1 {
-		t.Fatalf("pending=%v err=%v", pending, err)
-	}
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
 	superseded, err := db.Suggestions(ctx, "superseded")
-	if err != nil || len(superseded) != 2 {
-		t.Fatalf("superseded=%+v err=%v", superseded, err)
-	}
+	require.NoError(t, err)
+	require.Len(t, superseded, 2)
 }
 
 func TestChangedDocumentSupersedesPendingSuggestion(t *testing.T) {

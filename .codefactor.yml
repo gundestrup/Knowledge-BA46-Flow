@@ -1,11 +1,13 @@
-# CodeFactor exclusions — aligned with .semgrepignore.
-# Vendored minified assets, test fixtures and runtime state are not
-# authored code: keep them out of style/duplication analysis.
+# CodeFactor: grade production code; exclude vendored assets, the example
+# corpus and generated output. Test files stay rated — see must* helpers
+# in internal/database/database_test.go.
+ratings:
+  paths:
+    - "cmd/**"
+    - "internal/**"
+    - "scripts/**"
 exclude:
-  - internal/server/static/vendor/**
-  - example-knowledge/**
-  - example-knowledge-real-test/**
-  - data/**
-  - node_modules/**
-  - coverage/**
-  - "**/*.min.js"
+  - "internal/server/static/vendor/**"
+  - "example-knowledge/**"
+  - "coverage.out"
+  - "test-report.json"
