@@ -89,11 +89,7 @@ func TestDocumentLifecycle(t *testing.T) {
 
 func TestChangedDocumentSupersedesPendingSuggestion(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 
 	doc := Document{Path: "guide.md", SHA256: "first", Size: 5, ModifiedUnix: 10, TagsJSON: `["guide"]`}
 	if _, err := db.UpsertScanned(ctx, doc, "scan-1"); err != nil {
@@ -111,16 +107,12 @@ func TestChangedDocumentSupersedesPendingSuggestion(t *testing.T) {
 		t.Fatalf("changed=%v err=%v", changed, err)
 	}
 	pending, err := db.PendingSuggestions(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(pending) != 0 {
 		t.Fatalf("stale suggestions remain pending: %+v", pending)
 	}
 	superseded, err := db.Suggestions(ctx, "superseded")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(superseded) != 1 || superseded[0].Status != "superseded" {
 		t.Fatalf("superseded=%+v", superseded)
 	}
@@ -128,11 +120,7 @@ func TestChangedDocumentSupersedesPendingSuggestion(t *testing.T) {
 
 func TestDocumentsAndSuggestionLookup(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	doc := Document{Path: "one.md", SHA256: "hash", Size: 4, ModifiedUnix: 3, TagsJSON: `["one"]`}
 	if _, err := db.UpsertScanned(ctx, doc, "scan"); err != nil {
 		t.Fatal(err)
@@ -144,23 +132,17 @@ func TestDocumentsAndSuggestionLookup(t *testing.T) {
 	}
 
 	docs, err := db.Documents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(docs) != 1 || docs[0].Title != "One" || docs[0].Path != "one.md" {
 		t.Fatalf("documents=%+v", docs)
 	}
 	suggestions, err := db.PendingSuggestions(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(suggestions) != 1 {
 		t.Fatalf("suggestions=%+v", suggestions)
 	}
 	got, err := db.Suggestion(ctx, suggestions[0].ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if got.TargetPath != "two.md" || got.ProposedContent != "" {
 		t.Fatalf("suggestion=%+v", got)
 	}
@@ -177,48 +159,30 @@ func TestDocumentsAndSuggestionLookup(t *testing.T) {
 
 func TestJobLifecycleAndStaleRecovery(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 
 	job, err := db.CreateJob(ctx, "scan")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if job.Status != "running" || job.ID == 0 {
 		t.Fatalf("created job=%+v", job)
 	}
-	if err := db.FinishJob(ctx, job.ID, "done", "scanned 2", ""); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.FinishJob(ctx, job.ID, "done", "scanned 2", ""))
 	got, err := db.Job(ctx, job.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if got.Status != "done" || got.Detail != "scanned 2" || got.Finished == "" {
 		t.Fatalf("finished job=%+v", got)
 	}
 	jobs, err := db.Jobs(ctx, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(jobs) != 1 || jobs[0].ID != job.ID {
 		t.Fatalf("jobs=%+v", jobs)
 	}
 
 	stale, err := db.CreateJob(ctx, "analyze")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.FailStaleJobs(ctx); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, db.FailStaleJobs(ctx))
 	got, err = db.Job(ctx, stale.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if got.Status != "failed" || got.Error != "interrupted by server restart" || got.Finished == "" {
 		t.Fatalf("stale job=%+v", got)
 	}
@@ -226,29 +190,21 @@ func TestJobLifecycleAndStaleRecovery(t *testing.T) {
 
 func TestRunningJobSweepsStaleRunners(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 
 	if _, running, err := db.RunningJob(ctx); err != nil || running {
 		t.Fatalf("empty db: running=%v err=%v", running, err)
 	}
 
 	live, err := db.CreateJob(ctx, "analyze")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	got, running, err := db.RunningJob(ctx)
 	if err != nil || !running || got.ID != live.ID {
 		t.Fatalf("live job: running=%v got=%+v err=%v", running, got, err)
 	}
 
 	// A fresh detail update keeps the job alive; a frozen heartbeat dies.
-	if err := db.UpdateJobDetail(ctx, live.ID, "analyzing 3/10: x.md"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.UpdateJobDetail(ctx, live.ID, "analyzing 3/10: x.md"))
 	if _, running, err := db.RunningJob(ctx); err != nil || !running {
 		t.Fatalf("after detail update: running=%v err=%v", running, err)
 	}
@@ -259,9 +215,7 @@ func TestRunningJobSweepsStaleRunners(t *testing.T) {
 		t.Fatalf("stale runner should be swept: running=%v err=%v", running, err)
 	}
 	got, err = db.Job(ctx, live.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if got.Status != "failed" || got.Error != "interrupted (stale heartbeat)" {
 		t.Fatalf("swept job=%+v", got)
 	}
@@ -269,38 +223,22 @@ func TestRunningJobSweepsStaleRunners(t *testing.T) {
 
 func TestUpdateJobDetailOnlyTouchesRunningJobs(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 
 	running, err := db.CreateJob(ctx, "analyze")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.UpdateJobDetail(ctx, running.ID, "analyzing 1/5: a.md"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, db.UpdateJobDetail(ctx, running.ID, "analyzing 1/5: a.md"))
 	got, err := db.Job(ctx, running.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if got.Status != "running" || got.Detail != "analyzing 1/5: a.md" {
 		t.Fatalf("running job=%+v", got)
 	}
 
-	if err := db.FinishJob(ctx, running.ID, "done", "final summary", ""); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.FinishJob(ctx, running.ID, "done", "final summary", ""))
 	// Progress updates must not resurrect or overwrite a finished job.
-	if err := db.UpdateJobDetail(ctx, running.ID, "stale progress"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.UpdateJobDetail(ctx, running.ID, "stale progress"))
 	got, err = db.Job(ctx, running.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if got.Status != "done" || got.Detail != "final summary" {
 		t.Fatalf("finished job=%+v", got)
 	}
@@ -308,27 +246,17 @@ func TestUpdateJobDetailOnlyTouchesRunningJobs(t *testing.T) {
 
 func TestReportSnapshotAndJobFiltering(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 
 	if _, err := db.CreateJob(ctx, "scan"); err != nil {
 		t.Fatal(err)
 	}
 	reportJob, err := db.CreateJob(ctx, "report")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	regularJobs, err := db.JobsForOps(ctx, 100, "scan", "analyze", "run")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	reportJobs, err := db.JobsForOps(ctx, 100, "report")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(regularJobs) != 1 || regularJobs[0].Op != "scan" {
 		t.Fatalf("regular jobs=%+v", regularJobs)
 	}
@@ -337,16 +265,10 @@ func TestReportSnapshotAndJobFiltering(t *testing.T) {
 	}
 
 	data := []byte(`{"configured":true,"repos":[]}`)
-	if err := db.SaveRepoReportSnapshot(ctx, "2026-10-17T12:00:00Z", data); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.SaveRepoReportSnapshot(ctx, "2026-10-17T12:01:00Z", []byte(`{"configured":true,"repos":[{"name":"one"}]}`)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveRepoReportSnapshot(ctx, "2026-10-17T12:00:00Z", data))
+	require.NoError(t, db.SaveRepoReportSnapshot(ctx, "2026-10-17T12:01:00Z", []byte(`{"configured":true,"repos":[{"name":"one"}]}`)))
 	generatedAt, got, err := db.RepoReportSnapshot(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if generatedAt != "2026-10-17T12:01:00Z" || string(got) != `{"configured":true,"repos":[{"name":"one"}]}` {
 		t.Fatalf("snapshot time=%q data=%s", generatedAt, got)
 	}
@@ -357,16 +279,10 @@ func TestReportSnapshotAndJobFiltering(t *testing.T) {
 
 func TestKnowledgeDashboardCountsUnanalyzedFilesAndLastRunCycle(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 
 	overview, err := db.KnowledgeDashboard(ctx, "test-model")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if overview.ChangedFiles != 0 || overview.LastCycleAt != "" {
 		t.Fatalf("initial overview=%+v", overview)
 	}
@@ -375,43 +291,27 @@ func TestKnowledgeDashboardCountsUnanalyzedFilesAndLastRunCycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	overview, err = db.KnowledgeDashboard(ctx, "test-model")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if overview.ChangedFiles != 1 {
 		t.Fatalf("changed file count=%d", overview.ChangedFiles)
 	}
 
 	scan, err := db.CreateJob(ctx, "scan")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.FinishJob(ctx, scan.ID, "done", "scan", ""); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, db.FinishJob(ctx, scan.ID, "done", "scan", ""))
 	overview, err = db.KnowledgeDashboard(ctx, "test-model")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if overview.LastCycleAt != "" {
 		t.Fatalf("scan-only job counted as a full cycle: %+v", overview)
 	}
 
 	run, err := db.CreateJob(ctx, "run")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.FinishJob(ctx, run.ID, "done", "cycle", ""); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, db.FinishJob(ctx, run.ID, "done", "cycle", ""))
 	latest, err := db.Job(ctx, run.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	overview, err = db.KnowledgeDashboard(ctx, "test-model")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if overview.LastCycleAt != latest.Finished {
 		t.Fatalf("last cycle=%q want %q", overview.LastCycleAt, latest.Finished)
 	}
@@ -419,9 +319,7 @@ func TestKnowledgeDashboardCountsUnanalyzedFilesAndLastRunCycle(t *testing.T) {
 
 func TestKnowledgeDashboardSeparatesLocalAndExternalLineage(t *testing.T) {
 	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "lanes.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 	doc := Document{
 		Path: "a.md", SHA256: "source-v1", SemanticSHA256: "semantic-v1",
@@ -431,12 +329,8 @@ func TestKnowledgeDashboardSeparatesLocalAndExternalLineage(t *testing.T) {
 	if _, err := db.UpsertScanned(t.Context(), doc, "scan"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveAnalysis(t.Context(), doc, "local-model", "A", "S", nil, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.SaveExternalAnalysis(t.Context(), doc, "external-model", "A", "S", nil, nil); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveAnalysis(t.Context(), doc, "local-model", "A", "S", nil, nil))
+	require.NoError(t, db.SaveExternalAnalysis(t.Context(), doc, "external-model", "A", "S", nil, nil))
 	overview, err := db.KnowledgeDashboard(t.Context(), "local-model", "external-model")
 	if err != nil || overview.ChangedFiles != 0 || overview.ExternalChangedFiles != 0 {
 		t.Fatalf("current lanes reported pending: %+v err=%v", overview, err)
@@ -451,9 +345,7 @@ func TestLegacyJobsTableMigrationPreservesHistory(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "legacy.db")
 	raw, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	_, err = raw.Exec(`CREATE TABLE jobs (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  op TEXT NOT NULL CHECK(op IN ('scan','analyze','run')),
@@ -463,34 +355,22 @@ func TestLegacyJobsTableMigrationPreservesHistory(t *testing.T) {
  created_at TEXT NOT NULL,
  finished_at TEXT
 )`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	_, err = raw.Exec(`INSERT INTO jobs(id,op,status,detail,error,created_at,finished_at)
 VALUES(7,'scan','done','previous job','','2026-10-01T12:00:00Z','2026-10-01T12:00:01Z')`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := raw.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
 
 	db, err := Open(t.Context(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 	previous, err := db.Job(ctx, 7)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if previous.Op != "scan" || previous.Detail != "previous job" || previous.Status != "done" {
 		t.Fatalf("previous job after migration=%+v", previous)
 	}
 	reportJob, err := db.CreateJob(ctx, "report")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if reportJob.Op != "report" || reportJob.ID != 8 {
 		t.Fatalf("created job=%+v", reportJob)
 	}
@@ -498,11 +378,7 @@ VALUES(7,'scan','done','previous job','','2026-10-01T12:00:00Z','2026-10-01T12:0
 
 func TestCandidatePathsSaveErrorAndMarkMissing(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	for _, doc := range []Document{
 		{Path: "a.md", SHA256: "a", Size: 1, TagsJSON: "[]"},
 		{Path: "b.md", SHA256: "b", Size: 1, TagsJSON: "[]"},
@@ -512,29 +388,19 @@ func TestCandidatePathsSaveErrorAndMarkMissing(t *testing.T) {
 		}
 	}
 	paths, err := db.CandidatePaths(ctx, "a.md", 10)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(paths) != 1 || paths[0] != "b.md" {
 		t.Fatalf("candidate paths=%v", paths)
 	}
-	if err := db.SaveError(ctx, "a.md", "model unavailable"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveError(ctx, "a.md", "model unavailable"))
 	pending, err := db.Pending(ctx, "test-model", "test-model", false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(pending) != 2 || pending[0].LastError != "model unavailable" {
 		t.Fatalf("pending=%+v", pending)
 	}
-	if err := db.MarkMissing(ctx, "scan-2"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.MarkMissing(ctx, "scan-2"))
 	docs, err := db.Documents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(docs) != 2 || docs[0].Status != "missing" || docs[1].Status != "missing" {
 		t.Fatalf("documents=%+v", docs)
 	}
@@ -542,11 +408,7 @@ func TestCandidatePathsSaveErrorAndMarkMissing(t *testing.T) {
 
 func TestMarkAppliedAndApplyFailed(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	for _, doc := range []Document{
 		{Path: "applied.md", SHA256: "one", Size: 1, TagsJSON: "[]"},
 		{Path: "failed.md", SHA256: "two", Size: 1, TagsJSON: "[]"},
@@ -561,9 +423,7 @@ func TestMarkAppliedAndApplyFailed(t *testing.T) {
 		}
 	}
 	pending, err := db.PendingSuggestions(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	for _, suggestion := range pending {
 		if err := db.Decide(ctx, suggestion.ID, "accepted", ""); err != nil {
 			t.Fatal(err)
@@ -579,13 +439,9 @@ func TestMarkAppliedAndApplyFailed(t *testing.T) {
 		}
 	}
 	applied, err := db.Suggestions(ctx, "applied")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	failed, err := db.Suggestions(ctx, "failed")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(applied) != 1 || len(failed) != 1 {
 		t.Fatalf("applied=%+v failed=%+v", applied, failed)
 	}
@@ -593,11 +449,7 @@ func TestMarkAppliedAndApplyFailed(t *testing.T) {
 
 func TestMarkSupersededAcceptedSuggestion(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	doc := Document{Path: "stale.md", SHA256: "source-hash", Size: 5, TagsJSON: "[]"}
 	if _, err := db.UpsertScanned(ctx, doc, "scan"); err != nil {
 		t.Fatal(err)
@@ -611,16 +463,10 @@ func TestMarkSupersededAcceptedSuggestion(t *testing.T) {
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("pending=%+v err=%v", pending, err)
 	}
-	if err := db.Decide(ctx, pending[0].ID, "accepted", ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.MarkSuperseded(ctx, pending[0].ID); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.Decide(ctx, pending[0].ID, "accepted", ""))
+	require.NoError(t, db.MarkSuperseded(ctx, pending[0].ID))
 	got, err := db.Suggestion(ctx, pending[0].ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if got.Status != "superseded" {
 		t.Fatalf("status=%q", got.Status)
 	}
@@ -628,9 +474,7 @@ func TestMarkSupersededAcceptedSuggestion(t *testing.T) {
 
 func TestOpenRejectsUnusablePath(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "not-a-dir")
-	if err := os.WriteFile(file, []byte("x"), 0644); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(file, []byte("x"), 0644))
 	// The database path's parent is a regular file — MkdirAll must fail.
 	if _, err := Open(t.Context(), filepath.Join(file, "km.db")); err == nil {
 		t.Fatal("expected Open to fail inside a regular file")
@@ -639,11 +483,7 @@ func TestOpenRejectsUnusablePath(t *testing.T) {
 
 func TestSaveAnalysisDropsNoOpSuggestions(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	doc := Document{Path: "a.md", SHA256: "h", Size: 1, TagsJSON: "[]"}
 	if _, err := db.UpsertScanned(ctx, doc, "scan"); err != nil {
 		t.Fatal(err)
@@ -655,9 +495,7 @@ func TestSaveAnalysisDropsNoOpSuggestions(t *testing.T) {
 		t.Fatal(err)
 	}
 	pending, err := db.PendingSuggestions(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(pending) != 1 || pending[0].Action != "expand" {
 		t.Fatalf("'none' suggestion was stored: %+v", pending)
 	}
@@ -665,29 +503,19 @@ func TestSaveAnalysisDropsNoOpSuggestions(t *testing.T) {
 
 func TestUnchangedScanPreservesAnalysisState(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	doc := Document{Path: "a.md", SHA256: "h", Size: 1, TagsJSON: `["a"]`}
 	if _, err := db.UpsertScanned(ctx, doc, "scan-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveAnalysis(ctx, doc, "test-model", "A", "summary", []string{"a"}, nil); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveAnalysis(ctx, doc, "test-model", "A", "summary", []string{"a"}, nil))
 	changed, err := db.UpsertScanned(ctx, doc, "scan-2")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if changed {
 		t.Fatal("an unchanged file must not be reported as changed")
 	}
 	docs, err := db.Documents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(docs) != 1 || docs[0].Status != "analyzed" {
 		t.Fatalf("unchanged rescan reset status: %+v", docs)
 	}
@@ -695,27 +523,19 @@ func TestUnchangedScanPreservesAnalysisState(t *testing.T) {
 
 func TestJobsAreNewestFirstAndHonourLimit(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	for _, op := range []string{"scan", "analyze", "run"} {
 		if _, err := db.CreateJob(ctx, op); err != nil {
 			t.Fatal(err)
 		}
 	}
 	jobs, err := db.Jobs(ctx, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(jobs) != 3 || jobs[0].Op != "run" || jobs[2].Op != "scan" {
 		t.Fatalf("jobs not newest-first: %+v", jobs)
 	}
 	limited, err := db.Jobs(ctx, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(limited) != 2 || limited[1].Op != "analyze" {
 		t.Fatalf("limited jobs=%+v", limited)
 	}
@@ -726,11 +546,7 @@ func TestJobsAreNewestFirstAndHonourLimit(t *testing.T) {
 
 func TestPruneFinishedJobsKeepsNewestAndSparesRunning(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	for i := 0; i < 5; i++ {
 		j, err := db.CreateJob(ctx, "scan")
 		if err != nil {
@@ -741,17 +557,13 @@ func TestPruneFinishedJobsKeepsNewestAndSparesRunning(t *testing.T) {
 		}
 	}
 	running, err := db.CreateJob(ctx, "analyze")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	removed, err := db.PruneFinishedJobs(ctx, 2)
 	if err != nil || removed != 3 {
 		t.Fatalf("removed=%d err=%v", removed, err)
 	}
 	jobs, err := db.Jobs(ctx, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(jobs) != 3 || jobs[0].ID != running.ID {
 		t.Fatalf("jobs=%+v", jobs)
 	}
@@ -771,11 +583,7 @@ func TestPruneFinishedJobsKeepsNewestAndSparesRunning(t *testing.T) {
 
 func TestCandidatePathsExcludesSelfAndMissing(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	if _, err := db.UpsertScanned(ctx, Document{Path: "gone.md", SHA256: "a", Size: 1, TagsJSON: "[]"}, "scan-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -784,13 +592,9 @@ func TestCandidatePathsExcludesSelfAndMissing(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := db.MarkMissing(ctx, "scan-2"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.MarkMissing(ctx, "scan-2"))
 	paths, err := db.CandidatePaths(ctx, "self.md", 10)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(paths) != 1 || paths[0] != "other.md" {
 		t.Fatalf("candidates=%v", paths)
 	}
@@ -798,11 +602,7 @@ func TestCandidatePathsExcludesSelfAndMissing(t *testing.T) {
 
 func TestDeletingDocumentCascadesSuggestions(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	doc := Document{Path: "a.md", SHA256: "h", Size: 1, TagsJSON: "[]"}
 	if _, err := db.UpsertScanned(ctx, doc, "scan"); err != nil {
 		t.Fatal(err)
@@ -816,9 +616,7 @@ func TestDeletingDocumentCascadesSuggestions(t *testing.T) {
 		t.Fatal(err)
 	}
 	pending, err := db.PendingSuggestions(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(pending) != 0 {
 		t.Fatalf("suggestions survived a document delete: %+v", pending)
 	}
@@ -826,11 +624,7 @@ func TestDeletingDocumentCascadesSuggestions(t *testing.T) {
 
 func TestRepoReportSnapshotRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 
 	if _, _, err := db.RepoReportSnapshot(ctx); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("expected ErrNoRows before the first snapshot, got %v", err)
@@ -838,24 +632,16 @@ func TestRepoReportSnapshotRoundTrip(t *testing.T) {
 	if err := db.SaveRepoReportSnapshot(ctx, "t1", []byte("not json")); err == nil {
 		t.Fatal("expected invalid JSON to be rejected")
 	}
-	if err := db.SaveRepoReportSnapshot(ctx, "t1", []byte(`{"configured":true}`)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveRepoReportSnapshot(ctx, "t1", []byte(`{"configured":true}`)))
 	at, data, err := db.RepoReportSnapshot(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if at != "t1" || string(data) != `{"configured":true}` {
 		t.Fatalf("snapshot at=%q data=%s", at, data)
 	}
 	// A second save replaces the single-row snapshot.
-	if err := db.SaveRepoReportSnapshot(ctx, "t2", []byte(`{"configured":true,"repos":[]}`)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveRepoReportSnapshot(ctx, "t2", []byte(`{"configured":true,"repos":[]}`)))
 	at, data, err = db.RepoReportSnapshot(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if at != "t2" || string(data) != `{"configured":true,"repos":[]}` {
 		t.Fatalf("snapshot at=%q data=%s", at, data)
 	}
@@ -863,11 +649,7 @@ func TestRepoReportSnapshotRoundTrip(t *testing.T) {
 
 func TestRepoReportHistoryRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 
 	if err := db.SaveRepoReportHistory(ctx, "t0", []byte("not json")); err == nil {
 		t.Fatal("expected invalid JSON to be rejected")
@@ -879,9 +661,7 @@ func TestRepoReportHistoryRoundTrip(t *testing.T) {
 		}
 	}
 	points, err := db.RepoReportHistory(ctx, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(points) != 3 || points[0].GeneratedAt != "t0" || points[2].GeneratedAt != "t2" {
 		t.Fatalf("points=%+v", points)
 	}
@@ -889,9 +669,7 @@ func TestRepoReportHistoryRoundTrip(t *testing.T) {
 		t.Fatalf("summary=%s", points[1].Summary)
 	}
 	limited, err := db.RepoReportHistory(ctx, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(limited) != 2 || limited[0].GeneratedAt != "t1" || limited[1].GeneratedAt != "t2" {
 		t.Fatalf("limited=%+v", limited)
 	}
@@ -899,11 +677,7 @@ func TestRepoReportHistoryRoundTrip(t *testing.T) {
 
 func TestRepoReportHistoryPrunesOldest(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 
 	for i := range reportHistoryKeep + 3 {
 		if err := db.SaveRepoReportHistory(ctx, fmt.Sprintf("t%04d", i), []byte(`{}`)); err != nil {
@@ -911,9 +685,7 @@ func TestRepoReportHistoryPrunesOldest(t *testing.T) {
 		}
 	}
 	points, err := db.RepoReportHistory(ctx, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(points) != reportHistoryKeep {
 		t.Fatalf("expected %d points, got %d", reportHistoryKeep, len(points))
 	}
@@ -924,11 +696,7 @@ func TestRepoReportHistoryPrunesOldest(t *testing.T) {
 
 func TestKnowledgeProgress(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 
 	insertDoc := func(path, firstSeen string, analyzed any) {
 		t.Helper()
@@ -950,9 +718,7 @@ func TestKnowledgeProgress(t *testing.T) {
 	}
 
 	days, err := db.KnowledgeProgress(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(days) != 2 {
 		t.Fatalf("days=%+v", days)
 	}
@@ -967,27 +733,19 @@ func TestKnowledgeProgress(t *testing.T) {
 
 func TestJobsForOpsFiltersByOperation(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	for _, op := range []string{"scan", "report", "analyze"} {
 		if _, err := db.CreateJob(ctx, op); err != nil {
 			t.Fatal(err)
 		}
 	}
 	opsJobs, err := db.JobsForOps(ctx, 10, "scan", "analyze", "run")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(opsJobs) != 2 || opsJobs[0].Op != "analyze" || opsJobs[1].Op != "scan" {
 		t.Fatalf("ops jobs=%+v", opsJobs)
 	}
 	reportJobs, err := db.JobsForOps(ctx, 10, "report")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(reportJobs) != 1 || reportJobs[0].Op != "report" {
 		t.Fatalf("report jobs=%+v", reportJobs)
 	}
@@ -1002,9 +760,7 @@ func TestJobsForOpsFiltersByOperation(t *testing.T) {
 func TestJobsTableMigratesLegacySchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "km.db")
 	raw, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if _, err := raw.Exec(`
 CREATE TABLE jobs (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1018,20 +774,14 @@ CREATE TABLE jobs (
 INSERT INTO jobs(op,status,detail,created_at) VALUES('scan','done','Scanned 3 markdown files','2026-01-01T00:00:00Z');`); err != nil {
 		t.Fatal(err)
 	}
-	if err := raw.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, raw.Close())
 
 	db, err := Open(t.Context(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 	// The preserved row keeps its id and detail.
 	got, err := db.Job(context.Background(), 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if got.Op != "scan" || got.Detail != "Scanned 3 markdown files" {
 		t.Fatalf("migrated job=%+v", got)
 	}
@@ -1043,11 +793,7 @@ INSERT INTO jobs(op,status,detail,created_at) VALUES('scan','done','Scanned 3 ma
 
 func TestMarkSupersededLeavesRejectedSuggestionsAlone(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	doc := Document{Path: "a.md", SHA256: "h", Size: 1, TagsJSON: "[]"}
 	if _, err := db.UpsertScanned(ctx, doc, "scan"); err != nil {
 		t.Fatal(err)
@@ -1061,16 +807,10 @@ func TestMarkSupersededLeavesRejectedSuggestionsAlone(t *testing.T) {
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("pending=%+v err=%v", pending, err)
 	}
-	if err := db.Decide(ctx, pending[0].ID, "rejected", ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.MarkSuperseded(ctx, pending[0].ID); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.Decide(ctx, pending[0].ID, "rejected", ""))
+	require.NoError(t, db.MarkSuperseded(ctx, pending[0].ID))
 	got, err := db.Suggestion(ctx, pending[0].ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if got.Status != "rejected" {
 		t.Fatalf("status=%q", got.Status)
 	}
@@ -1080,9 +820,7 @@ func TestLegacyDocumentsTableGainsFrontmatterColumns(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "legacy-docs.db")
 	raw, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	// A documents table as it existed before the frontmatter columns.
 	_, err = raw.Exec(`CREATE TABLE documents (
  path TEXT PRIMARY KEY,
@@ -1099,22 +837,14 @@ func TestLegacyDocumentsTableGainsFrontmatterColumns(t *testing.T) {
  last_seen_at TEXT NOT NULL,
  analyzed_at TEXT
 )`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	_, err = raw.Exec(`INSERT INTO documents(path,sha256,size,modified_unix,status,first_seen_at,last_seen_at)
 VALUES('old.md','hash1',10,1,'analyzed','t','t')`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := raw.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
 
 	db, err := Open(t.Context(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 	// Existing row kept; new columns populated by the next upsert.
 	if _, err := db.UpsertScanned(ctx, Document{
@@ -1124,9 +854,7 @@ VALUES('old.md','hash1',10,1,'analyzed','t','t')`)
 		t.Fatal(err)
 	}
 	docs, err := db.Documents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(docs) != 1 || docs[0].FrontmatterJSON != `{"title":"Old"}` || docs[0].FrontmatterIssues != `["x"]` {
 		t.Fatalf("docs=%+v", docs)
 	}
@@ -1147,11 +875,7 @@ VALUES('old.md','hash1',10,1,'analyzed','t','t')`)
 
 func TestInboundLinksFindsRelatedAndContradictedBy(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	for _, doc := range []Document{
 		{Path: "target.md", SHA256: "t", Size: 1},
 		{Path: "links.md", SHA256: "a", Size: 1, FrontmatterJSON: `{"related":["target.md","other.md"]}`},
@@ -1164,9 +888,7 @@ func TestInboundLinksFindsRelatedAndContradictedBy(t *testing.T) {
 		}
 	}
 	got, err := db.InboundLinks(ctx, "target.md")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	joined := strings.Join(got, ",")
 	if len(got) != 2 || !strings.Contains(joined, "links.md") || !strings.Contains(joined, "contradicts.md") {
 		t.Fatalf("inbound=%v", got)
@@ -1175,21 +897,13 @@ func TestInboundLinksFindsRelatedAndContradictedBy(t *testing.T) {
 
 func TestExternalLaneKeepsLocalLineage(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	doc := Document{Path: "a.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: `["a"]`}
 	if _, err := db.UpsertScanned(ctx, doc, "scan1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveAnalysis(ctx, doc, "local-model", "A", "S", []string{"a"}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.SaveExternalAnalysis(ctx, doc, "ext-model", "A", "S", []string{"a"}, []Suggestion{{Action: "expand", Reason: "external view", Confidence: .8}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveAnalysis(ctx, doc, "local-model", "A", "S", []string{"a"}, nil))
+	require.NoError(t, db.SaveExternalAnalysis(ctx, doc, "ext-model", "A", "S", []string{"a"}, []Suggestion{{Action: "expand", Reason: "external view", Confidence: .8}}))
 	// The external run must not disturb the local lane's pending view.
 	if pending, err := db.Pending(ctx, "local-model", "local-model", false); err != nil || len(pending) != 0 {
 		t.Fatalf("local pending after external run=%v err=%v", pending, err)
@@ -1233,9 +947,7 @@ func TestMigrationAddsExternalColumns(t *testing.T) {
 	// Build a version-4-era database: the documents table predates the
 	// external lane columns and is stamped one schema behind.
 	raw, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if _, err := raw.Exec(`
 CREATE TABLE documents (
  path TEXT PRIMARY KEY,
@@ -1266,9 +978,7 @@ PRAGMA user_version = 4;`); err != nil {
 	}
 	raw.Close()
 	db, err := Open(t.Context(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 	docs, err := db.Documents(context.Background())
 	if err != nil || len(docs) != 1 {
@@ -1279,9 +989,7 @@ PRAGMA user_version = 4;`); err != nil {
 	}
 	// An external run on a migrated row stamps the new columns.
 	doc := docs[0]
-	if err := db.SaveExternalAnalysis(context.Background(), doc, "ext-model", "A", "S", nil, nil); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveExternalAnalysis(context.Background(), doc, "ext-model", "A", "S", nil, nil))
 	docs, _ = db.Documents(context.Background())
 	if docs[0].ExternalModel != "ext-model" {
 		t.Fatalf("external model after migration: %+v", docs[0])
@@ -1291,9 +999,7 @@ PRAGMA user_version = 4;`); err != nil {
 func TestSchemaVersionStampAndDowngradeGuard(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "km.db")
 	db, err := Open(t.Context(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var stamped int
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&stamped); err != nil || stamped != schemaVersion {
 		t.Fatalf("user_version=%d err=%v, want %d", stamped, err, schemaVersion)
@@ -1312,53 +1018,35 @@ func TestSchemaVersionStampAndDowngradeGuard(t *testing.T) {
 func heartbeatAt(t *testing.T, db *DB, id int64) string {
 	t.Helper()
 	var hb string
-	if err := db.QueryRow(`SELECT heartbeat_at FROM jobs WHERE id=?`, id).Scan(&hb); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.QueryRow(`SELECT heartbeat_at FROM jobs WHERE id=?`, id).Scan(&hb))
 	return hb
 }
 
 func TestHeartbeatJobRefreshesOnlyRunningJobs(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	job, err := db.CreateJob(ctx, "analyze")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	old := "2000-01-01T00:00:00Z"
 	if _, err := db.Exec(`UPDATE jobs SET heartbeat_at=? WHERE id=?`, old, job.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.HeartbeatJob(ctx, job.ID); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.HeartbeatJob(ctx, job.ID))
 	if hb := heartbeatAt(t, db, job.ID); hb == old || hb == "" {
 		t.Fatalf("heartbeat not refreshed: %q", hb)
 	}
-	if err := db.FinishJob(ctx, job.ID, "done", "", ""); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.FinishJob(ctx, job.ID, "done", "", ""))
 	if _, err := db.Exec(`UPDATE jobs SET heartbeat_at=? WHERE id=?`, old, job.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.HeartbeatJob(ctx, job.ID); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.HeartbeatJob(ctx, job.ID))
 	if hb := heartbeatAt(t, db, job.ID); hb != old {
 		t.Fatalf("finished job heartbeat changed to %q", hb)
 	}
 }
 
 func TestPendingFreshnessVerificationPromptIsOptInAndIncremental(t *testing.T) {
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	doc := Document{
 		Path: "a.md", SHA256: "source", SemanticSHA256: "semantic",
 		FreshnessInputSHA256: "freshness-input",
@@ -1368,9 +1056,7 @@ func TestPendingFreshnessVerificationPromptIsOptInAndIncremental(t *testing.T) {
 	if _, err := db.UpsertScanned(t.Context(), doc, "scan"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.StampTask(t.Context(), doc, "freshness", "freshness-model"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.StampTask(t.Context(), doc, "freshness", "freshness-model"))
 	if pending, err := db.PendingTask(t.Context(), "freshness", "freshness-model", false); err != nil || len(pending) != 0 {
 		t.Fatalf("verify metadata should not affect ordinary freshness: %v %v", pending, err)
 	}
@@ -1388,9 +1074,7 @@ func TestPendingFreshnessVerificationPromptIsOptInAndIncremental(t *testing.T) {
 		t.Fatalf("changed verifier prompt was not queued for opt-in run: %v %v", pending, err)
 	}
 	doc.FreshnessVerifyPromptSHA = "verify-v2"
-	if err := db.StampTask(t.Context(), doc, "freshness", "freshness-model"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.StampTask(t.Context(), doc, "freshness", "freshness-model"))
 	if pending, err := db.PendingTaskForRun(t.Context(), "freshness", "freshness-model", false,
 		TaskRunOptions{WebVerify: true, VerifyModel: "verify-model", VerifyPromptSHA: "verify-v2"}); err != nil || len(pending) != 0 {
 		t.Fatalf("updated verifier prompt was not stamped: %v %v", pending, err)
@@ -1399,15 +1083,9 @@ func TestPendingFreshnessVerificationPromptIsOptInAndIncremental(t *testing.T) {
 
 func TestRunHeartbeatTicksUntilStopped(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	job, err := db.CreateJob(ctx, "scan")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	initial := heartbeatAt(t, db, job.ID)
 	// The heartbeat loop is ticker-driven, so a synctest bubble fires every
 	// tick on the fake clock instead of real milliseconds: the test is
@@ -1428,11 +1106,7 @@ func TestRunHeartbeatTicksUntilStopped(t *testing.T) {
 
 func TestDerivedStateUpdatesAndTaskStamps(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 
 	doc := Document{
 		Path: "a.md", SHA256: "sha-a", SemanticSHA256: "semantic-a",
@@ -1446,19 +1120,11 @@ func TestDerivedStateUpdatesAndTaskStamps(t *testing.T) {
 	}
 
 	// Derived-state setters update only their own column.
-	if err := db.SetLinkIssues(ctx, "a.md", `["broken a -> b"]`); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.RefreshFrontmatter(ctx, "a.md", `{"title":"A"}`, "[]"); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.SetSignature(ctx, "a.md", []byte{1, 2, 3}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SetLinkIssues(ctx, "a.md", `["broken a -> b"]`))
+	require.NoError(t, db.RefreshFrontmatter(ctx, "a.md", `{"title":"A"}`, "[]"))
+	require.NoError(t, db.SetSignature(ctx, "a.md", []byte{1, 2, 3}))
 	docs, err := db.Documents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	stored := docs[0]
 	if stored.LinkIssues != `["broken a -> b"]` {
 		t.Errorf("LinkIssues=%q", stored.LinkIssues)
@@ -1479,9 +1145,7 @@ func TestDerivedStateUpdatesAndTaskStamps(t *testing.T) {
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("unstamped doc should be enrich-pending: %v %v", pending, err)
 	}
-	if err := db.SaveEnrichment(ctx, doc, "fast-1", "A", "s", []string{"x"}, nil); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveEnrichment(ctx, doc, "fast-1", "A", "s", []string{"x"}, nil))
 	if pending, _ = db.PendingEnrich(ctx, "fast-1", false); len(pending) != 0 {
 		t.Fatalf("stamped doc should not be pending: %v", pending)
 	}
@@ -1511,17 +1175,13 @@ func TestDerivedStateUpdatesAndTaskStamps(t *testing.T) {
 		t.Fatalf("task suggestions=%+v", sugs)
 	}
 	// A second run supersedes the task's own pending suggestions only.
-	if err := db.SaveTask(ctx, doc, "expand", "big-1", nil); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveTask(ctx, doc, "expand", "big-1", nil))
 	if sugs, _ = db.PendingSuggestions(ctx); len(sugs) != 0 {
 		t.Fatalf("old task suggestion should be superseded: %+v", sugs)
 	}
 
 	// StampTask advances lineage without suggestions.
-	if err := db.StampTask(ctx, doc, "freshness", "big-1"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.StampTask(ctx, doc, "freshness", "big-1"))
 	docs, _ = db.Documents(ctx)
 	if docs[0].FreshnessSHA256 != "freshness-a" {
 		t.Errorf("freshness should stamp semantic task input, got %q", docs[0].FreshnessSHA256)
@@ -1543,15 +1203,9 @@ func TestDerivedStateUpdatesAndTaskStamps(t *testing.T) {
 
 func TestRunHeartbeatPublicWrapper(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	job, err := db.CreateJob(ctx, "scan")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	// The public wrapper ticks every 15s — too slow to observe in a test —
 	// but it must return a working stop that terminates the goroutine.
 	stop := db.RunHeartbeat(ctx, job.ID)
@@ -1562,9 +1216,7 @@ func TestLegacySchemaMigrationPreservesRows(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "legacy.db")
 	raw, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	// The oldest supported documents schema: none of the frontmatter,
 	// external/enrich lane, signature, embedding or task lineage columns.
 	_, err = raw.Exec(`CREATE TABLE documents (
@@ -1582,14 +1234,10 @@ func TestLegacySchemaMigrationPreservesRows(t *testing.T) {
  last_seen_at TEXT NOT NULL,
  analyzed_at TEXT
 )`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	_, err = raw.Exec(`INSERT INTO documents(path,sha256,analyzed_sha256,size,modified_unix,title,status,first_seen_at,last_seen_at,analyzed_at)
 VALUES('a.md','sha-a','sha-a',10,5,'Doc A','analyzed','2026-10-01T00:00:00Z','2026-10-01T00:00:00Z','2026-10-01T00:00:01Z')`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	// Legacy suggestions: pre-origin, pre-decision bookkeeping, narrow
 	// origin CHECK that predates the task stages.
 	_, err = raw.Exec(`CREATE TABLE suggestions (
@@ -1609,14 +1257,10 @@ VALUES('a.md','sha-a','sha-a',10,5,'Doc A','analyzed','2026-10-01T00:00:00Z','20
  error TEXT NOT NULL DEFAULT '',
  FOREIGN KEY(document_path) REFERENCES documents(path) ON UPDATE CASCADE ON DELETE CASCADE
 )`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	_, err = raw.Exec(`INSERT INTO suggestions(document_path,source_sha256,action,reason,confidence,origin,status,created_at)
 VALUES('a.md','sha-a','move','tidy',0.5,'analysis','pending','2026-10-01T00:00:00Z')`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	// Legacy stage_results: same columns, CHECK without the task stages.
 	_, err = raw.Exec(`CREATE TABLE stage_results (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1636,72 +1280,48 @@ VALUES('a.md','sha-a','move','tidy',0.5,'analysis','pending','2026-10-01T00:00:0
  created_at TEXT NOT NULL,
  FOREIGN KEY(document_path) REFERENCES documents(path) ON UPDATE CASCADE ON DELETE CASCADE
 )`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	_, err = raw.Exec(`INSERT INTO stage_results(document_path,source_sha256,stage,model,outcome,suggestions,created_at)
 VALUES('a.md','sha-a','analysis','old-model','success',1,'2026-10-01T00:00:00Z')`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := raw.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
 
 	db, err := Open(t.Context(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 
 	// Every pre-existing row survives with its values intact.
 	docs, err := db.Documents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(docs) != 1 || docs[0].Path != "a.md" || docs[0].AnalyzedSHA256 != "sha-a" || docs[0].Title != "Doc A" {
 		t.Fatalf("documents after migration=%+v", docs)
 	}
 	sugs, err := db.PendingSuggestions(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(sugs) != 1 || sugs[0].Reason != "tidy" || sugs[0].Origin != "analysis" {
 		t.Fatalf("suggestions after migration=%+v", sugs)
 	}
 	var stageCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM stage_results`).Scan(&stageCount); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM stage_results`).Scan(&stageCount))
 	if stageCount != 1 {
 		t.Fatalf("stage_results rows=%d", stageCount)
 	}
 	// The widened constraints now admit the task stages and origins.
 	doc := Document{Path: "a.md", SHA256: "sha-a"}
-	if err := db.SaveTask(ctx, doc, "expand", "m", nil); err != nil {
-		t.Fatalf("expand task write after migration: %v", err)
-	}
-	if err := db.StampTask(ctx, doc, "freshness", "m"); err != nil {
-		t.Fatalf("freshness stamp after migration: %v", err)
-	}
+	require.NoErrorf(t, db.SaveTask(ctx, doc, "expand", "m", nil), "expand task write after migration: %v", err)
+	require.NoErrorf(t, db.StampTask(ctx, doc, "freshness", "m"), "freshness stamp after migration: %v", err)
 }
 
 func TestOpenRejectsNewerSchemaVersion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "future.db")
 	raw, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var current int
-	if err := raw.QueryRow(`PRAGMA user_version`).Scan(&current); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, raw.QueryRow(`PRAGMA user_version`).Scan(&current))
 	if _, err := raw.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion+1)); err != nil { // nosemgrep: go.lang.security.audit.sqli.gosql-sqli.gosql-sqli — PRAGMA takes no bind params; int interpolation
 		t.Fatal(err)
 	}
-	if err := raw.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, raw.Close())
 	db, err := Open(t.Context(), path)
 	if err == nil {
 		db.Close()
@@ -1715,36 +1335,24 @@ func TestOpenRejectsNewerSchemaVersion(t *testing.T) {
 func TestMigrationAddsFreshnessVerifyPromptStamp(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "km.db")
 	db, err := Open(t.Context(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
 	raw, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if _, err := raw.Exec(`ALTER TABLE documents DROP COLUMN freshness_verify_prompt_sha256`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := raw.Exec(`PRAGMA user_version=14`); err != nil {
 		t.Fatal(err)
 	}
-	if err := raw.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, raw.Close())
 
 	db, err = Open(t.Context(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 	var found bool
 	rows, err := db.Query(`PRAGMA table_info(documents)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer rows.Close()
 	for rows.Next() {
 		var cid, notNull, pk int
@@ -1757,9 +1365,7 @@ func TestMigrationAddsFreshnessVerifyPromptStamp(t *testing.T) {
 			found = true
 		}
 	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, rows.Err())
 	if !found {
 		t.Fatal("migration did not restore freshness_verify_prompt_sha256")
 	}
@@ -1768,16 +1374,10 @@ func TestMigrationAddsFreshnessVerifyPromptStamp(t *testing.T) {
 func TestMigrationV16RestoresEvidenceColumns(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	db, err := Open(t.Context(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
 	raw, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	for _, col := range []string{
 		"analysis_evidence_json", "seen_external_fm_sha256",
 		"seen_external_body_sha256", "missing_since",
@@ -1789,20 +1389,14 @@ func TestMigrationV16RestoresEvidenceColumns(t *testing.T) {
 	if _, err := raw.Exec(`PRAGMA user_version=15`); err != nil {
 		t.Fatal(err)
 	}
-	if err := raw.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, raw.Close())
 
 	db, err = Open(t.Context(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 	cols := make(map[string]bool)
 	rows, err := db.Query(`PRAGMA table_info(documents)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer rows.Close()
 	for rows.Next() {
 		var cid, notNull, pk int
@@ -1813,9 +1407,7 @@ func TestMigrationV16RestoresEvidenceColumns(t *testing.T) {
 		}
 		cols[name] = true
 	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, rows.Err())
 	for _, col := range []string{
 		"analysis_evidence_json", "seen_external_fm_sha256",
 		"seen_external_body_sha256", "missing_since",
@@ -1830,9 +1422,7 @@ func TestMigrationV17RestoresLaneAndEvidenceState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	ctx := t.Context()
 	db, err := Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	doc := Document{
 		Path: "note.md", SHA256: "source", SemanticSHA256: "semantic",
 		AnalysisInputSHA256: "input", FmSHA256: "fm", BodySHA256: "body", TagsJSON: `[]`,
@@ -1840,19 +1430,11 @@ func TestMigrationV17RestoresLaneAndEvidenceState(t *testing.T) {
 	if _, err := db.UpsertScanned(ctx, doc, "scan1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveAnalysis(ctx, doc, "local", "Note", "Summary", nil, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.SaveExternalAnalysis(ctx, doc, "external", "Note", "Summary", nil, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveAnalysis(ctx, doc, "local", "Note", "Summary", nil, nil))
+	require.NoError(t, db.SaveExternalAnalysis(ctx, doc, "external", "Note", "Summary", nil, nil))
+	require.NoError(t, db.Close())
 	raw, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	for _, col := range []string{
 		"external_analysis_evidence_json", "seen_removal_generation",
 		"seen_external_removal_generation", "missing_generation",
@@ -1867,20 +1449,14 @@ func TestMigrationV17RestoresLaneAndEvidenceState(t *testing.T) {
 	if _, err := raw.Exec(`PRAGMA user_version=16`); err != nil {
 		t.Fatal(err)
 	}
-	if err := raw.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, raw.Close())
 
 	db, err = Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 	cols := make(map[string]bool)
 	rows, err := db.Query(`PRAGMA table_info(documents)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	for rows.Next() {
 		var cid, notNull, pk int
 		var name, dataType string
@@ -1895,9 +1471,7 @@ func TestMigrationV17RestoresLaneAndEvidenceState(t *testing.T) {
 		_ = rows.Close()
 		t.Fatal(err)
 	}
-	if err := rows.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, rows.Close())
 	for _, col := range []string{
 		"external_analysis_evidence_json", "seen_removal_generation",
 		"seen_external_removal_generation", "missing_generation",
@@ -1911,24 +1485,16 @@ func TestMigrationV17RestoresLaneAndEvidenceState(t *testing.T) {
 		t.Fatalf("removal state generation=%d err=%v, want 0", generation, err)
 	}
 	localPending, err := db.Pending(ctx, "local", "", false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	externalPending, err := db.PendingExternal(ctx, "external", "", false, false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(localPending) != 0 || len(externalPending) != 0 {
 		t.Fatalf("additive schema migration requeued unchanged lineages: local=%d external=%d", len(localPending), len(externalPending))
 	}
 	localSweep, err := db.NeedsRemovalSweep(ctx, false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	externalSweep, err := db.NeedsRemovalSweep(ctx, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if localSweep || externalSweep {
 		t.Fatalf("additive schema migration created phantom evidence sweeps: local=%v external=%v", localSweep, externalSweep)
 	}
@@ -1938,9 +1504,7 @@ func TestMigrationV17BackfillsLegacyExternalEvidence(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "state.db")
 	db, err := Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	doc := Document{Path: "note.md", SHA256: "source", TagsJSON: `[]`}
 	if _, err := db.UpsertScanned(ctx, doc, "scan1"); err != nil {
 		t.Fatal(err)
@@ -1951,13 +1515,9 @@ seen_fm_sha256='legacy-fm',seen_body_sha256='legacy-body',analysis_evidence_json
 seen_external_fm_sha256='',seen_external_body_sha256='',external_analysis_evidence_json='' WHERE path='note.md'`, legacyEvidence); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.Close())
 	db, err = Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 	var fm, body, evidence string
 	if err := db.QueryRow(`SELECT seen_external_fm_sha256,seen_external_body_sha256,external_analysis_evidence_json
@@ -1976,11 +1536,7 @@ FROM documents WHERE path='note.md'`).Scan(&fm, &body, &evidence); err != nil {
 
 func TestSaveTaskFailureLeavesNoPartialState(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	doc := Document{Path: "a.md", SHA256: "sha-a", Size: 1, ModifiedUnix: 1, TagsJSON: `[]`}
 	if _, err := db.UpsertScanned(ctx, doc, "scan"); err != nil {
 		t.Fatal(err)
@@ -1991,7 +1547,7 @@ func TestSaveTaskFailureLeavesNoPartialState(t *testing.T) {
 BEGIN SELECT RAISE(ABORT, 'injected insert failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	err = db.SaveTask(ctx, doc, "expand", "m", []Suggestion{
+	err := db.SaveTask(ctx, doc, "expand", "m", []Suggestion{
 		{Action: "expand", Reason: "x", Confidence: .5, Origin: "expand"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "injected insert failure") {
@@ -2004,9 +1560,7 @@ BEGIN SELECT RAISE(ABORT, 'injected insert failure'); END`); err != nil {
 	// Recovery contract: the aborted tx must not leave the lineage stamp or
 	// any suggestion behind — the doc stays expand-pending, not half-done.
 	docs, err := db.Documents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if docs[0].ExpandSHA256 != "" || docs[0].ExpandModel != "" {
 		t.Fatalf("aborted SaveTask left lineage stamp: %+v", docs[0])
 	}
@@ -2020,11 +1574,7 @@ BEGIN SELECT RAISE(ABORT, 'injected insert failure'); END`); err != nil {
 
 func TestUpsertScannedFailureLeavesNoPartialRow(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 
 	// Fail the documents write inside UpsertScanned's transaction.
 	if _, err := db.Exec(`CREATE TRIGGER fail_doc_update BEFORE UPDATE ON documents
@@ -2036,15 +1586,13 @@ BEGIN SELECT RAISE(ABORT, 'injected update failure'); END`); err != nil {
 		t.Fatal(err)
 	}
 	doc.SHA256 = "sha-b" // changed hash takes the UPDATE path
-	_, err = db.UpsertScanned(ctx, doc, "scan2")
+	_, err := db.UpsertScanned(ctx, doc, "scan2")
 	if err == nil || !strings.Contains(err.Error(), "injected update failure") {
 		t.Fatalf("UpsertScanned error=%v", err)
 	}
 
 	docs, err := db.Documents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	// The first write is intact; the failed one left nothing behind.
 	if len(docs) != 1 || docs[0].SHA256 != "sha-a" {
 		t.Fatalf("documents after failed upsert=%+v", docs)
@@ -2053,9 +1601,7 @@ BEGIN SELECT RAISE(ABORT, 'injected update failure'); END`); err != nil {
 
 func TestOpenRejectsCorruptDatabaseFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
-	if err := os.WriteFile(path, []byte("this is not a sqlite database"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(path, []byte("this is not a sqlite database"), 0o600))
 	db, err := Open(t.Context(), path)
 	if err == nil {
 		db.Close()
@@ -2068,11 +1614,7 @@ func TestOpenRejectsCorruptDatabaseFile(t *testing.T) {
 // with its document count, and no entries for columns nobody stamped.
 func TestModelStampsReportsDominantModel(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 
 	models := []string{"model-a", "model-a", "model-a", "model-b"}
 	for i, model := range models {
@@ -2085,18 +1627,14 @@ func TestModelStampsReportsDominantModel(t *testing.T) {
 		}
 	}
 	docs, err := db.Documents(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	for _, doc := range docs[:2] {
 		if err := db.SaveEmbedding(ctx, doc, "emb-x", []byte{0, 0, 128, 63}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// A minority re-stamp must not flip the dominant lineage answer.
-	if err := db.SaveTask(ctx, docs[0], "freshness", "fresh-old", nil); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveTask(ctx, docs[0], "freshness", "fresh-old", nil))
 	for _, doc := range docs[1:] {
 		if err := db.SaveTask(ctx, doc, "freshness", "fresh-new", nil); err != nil {
 			t.Fatal(err)
@@ -2104,9 +1642,7 @@ func TestModelStampsReportsDominantModel(t *testing.T) {
 	}
 
 	stamps, err := db.ModelStamps(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if got := stamps["analyzed"]; got.Model != "model-a" || got.Docs != 3 {
 		t.Fatalf("analyzed stamp=%+v, want model-a over 3 docs", got)
 	}
@@ -2124,16 +1660,12 @@ func TestModelStampsReportsDominantModel(t *testing.T) {
 
 	// Vanished files must not keep voting: once the model-a notes go missing,
 	// the minority live model becomes the dominant lineage answer.
-	if err := db.MarkMissing(ctx, "scan-later"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.MarkMissing(ctx, "scan-later"))
 	if _, err := db.UpsertScanned(ctx, Document{Path: "d3.md", SHA256: "sha-3", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}, "scan-later"); err != nil {
 		t.Fatal(err)
 	}
 	stamps, err = db.ModelStamps(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if got := stamps["analyzed"]; got.Model != "model-b" || got.Docs != 1 {
 		t.Fatalf("analyzed stamp after missing=%+v, want model-b over the live doc", got)
 	}
@@ -2145,11 +1677,7 @@ func TestModelStampsReportsDominantModel(t *testing.T) {
 // reviewer's note rides along for prompt context.
 func TestRejectedSuggestionSuppressionAndNote(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	doc := Document{Path: "a.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}
 	if _, err := db.UpsertScanned(ctx, doc, "s"); err != nil {
 		t.Fatal(err)
@@ -2177,12 +1705,8 @@ func TestRejectedSuggestionSuppressionAndNote(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("pending=%v", rows)
 	}
-	if err := db.Decide(ctx, rows[0].ID, "rejected", "b.md exists on another shelf"); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Decide(ctx, rows[1].ID, "rejected", "PG 18 was released Sep 2025 — claim is backwards"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.Decide(ctx, rows[0].ID, "rejected", "b.md exists on another shelf"))
+	require.NoError(t, db.Decide(ctx, rows[1].ID, "rejected", "PG 18 was released Sep 2025 — claim is backwards"))
 
 	// The identical proposals must not come back — not even a rephrased
 	// reason on a targeted action, nor the same expand content under a new
@@ -2206,9 +1730,7 @@ func TestRejectedSuggestionSuppressionAndNote(t *testing.T) {
 
 	// The reviewer's notes survive for prompt feedback, newest first.
 	rejected, err := db.RejectedSuggestions(ctx, "a.md", 5)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(rejected) != 2 || rejected[0].DecisionNote == "" || rejected[1].DecisionNote == "" {
 		t.Fatalf("rejected=%+v", rejected)
 	}
@@ -2217,9 +1739,7 @@ func TestRejectedSuggestionSuppressionAndNote(t *testing.T) {
 	}
 
 	// A long note is bounded.
-	if err := db.Decide(ctx, pending()[0].ID, "rejected", strings.Repeat("x", 900)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.Decide(ctx, pending()[0].ID, "rejected", strings.Repeat("x", 900)))
 	rejected, _ = db.RejectedSuggestions(ctx, "a.md", 5)
 	if got := len([]rune(rejected[0].DecisionNote)); got > 500 {
 		t.Fatalf("decision_note length=%d", got)
@@ -2233,14 +1753,10 @@ func TestMigrationAddsDecisionNote(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "km.db")
 	db, err := Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	db.Close()
 	raw, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	// Rebuild the v8-era suggestions table (no decision_note) and stamp the
 	// schema one version back so migrate runs the column upgrade.
 	if _, err := raw.Exec(`ALTER TABLE suggestions DROP COLUMN decision_note`); err != nil {
@@ -2252,25 +1768,19 @@ func TestMigrationAddsDecisionNote(t *testing.T) {
 	}
 	raw.Close()
 	db, err = Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 
 	doc := Document{Path: "a.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}
 	if _, err := db.UpsertScanned(ctx, doc, "s"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveAnalysis(ctx, doc, "m", "t", "s", nil, []Suggestion{{Action: "expand", Reason: "old claim", Confidence: .8}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveAnalysis(ctx, doc, "m", "t", "s", nil, []Suggestion{{Action: "expand", Reason: "old claim", Confidence: .8}}))
 	rows, err := db.PendingSuggestions(ctx)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("pending=%v err=%v", rows, err)
 	}
-	if err := db.Decide(ctx, rows[0].ID, "rejected", "not true anymore"); err != nil {
-		t.Fatalf("Decide on migrated schema: %v", err)
-	}
+	require.NoErrorf(t, db.Decide(ctx, rows[0].ID, "rejected", "not true anymore"), "Decide on migrated schema: %v", err)
 	rejected, err := db.RejectedSuggestions(ctx, "a.md", 5)
 	if err != nil || len(rejected) != 1 || rejected[0].DecisionNote != "not true anymore" {
 		t.Fatalf("rejected=%+v err=%v", rejected, err)
@@ -2283,11 +1793,7 @@ func TestMigrationAddsDecisionNote(t *testing.T) {
 // the still-valid suggestions resurface with it.
 func TestSuggestionsSkipMissingDocuments(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	doc := Document{Path: "a.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}
 	if _, err := db.UpsertScanned(ctx, doc, "scan-1"); err != nil {
 		t.Fatal(err)
@@ -2302,14 +1808,10 @@ func TestSuggestionsSkipMissingDocuments(t *testing.T) {
 	if err != nil || len(pending) != 2 {
 		t.Fatalf("pending=%v err=%v", pending, err)
 	}
-	if err := db.Decide(ctx, pending[1].ID, "accepted", ""); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.Decide(ctx, pending[1].ID, "accepted", ""))
 
 	// The next scan does not see a.md: both queues drop its suggestions.
-	if err := db.MarkMissing(ctx, "scan-2"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.MarkMissing(ctx, "scan-2"))
 	for name, list := range map[string]func(context.Context) ([]Suggestion, error){
 		"pending":  db.PendingSuggestions,
 		"accepted": db.Accepted,
@@ -2347,11 +1849,7 @@ func TestSuggestionsSkipMissingDocuments(t *testing.T) {
 // review decisions (FK cascade) all survive the move.
 func TestRenameByHashPreservesLineage(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	doc := Document{Path: "a.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}
 	if _, err := db.UpsertScanned(ctx, doc, "scan-1"); err != nil {
 		t.Fatal(err)
@@ -2361,23 +1859,17 @@ func TestRenameByHashPreservesLineage(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveEmbedding(ctx, doc, "embed-m", []byte{0, 0, 128, 63}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveEmbedding(ctx, doc, "embed-m", []byte{0, 0, 128, 63}))
 
 	// The file moves to a new location with identical content.
 	moved := doc
 	moved.Path = "sub/b.md"
 	changed, err := db.UpsertScanned(ctx, moved, "scan-2", func(string) bool { return true })
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if changed {
 		t.Fatal("rename must report unchanged — the entity did not change")
 	}
-	if err := db.MarkMissing(ctx, "scan-2"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.MarkMissing(ctx, "scan-2"))
 
 	docs, err := db.Documents(ctx)
 	if err != nil || len(docs) != 1 {
@@ -2407,11 +1899,7 @@ func TestRenameByHashPreservesLineage(t *testing.T) {
 // the old path, mean the new path is a separate document.
 func TestRenameByHashAmbiguousAndDuplicate(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	seed := func(path string) {
 		t.Helper()
 		if _, err := db.UpsertScanned(ctx, Document{Path: path, SHA256: "dup", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}, "scan-1"); err != nil {
@@ -2422,9 +1910,7 @@ func TestRenameByHashAmbiguousAndDuplicate(t *testing.T) {
 	seed("a2.md")
 
 	// Both vanish; a new same-hash path is ambiguous — plain new document.
-	if err := db.MarkMissing(ctx, "scan-2"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.MarkMissing(ctx, "scan-2"))
 	if _, err := db.UpsertScanned(ctx, Document{Path: "c.md", SHA256: "dup", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}, "scan-3"); err != nil {
 		t.Fatal(err)
 	}
@@ -2465,11 +1951,7 @@ func TestRenameByHashAmbiguousAndDuplicate(t *testing.T) {
 // dead ends — a link is only retargeted to a document that actually exists.
 func TestRetargetPath(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	seed := func(path, sha, seen string) {
 		t.Helper()
 		if _, err := db.UpsertScanned(ctx, Document{Path: path, SHA256: sha, Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}, seen, func(string) bool { return true }); err != nil {
@@ -2521,11 +2003,7 @@ func TestRetargetPath(t *testing.T) {
 // destination stays put: the vacated slot is still a valid landing spot.
 func TestRenameRetargetsMergeTargets(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	seed := func(path, sha string) Document {
 		t.Helper()
 		doc := Document{Path: path, SHA256: sha, Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}
@@ -2547,9 +2025,7 @@ func TestRenameRetargetsMergeTargets(t *testing.T) {
 		t.Fatalf("pending=%v err=%v", pending, err)
 	}
 	// Accept the merge; the move stays pending.
-	if err := db.Decide(ctx, pending[0].ID, "accepted", ""); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.Decide(ctx, pending[0].ID, "accepted", ""))
 
 	// The target file moves elsewhere unchanged.
 	moved := target
@@ -2571,9 +2047,7 @@ func TestRenameRetargetsMergeTargets(t *testing.T) {
 func TestProgressBacklogCountsQueueExits(t *testing.T) {
 	ctx := context.Background()
 	db, err := Open(ctx, filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 
 	doc := Document{Path: "a.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}
@@ -2581,18 +2055,12 @@ func TestProgressBacklogCountsQueueExits(t *testing.T) {
 		t.Fatal(err)
 	}
 	sug := []Suggestion{{Action: "expand", Reason: "v1", Confidence: .5, Origin: "expand"}}
-	if err := db.SaveTask(ctx, doc, "expand", "m", sug); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveTask(ctx, doc, "expand", "m", sug))
 	// Replacing the pending set supersedes the old row — it left the queue, so
 	// the progress graph must not count it as open backlog forever.
-	if err := db.SaveTask(ctx, doc, "expand", "m", []Suggestion{{Action: "expand", Reason: "v2", Confidence: .5, Origin: "expand"}}); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveTask(ctx, doc, "expand", "m", []Suggestion{{Action: "expand", Reason: "v2", Confidence: .5, Origin: "expand"}}))
 	days, err := db.KnowledgeProgress(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var created, handled int
 	for _, d := range days {
 		created += d.Suggestions
@@ -2610,9 +2078,7 @@ func TestMigrationBackfillsSupersededDecidedAt(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "km.db")
 	db, err := Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	doc := Document{Path: "a.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: "[]"}
 	if _, err := db.UpsertScanned(ctx, doc, "s"); err != nil {
 		t.Fatal(err)
@@ -2622,9 +2088,7 @@ func TestMigrationBackfillsSupersededDecidedAt(t *testing.T) {
 	// Simulate the v10-era state: a superseded row with no decided_at — it
 	// left the queue but the graph's handled series could not see it.
 	raw, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if _, err := raw.Exec(`INSERT INTO suggestions (document_path,source_sha256,action,reason,confidence,origin,status,created_at) VALUES ('a.md','one','expand','stale fix',.5,'enrich','superseded','2025-10-20T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
@@ -2634,14 +2098,10 @@ func TestMigrationBackfillsSupersededDecidedAt(t *testing.T) {
 	raw.Close()
 
 	db, err = Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 	days, err := db.KnowledgeProgress(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var handled int
 	for _, d := range days {
 		handled += d.Handled
@@ -2657,11 +2117,7 @@ func TestMigrationBackfillsSupersededDecidedAt(t *testing.T) {
 // content identity verified, no requeue. A stale stamp is never rescued.
 func TestUpsertScannedRestampsLineageUnderCurrentRecipe(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := mustOpen(t)
 	scanned := Document{Path: "a.md", SHA256: "sha", SemanticSHA256: "sem",
 		AnalysisInputSHA256: "OLD-A", EnrichmentInputSHA256: "OLD-E", ExpandInputSHA256: "OLD-X"}
 	if _, err := db.UpsertScanned(ctx, scanned, "s1"); err != nil {
@@ -2691,12 +2147,10 @@ expand_sha256=expand_input_sha256`); err != nil {
 		t.Fatal(err)
 	}
 	var analyzed, external, enriched, expand, stale string
-	err = db.QueryRow(`SELECT analyzed_sha256,external_sha256,enriched_sha256,expand_sha256,
+	err := db.QueryRow(`SELECT analyzed_sha256,external_sha256,enriched_sha256,expand_sha256,
 (SELECT analyzed_sha256 FROM documents WHERE path='b.md') FROM documents WHERE path='a.md'`).
 		Scan(&analyzed, &external, &enriched, &expand, &stale)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if analyzed != "NEW-A" || external != "NEW-A" || enriched != "NEW-E" || expand != "NEW-X" {
 		t.Fatalf("lineage not re-stamped: a=%q e=%q r=%q x=%q", analyzed, external, enriched, expand)
 	}
@@ -2708,9 +2162,7 @@ expand_sha256=expand_input_sha256`); err != nil {
 func TestMarkMissingCleansReferencesAndTracksRemovalGeneration(t *testing.T) {
 	ctx := t.Context()
 	db, err := Open(ctx, filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 	doc := Document{Path: "a.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: `[]`}
 	if _, err := db.UpsertScanned(ctx, doc, "scan1"); err != nil {
@@ -2725,20 +2177,14 @@ func TestMarkMissingCleansReferencesAndTracksRemovalGeneration(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.MarkMissing(ctx, "scan2"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.MarkMissing(ctx, "scan2"))
 	refs, err := db.SourceReferences(ctx, "a.md")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(refs) != 0 {
 		t.Fatalf("missing source kept %d references", len(refs))
 	}
 	var versions int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM reference_versions WHERE source_path='a.md'`).Scan(&versions); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM reference_versions WHERE source_path='a.md'`).Scan(&versions))
 	if versions != 0 {
 		t.Fatalf("missing source kept %d reference-version rows", versions)
 	}
@@ -2754,9 +2200,7 @@ func TestMarkMissingCleansReferencesAndTracksRemovalGeneration(t *testing.T) {
 	if err != nil || !needsLocal {
 		t.Fatalf("local removal sweep needed=%v err=%v, want true", needsLocal, err)
 	}
-	if err := db.MarkRemovalChecked(ctx, "keep.md", false, generation); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.MarkRemovalChecked(ctx, "keep.md", false, generation))
 	needsLocal, err = db.NeedsRemovalSweep(ctx, false)
 	if err != nil || needsLocal {
 		t.Fatalf("local removal sweep needed after acknowledgement=%v err=%v, want false", needsLocal, err)
@@ -2768,9 +2212,7 @@ func TestMarkMissingCleansReferencesAndTracksRemovalGeneration(t *testing.T) {
 	if _, err := db.UpsertScanned(ctx, keep, "scan3"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.MarkMissing(ctx, "scan3"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.MarkMissing(ctx, "scan3"))
 	generationAgain, err := db.RemovalGeneration(ctx)
 	if err != nil || generationAgain != generation {
 		t.Fatalf("repeated scan advanced removal generation to %d, want %d (err=%v)", generationAgain, generation, err)
@@ -2792,9 +2234,7 @@ func TestMarkMissingCleansReferencesAndTracksRemovalGeneration(t *testing.T) {
 func TestReplaceReferencesAdvancesEvidenceGenerationOnlyForTopologyChanges(t *testing.T) {
 	ctx := t.Context()
 	db, err := Open(ctx, filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 	doc := Document{Path: "source.md", SHA256: "one", Size: 1, ModifiedUnix: 1, TagsJSON: `[]`}
 	if _, err := db.UpsertScanned(ctx, doc, "scan1"); err != nil {
@@ -2804,9 +2244,7 @@ func TestReplaceReferencesAdvancesEvidenceGenerationOnlyForTopologyChanges(t *te
 		{WrittenTarget: "target.md", TargetPath: "target.md", Kind: "body", SourceSHA256: "one"},
 		{WrittenTarget: "target.md", TargetPath: "target.md", Kind: "body", SourceSHA256: "one"},
 	}
-	if err := db.ReplaceReferences(ctx, "source.md", "one", initial); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.ReplaceReferences(ctx, "source.md", "one", initial))
 	generation, err := db.RemovalGeneration(ctx)
 	if err != nil || generation != 1 {
 		t.Fatalf("initial topology generation=%d err=%v, want 1", generation, err)
@@ -2836,9 +2274,7 @@ func TestReplaceReferencesAdvancesEvidenceGenerationOnlyForTopologyChanges(t *te
 func TestRenameRetargetsSourceReferences(t *testing.T) {
 	ctx := t.Context()
 	db, err := Open(ctx, filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 	old := Document{Path: "old.md", SHA256: "same", Size: 1, ModifiedUnix: 1, TagsJSON: `[]`}
 	if _, err := db.UpsertScanned(ctx, old, "scan1"); err != nil {
@@ -2855,9 +2291,7 @@ func TestRenameRetargetsSourceReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	refs, err := db.SourceReferences(ctx, "new.md")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(refs) != 1 || refs[0].TargetPath != "b.md" {
 		t.Fatalf("rename did not retarget source references: %+v", refs)
 	}
@@ -2865,12 +2299,8 @@ func TestRenameRetargetsSourceReferences(t *testing.T) {
 		t.Fatalf("old path kept %d references", len(stale))
 	}
 	var oldVersions, newVersions int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM reference_versions WHERE source_path='old.md'`).Scan(&oldVersions); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM reference_versions WHERE source_path='new.md'`).Scan(&newVersions); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM reference_versions WHERE source_path='old.md'`).Scan(&oldVersions))
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM reference_versions WHERE source_path='new.md'`).Scan(&newVersions))
 	if oldVersions != 0 || newVersions != 1 {
 		t.Fatalf("rename reference-version rows old=%d new=%d; want old=0 new=1", oldVersions, newVersions)
 	}
@@ -2879,9 +2309,7 @@ func TestRenameRetargetsSourceReferences(t *testing.T) {
 func TestSaveAnalysisStoresLaneEvidenceSeparately(t *testing.T) {
 	ctx := t.Context()
 	db, err := Open(ctx, filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 	doc := Document{
 		Path: "note.md", SHA256: "source", AnalysisInputSHA256: "input",
@@ -2891,17 +2319,11 @@ func TestSaveAnalysisStoresLaneEvidenceSeparately(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc.AnalysisEvidenceJSON = `{"fm":["local-target.md"],"full":[]}`
-	if err := db.SaveAnalysis(ctx, doc, "local", "Note", "Summary", nil, nil); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveAnalysis(ctx, doc, "local", "Note", "Summary", nil, nil))
 	doc.AnalysisEvidenceJSON = `{"fm":["external-target.md"],"full":[]}`
-	if err := db.SaveExternalAnalysis(ctx, doc, "external", "Note", "Summary", nil, nil); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveExternalAnalysis(ctx, doc, "external", "Note", "Summary", nil, nil))
 	var local, external string
-	if err := db.QueryRow(`SELECT analysis_evidence_json,external_analysis_evidence_json FROM documents WHERE path='note.md'`).Scan(&local, &external); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.QueryRow(`SELECT analysis_evidence_json,external_analysis_evidence_json FROM documents WHERE path='note.md'`).Scan(&local, &external))
 	if local != `{"fm":["local-target.md"],"full":[]}` || external != `{"fm":["external-target.md"],"full":[]}` {
 		t.Fatalf("lane evidence crossed: local=%q external=%q", local, external)
 	}
@@ -2910,9 +2332,7 @@ func TestSaveAnalysisStoresLaneEvidenceSeparately(t *testing.T) {
 func TestIndexedInboundLinksReadyAmbiguousAndFallback(t *testing.T) {
 	ctx := t.Context()
 	db, err := Open(ctx, filepath.Join(t.TempDir(), "km.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer db.Close()
 	bID := "22222222-2222-4222-8222-222222222222"
 	docs := []Document{
@@ -2935,9 +2355,7 @@ func TestIndexedInboundLinksReadyAmbiguousAndFallback(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.ReplaceReferences(ctx, "b.md", "b1", nil); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.ReplaceReferences(ctx, "b.md", "b1", nil))
 	if err := db.ReplaceReferences(ctx, "e.md", "e1", []Reference{
 		{WrittenTarget: "old-name.md", TargetPath: "", TargetID: bID, Kind: "body"},
 	}); err != nil {
@@ -2960,9 +2378,7 @@ func TestIndexedInboundLinksReadyAmbiguousAndFallback(t *testing.T) {
 	if _, err := db.UpsertScanned(ctx, dupe, "scan1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.ReplaceReferences(ctx, "dupe.md", "d1", nil); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.ReplaceReferences(ctx, "dupe.md", "d1", nil))
 	if _, _, err := db.IndexedInboundLinks(ctx, "b.md"); err == nil ||
 		!strings.Contains(err.Error(), "ambiguous") {
 		t.Fatalf("duplicate document_id should fail closed, err=%v", err)
@@ -2985,9 +2401,7 @@ func TestIndexedInboundLinksReadyAmbiguousAndFallback(t *testing.T) {
 		t.Fatalf("incomplete index should report not-ready: ready=%v err=%v", ready, err)
 	}
 	fallback, err := db.InboundLinks(ctx, "b.md")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if len(fallback) != 1 || fallback[0] != "d.md" {
 		t.Fatalf("frontmatter fallback=%v, want [d.md] only", fallback)
 	}
@@ -2998,9 +2412,7 @@ func TestIndexedInboundLinksReadyAmbiguousAndFallback(t *testing.T) {
 // resolves end-to-end.
 func TestMergeRenameRetargetsReferences(t *testing.T) {
 	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "state.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	ctx := t.Context()
 	for _, p := range []string{"linker.md", "note.md", "merged.md"} {
@@ -3013,9 +2425,7 @@ func TestMergeRenameRetargetsReferences(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.RecordMergeRename(ctx, "note.md", "merged.md", "t1"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.RecordMergeRename(ctx, "note.md", "merged.md", "t1"))
 	var src string
 	if err := db.QueryRowContext(ctx,
 		`SELECT source_path FROM document_references WHERE target_path='merged.md'`).Scan(&src); err != nil {
@@ -3028,9 +2438,7 @@ func TestMergeRenameRetargetsReferences(t *testing.T) {
 		t.Fatalf("RetargetPath should resolve note.md→merged.md, got %q ok=%v", target, ok)
 	}
 	var status string
-	if err := db.QueryRowContext(ctx, `SELECT status FROM documents WHERE path='note.md'`).Scan(&status); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT status FROM documents WHERE path='note.md'`).Scan(&status))
 	if status != "missing" {
 		t.Fatalf("absorbed doc must be tombstoned, got %q", status)
 	}
