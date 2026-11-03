@@ -55,6 +55,11 @@ lint:
 
 # govulncheck reports reachable Go vulnerability advisories; needs network
 # access to the Go vuln database, so it is separate from `check`.
+# deps-check lists modules with updates available — review before each
+# release bump; bump the safe minor/patch set, skip disproportionate jumps.
+deps-check:
+	@go list -m -u all | grep '\[' || echo "all dependencies current"
+
 vuln-check:
 	go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 

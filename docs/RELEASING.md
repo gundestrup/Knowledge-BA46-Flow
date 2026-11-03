@@ -25,8 +25,11 @@ release:
 
 1. For a later patch/minor/major release, run
    `make version-bump TYPE=patch|minor|major`. It increments `VERSION` and
-   synchronizes `package.json`, `package-lock.json`, and the README badge.
-   The initial target is already `0.1.0`.
+
+- Run `make deps-check` first and take the safe minor/patch set.
+  synchronizes `package.json`, `package-lock.json`, and the README badge.
+  The initial target is already `0.1.0`.
+
 2. Move the included changes from `Unreleased` to a dated
    `## [X.Y.Z] - YYYY-MM-DD` section; leave a fresh `Unreleased` heading above it.
 3. Run `make check`, `make frontend-check`, and
