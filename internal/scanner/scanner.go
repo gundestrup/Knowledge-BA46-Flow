@@ -90,12 +90,12 @@ func newRepoWalker(ctx context.Context, c config.Config, db *database.DB, seen s
 	}
 	taskPrompts, err := scanPromptInputs(c)
 	if err != nil {
-		root.Close()
+		_ = root.Close()
 		return repoWalker{}, err
 	}
 	taxonomyBytes, taxonomyExists, err := taxonomy.ReadFromRoot(root)
 	if err != nil {
-		root.Close()
+		_ = root.Close()
 		return repoWalker{}, err
 	}
 	taxonomySHA := ""

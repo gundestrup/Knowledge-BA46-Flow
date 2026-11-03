@@ -314,6 +314,29 @@ func (p *pipeline) removedPaths() (map[string]int64, error) {
 // Recorded evidence is exact; rows without a recording keep the conservative
 // heuristic sweep. skip means the doc is unreadable or excluded from LLM
 // context.
+
+// recordedEvidenceLost is the cheap first pass of the dependents sweep: does
+// any recorded relied-upon or displayed evidence path now resolve to a
+// changed or removed seed? Returns the firing reason or "".
+func recordedEvidenceLost(fmEv, fullEv map[string]bool, seeds *sweepSeeds, seenGeneration int64, exactEvidence, recorded bool) string {
+	if exactEvidence {
+		if p := firstHit(fullEv, seeds.changed); p != "" {
+			return "consumed evidence changed: " + p
+		}
+		if p := firstHitAfter(fmEv, seeds.removed, seenGeneration); p != "" {
+			return "candidate removed: " + p
+		}
+		if p := firstHitAfter(fullEv, seeds.removed, seenGeneration); p != "" {
+			return "consumed evidence removed: " + p
+		}
+	}
+	if recorded && !exactEvidence &&
+		(intersectsAfter(fmEv, seeds.removed, seenGeneration) || intersectsAfter(fullEv, seeds.removed, seenGeneration)) {
+		return "recorded evidence removed"
+	}
+	return ""
+}
+
 // isEvidenceDependent reports whether the doc's recorded context lost or
 // gained relied-upon evidence — plus a human-readable reason and trigger for
 // queue attribution ("why was this doc re-analyzed"). Displayed candidates
@@ -342,20 +365,8 @@ func (p *pipeline) isEvidenceDependent(doc *database.Document, seeds *sweepSeeds
 	fullEv := stringSet(ev.Full)
 	seenGeneration := p.laneRemovalGeneration(*doc)
 	exactEvidence := recorded && ev.Version >= 2
-	if exactEvidence {
-		if p := firstHit(fullEv, seeds.changed); p != "" {
-			return true, "consumed evidence changed: " + p, false, nil
-		}
-		if p := firstHitAfter(fmEv, seeds.removed, seenGeneration); p != "" {
-			return true, "candidate removed: " + p, false, nil
-		}
-		if p := firstHitAfter(fullEv, seeds.removed, seenGeneration); p != "" {
-			return true, "consumed evidence removed: " + p, false, nil
-		}
-	}
-	if recorded && !exactEvidence &&
-		(intersectsAfter(fmEv, seeds.removed, seenGeneration) || intersectsAfter(fullEv, seeds.removed, seenGeneration)) {
-		return true, "recorded evidence removed", false, nil
+	if detail := recordedEvidenceLost(fmEv, fullEv, seeds, seenGeneration, exactEvidence, recorded); detail != "" {
+		return true, detail, false, nil
 	}
 	content, err := scanner.ReadDocument(p.c, doc.Path)
 	if err != nil {
