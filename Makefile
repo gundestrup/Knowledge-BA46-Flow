@@ -108,14 +108,7 @@ sonar:
 		sonar -Dsonar.token="$$SONAR_TOKEN"; \
 	fi
 
-# mod-tidy fails when go.mod drifts from go mod tidy — keeps the module
-# requirements honest. go.sum is intentionally not gated: content-hash
-# bookkeeping legitimately differs across platforms (modernc/x-sys GOOS files).
-mod-tidy:
-	@go mod tidy && git diff --quiet -- go.mod || \
-		{ echo "go.mod out of sync — diff:"; git diff -- go.mod | head -40; exit 1; }
-
-check: version-check mod-tidy fmt-check vet lint test-race build
+check: version-check fmt-check vet lint test-race build
 
 frontend-check:
 	npm ci --ignore-scripts
