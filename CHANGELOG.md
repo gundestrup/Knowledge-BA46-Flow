@@ -46,6 +46,21 @@ tag is prepared.
 
 ### Changed
 
+### Internal
+
+- CodeFactor maintainability pass: shared `serveAndBrowse` for the
+  screencast drivers, builtin shadowing removed (`max`/`print`/`cap`/
+  `close`/`min`/`copy`), else-after-return flattened.
+- testify `require` adopted for test assertions; `mustOpen` is the
+  exemplar setup helper for collapsing `if err != nil` scaffolding.
+- `.codefactor.yml` scopes ratings to production code (vendored assets
+  and the example corpus excluded); `make deps-check` lists outdated
+  modules; `mod-tidy` gates `make check` so go.mod/go.sum cannot drift.
+- `pre-commit` handles filenames containing spaces (null-delimited
+  xargs) — the `5 layer.docx` "Invalid scanning root" failure.
+- Dependency bumps: testify 1.12.1, modernc.org/sqlite 1.61.1,
+  yaml.v2 2.4.0, urfave/cli and go-md2man patches.
+
 - Dependents now report _why_ they queue: each evidence-dependent emits a
   `dependent` progress event naming the firing arm and the triggering
   document — `consumed evidence changed: x.md`, `inbound links changed
