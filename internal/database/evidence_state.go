@@ -91,3 +91,13 @@ func (d *DB) RestampEvidence(ctx context.Context, path string, external bool, ev
 	_, err := d.ExecContext(ctx, `UPDATE documents SET `+col+`=?,`+genCol+`=? WHERE path=?`, evidence, generation, path) // #nosec G202 NOSONAR -- lane columns are fixed strings, values bound
 	return err
 }
+
+// MarkAppliedCurrent stamps a just-applied document as analyzed at its
+// post-apply fingerprints: the file on disk equals the pipeline's product,
+// so it must not re-pend, and its fm drift must not seed dependents.
+func (d *DB) MarkAppliedCurrent(ctx context.Context, path string) error {
+	_, err := d.ExecContext(ctx, `UPDATE documents SET analyzed_sha256=analysis_input_sha256,
+		analyzed_semantic_sha256=semantic_sha256, seen_fm_sha256=semantic_frontmatter_sha256,
+		seen_body_sha256=semantic_body_sha256 WHERE path=?`, path)
+	return err
+}

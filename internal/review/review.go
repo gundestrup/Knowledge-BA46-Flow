@@ -25,6 +25,7 @@ import (
 	"knowledge-ba46-flow/internal/mcppolicy"
 	"knowledge-ba46-flow/internal/paths"
 	"knowledge-ba46-flow/internal/proposal"
+	"knowledge-ba46-flow/internal/scanner"
 )
 
 // List prints pending suggestions non-interactively (id, action, confidence,
@@ -120,6 +121,7 @@ func Apply(ctx context.Context, c config.Config, db *database.DB) ([]ApplyResult
 	}
 	out := make([]ApplyResult, 0, len(sugs))
 	applied := 0
+	restamp := map[string]bool{}
 	batch := rand.Text()
 	for _, s := range sugs {
 		at := time.Now().UTC().Format(time.RFC3339Nano)
@@ -132,8 +134,25 @@ func Apply(ctx context.Context, c config.Config, db *database.DB) ([]ApplyResult
 		r.DocumentPath, r.BatchID, r.AttemptedAt = s.DocumentPath, batch, at
 		if r.Applied {
 			applied++
+			// Frontmatter-level writes equal the pipeline's own output —
+			// restamp so they don't re-pend or seed dependents. Body/path
+			// writers leave real new content a full analysis should see.
+			switch s.Action {
+			case "move", "delete", "expand", "merge":
+			default:
+				restamp[s.DocumentPath] = true
+			}
 		}
 		out = append(out, r)
+	}
+	if len(restamp) > 0 {
+		var paths []string
+		for p := range restamp {
+			paths = append(paths, p)
+		}
+		if err := scanner.RestampApplied(ctx, c, db, paths); err != nil {
+			out = append(out, ApplyResult{Status: "warning", Error: "post-apply restamp: " + err.Error(), BatchID: batch})
+		}
 	}
 	if applied > 0 && c.ReindexTriggerPath != "" {
 		trigger := touchReindexTrigger(c)

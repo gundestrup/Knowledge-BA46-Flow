@@ -49,6 +49,28 @@ func Scan(ctx context.Context, c config.Config, db *database.DB) (Result, error)
 
 	// Lookup sets for excluded directory names and allowed extensions
 	// (case-insensitive); exclude_extensions subtracts from the allowlist.
+	w, err := newRepoWalker(ctx, c, db, seen)
+	if err != nil {
+		return Result{}, err
+	}
+	defer w.root.Close()
+	err = filepath.WalkDir(c.RepositoryPath, w.visit)
+	if err != nil {
+		return w.result, err
+	}
+	if err = db.MarkMissing(ctx, seen); err != nil {
+		return w.result, err
+	}
+	if err = w.checkInternalLinks(); err != nil {
+		return w.result, err
+	}
+	return w.result, nil
+}
+
+// newRepoWalker builds the scan worker — extension/exclusion lookup sets,
+// per-task prompt inputs and the taxonomy scope digest — shared by Scan and
+// RestampApplied so applied files re-fingerprint under the identical recipe.
+func newRepoWalker(ctx context.Context, c config.Config, db *database.DB, seen string) (repoWalker, error) {
 	excludes := map[string]bool{}
 	for _, x := range c.ExcludeDirectories {
 		excludes[x] = true
@@ -60,21 +82,21 @@ func Scan(ctx context.Context, c config.Config, db *database.DB) (Result, error)
 	}
 	patterns, err := paths.ParseExcludePatterns(c.Exclude)
 	if err != nil {
-		return Result{}, err
+		return repoWalker{}, err
 	}
 	root, err := os.OpenRoot(c.RepositoryPath)
 	if err != nil {
-		return Result{}, err
+		return repoWalker{}, err
 	}
-	defer root.Close()
-
 	taskPrompts, err := scanPromptInputs(c)
 	if err != nil {
-		return Result{}, err
+		root.Close()
+		return repoWalker{}, err
 	}
 	taxonomyBytes, taxonomyExists, err := taxonomy.ReadFromRoot(root)
 	if err != nil {
-		return Result{}, err
+		root.Close()
+		return repoWalker{}, err
 	}
 	taxonomySHA := ""
 	var vocabulary *taxonomy.Vocabulary
@@ -92,22 +114,40 @@ func Scan(ctx context.Context, c config.Config, db *database.DB) (Result, error)
 	// no longer invalidate the whole corpus. A malformed file fails closed:
 	// every document falls back to the whole-file digest and conservatively
 	// requeues.
-	w := repoWalker{
+	return repoWalker{
 		ctx: ctx, c: c, db: db, root: root, seen: seen,
 		excludes: excludes, exts: exts, exclude: patterns, paths: map[string]bool{},
 		promptInputs: taskPrompts, taxonomySHA: taxonomySHA, vocabulary: vocabulary,
+	}, nil
+}
+
+// RestampApplied re-fingerprints just-written files and stamps them current:
+// the file on disk now equals what the pipeline produced, so it is neither
+// pending nor an fm-drift seed for dependents. Callers pass only
+// frontmatter-level applies — body writers (expand, merge) leave real new
+// content that a full analysis should still see.
+func RestampApplied(ctx context.Context, c config.Config, db *database.DB, relPaths []string) error {
+	if len(relPaths) == 0 {
+		return nil
 	}
-	err = filepath.WalkDir(c.RepositoryPath, w.visit)
+	w, err := newRepoWalker(ctx, c, db, time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
-		return w.result, err
+		return err
 	}
-	if err = db.MarkMissing(ctx, seen); err != nil {
-		return w.result, err
+	defer w.root.Close()
+	for _, rel := range relPaths {
+		info, err := os.Lstat(filepath.Join(c.RepositoryPath, rel))
+		if err != nil {
+			continue
+		}
+		if err := w.indexFile(filepath.Join(c.RepositoryPath, rel), rel, fs.FileInfoToDirEntry(info)); err != nil {
+			return err
+		}
+		if err := db.MarkAppliedCurrent(ctx, rel); err != nil {
+			return err
+		}
 	}
-	if err = w.checkInternalLinks(); err != nil {
-		return w.result, err
-	}
-	return w.result, nil
+	return nil
 }
 
 // repoWalker carries the scan state behind the WalkDir callback: configuration,

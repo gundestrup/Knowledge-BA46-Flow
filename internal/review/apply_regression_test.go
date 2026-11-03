@@ -12,6 +12,7 @@ import (
 	"knowledge-ba46-flow/internal/config"
 	"knowledge-ba46-flow/internal/database"
 	"knowledge-ba46-flow/internal/frontmatter"
+	"knowledge-ba46-flow/internal/scanner"
 )
 
 func applyFixture(t *testing.T, original string, suggestions []database.Suggestion) (config.Config, *database.DB, []database.Suggestion) {
@@ -192,5 +193,42 @@ func TestMergePreservesDestinationManagedMetadata(t *testing.T) {
 	fields, _, _ := frontmatter.Parse(string(got))
 	if fields["kbm"].(map[string]any)["owner"] != "Target" {
 		t.Fatalf("destination operational metadata changed: %s", got)
+	}
+}
+
+// An accepted frontmatter change is the pipeline's own output — it must not
+// re-pend the document or seed dependents on the next scan. The bug: apply
+// never restamped, so every accepted fm edit re-queued the doc as if an
+// external edit had landed.
+func TestApplyRestampsFrontmatterChange(t *testing.T) {
+	c, db, rows := applyFixture(t, "# Note\n\nBody here.\n", []database.Suggestion{{
+		Action: "none", Reason: "r", Confidence: 0.9, ProposedContent: "---\ntags: [x]\n---\n# Note\n\nBody here.\n",
+	}})
+	prompts := filepath.Join(t.TempDir(), "prompts")
+	for name, text := range map[string]string{
+		"base.md": "B", "knowledge-base-mcp-server.md": "M",
+		"analyze.md": "A", "enrich.md": "E", "expand.md": "X", "freshness.md": "F",
+	} {
+		os.MkdirAll(prompts, 0755)
+		os.WriteFile(filepath.Join(prompts, name), []byte(text), 0644)
+	}
+	c.PromptDirectory = prompts
+	for _, s := range rows {
+		if err := db.Decide(t.Context(), s.ID, "accepted", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Apply(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := db.Pending(t.Context(), "fake", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("fm-only apply must not re-pend the doc, pending=%v", pending)
 	}
 }

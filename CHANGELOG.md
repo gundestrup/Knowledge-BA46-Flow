@@ -23,6 +23,15 @@ tag is prepared.
 
 ### Fixed
 
+- Accepted frontmatter changes no longer re-queue the document. `apply`
+  never restamped, so every accepted title/tags/link edit re-pended the
+  doc as `changedFm` and seeded its mention/link dependents — the
+  pipeline's own output treated as foreign change. Applied
+  frontmatter-level writes now re-fingerprint in place
+  (`analyzed = current`, `seen_fm`/`seen_body` = current); body writers
+  (`expand`, `merge`, `move`, `delete`) still leave the doc pending for
+  genuine new content.
+
 - Dashboard/report progress bars no longer crash on a zero-total job detail
   (`N/0`): `jobPercent` now guards the denominator the way `jobPhase`
   already did — Alpine threw `non-finite value` binding `Infinity` to the
