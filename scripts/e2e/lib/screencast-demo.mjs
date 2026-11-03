@@ -3,14 +3,14 @@
 // Chrome via CDP Page.startScreencast, and stitches the captured frames into
 // an MP4 with ffmpeg. Each screencast-*.mjs script supplies only its tour.
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { launchBrowser, waitHTTP } from "./browser.mjs";
+import { serveAndBrowse } from "./browser.mjs";
 
 export const root = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -250,38 +250,7 @@ export async function setupDemo() {
   if (seed.status !== 0)
     throw new Error(`seed failed: ${seed.stderr}${seed.stdout}`);
 
-  const server = spawn(binary, ["serve", "--config", configPath], {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let browser = null;
-  try {
-    await waitHTTP(`${baseURL}/api/ops`);
-    browser = await launchBrowser(cdpPort);
-    if (!browser) throw new Error("no Chrome/Chromium found for screencast");
-    const page = await browser.newPage();
-    await page.client.send("Page.navigate", { url: `${baseURL}/` });
-    await page.client.send("Page.bringToFront");
-    await page.client.send("Emulation.setDeviceMetricsOverride", {
-      width: 1440,
-      height: 900,
-      deviceScaleFactor: 1,
-      mobile: false,
-    });
-
-    return {
-      tmp,
-      baseURL,
-      page,
-      cleanup() {
-        browser?.close();
-        server.kill("SIGKILL");
-      },
-    };
-  } catch (error) {
-    browser?.close();
-    server.kill("SIGKILL");
-    throw error;
-  }
+  return serveAndBrowse({ binary, configPath, baseURL, cdpPort, tmp });
 }
 
 // tour returns the small interaction vocabulary the screencast scripts use:

@@ -336,3 +336,47 @@ export async function launchBrowser(cdpPort) {
     },
   };
 }
+
+// serveAndBrowse spawns `binary serve` and drives a headed browser to the
+// landing page — the shared tail of both screencast drivers. The returned
+// cleanup always kills the server and closes the browser, including on
+// launch failure.
+export async function serveAndBrowse({
+  binary,
+  configPath,
+  baseURL,
+  cdpPort,
+  tmp,
+}) {
+  const server = spawn(binary, ["serve", "--config", configPath], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let browser = null;
+  try {
+    await waitHTTP(`${baseURL}/api/ops`);
+    browser = await launchBrowser(cdpPort);
+    if (!browser) throw new Error("no Chrome/Chromium found for screencast");
+    const page = await browser.newPage();
+    await page.client.send("Page.navigate", { url: `${baseURL}/` });
+    await page.client.send("Page.bringToFront");
+    await page.client.send("Emulation.setDeviceMetricsOverride", {
+      width: 1440,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    return {
+      tmp,
+      baseURL,
+      page,
+      cleanup() {
+        browser?.close();
+        server.kill("SIGKILL");
+      },
+    };
+  } catch (error) {
+    browser?.close();
+    server.kill("SIGKILL");
+    throw error;
+  }
+}

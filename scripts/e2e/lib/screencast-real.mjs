@@ -7,12 +7,12 @@
 // Usage: KBM_DEMO_FIXTURE=real node scripts/e2e/screencast-knowlege.mjs
 //        KBM_REAL_DB=data/example-real-full.db (default)
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
-import { launchBrowser, waitHTTP } from "./browser.mjs";
+import { serveAndBrowse } from "./browser.mjs";
 import { root } from "./screencast-demo.mjs";
 
 const REAL_DB =
@@ -209,35 +209,5 @@ export async function setupRealDemo() {
   // No scan/seed here — the copied db already holds production counts and
   // suggestion state; scanning would only add document_ids to placeholders.
 
-  const server = spawn(binary, ["serve", "--config", configPath], {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let browser = null;
-  try {
-    await waitHTTP(`${baseURL}/api/ops`);
-    browser = await launchBrowser(cdpPort);
-    if (!browser) throw new Error("no Chrome/Chromium found for screencast");
-    const page = await browser.newPage();
-    await page.client.send("Page.navigate", { url: `${baseURL}/` });
-    await page.client.send("Page.bringToFront");
-    await page.client.send("Emulation.setDeviceMetricsOverride", {
-      width: 1440,
-      height: 900,
-      deviceScaleFactor: 1,
-      mobile: false,
-    });
-    return {
-      tmp,
-      baseURL,
-      page,
-      cleanup() {
-        browser?.close();
-        server.kill("SIGKILL");
-      },
-    };
-  } catch (error) {
-    browser?.close();
-    server.kill("SIGKILL");
-    throw error;
-  }
+  return serveAndBrowse({ binary, configPath, baseURL, cdpPort, tmp });
 }
