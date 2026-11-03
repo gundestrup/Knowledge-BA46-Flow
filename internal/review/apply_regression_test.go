@@ -232,3 +232,44 @@ func TestApplyRestampsFrontmatterChange(t *testing.T) {
 		t.Fatalf("fm-only apply must not re-pend the doc, pending=%v", pending)
 	}
 }
+
+// An applied merge records the absorbed path as a rename so inbound links
+// and recorded evidence retarget to the merged note deterministically —
+// no LLM pass should be needed to redraw edges.
+func TestApplyMergeRecordsRename(t *testing.T) {
+	c, db, rows := applyFixture(t, "# Note\n\nMerged away.\n", []database.Suggestion{{
+		Action: "merge", TargetPath: "merged.md", Reason: "r", Confidence: 0.9,
+		ProposedContent: "# Note\n\nMerged away.\n\n# Merged\n\nOriginal.\n",
+	}})
+	if err := os.WriteFile(filepath.Join(c.RepositoryPath, "merged.md"), []byte("# Merged\n\nOriginal.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// The merge target must be a live documents row — RetargetEvidence only
+	// resolves chains ending at an existing document.
+	tgt := database.Document{Path: "merged.md", SHA256: "x", TagsJSON: "[]"}
+	if _, err := db.UpsertScanned(t.Context(), tgt, "scan"); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range rows {
+		if err := db.Decide(t.Context(), s.ID, "accepted", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	results, err := Apply(t.Context(), c, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, res := range results {
+		t.Logf("apply %s %s applied=%v err=%q", res.Action, res.DocumentPath, res.Applied, res.Error)
+	}
+	renames, err := db.Renames(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := renames["note.md"]; got != "merged.md" {
+		t.Fatalf("expected rename note.md→merged.md, got %v", renames)
+	}
+	if target, ok := db.RetargetPath(t.Context(), "note.md"); !ok || target != "merged.md" {
+		t.Fatalf("RetargetPath should resolve note.md→merged.md, got %q ok=%v", target, ok)
+	}
+}

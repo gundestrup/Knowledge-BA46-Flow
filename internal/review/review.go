@@ -122,6 +122,7 @@ func Apply(ctx context.Context, c config.Config, db *database.DB) ([]ApplyResult
 	out := make([]ApplyResult, 0, len(sugs))
 	applied := 0
 	restamp := map[string]bool{}
+	var merges []database.Suggestion
 	batch := rand.Text()
 	for _, s := range sugs {
 		at := time.Now().UTC().Format(time.RFC3339Nano)
@@ -136,14 +137,23 @@ func Apply(ctx context.Context, c config.Config, db *database.DB) ([]ApplyResult
 			applied++
 			// Frontmatter-level writes equal the pipeline's own output —
 			// restamp so they don't re-pend or seed dependents. Body/path
-			// writers leave real new content a full analysis should see.
+			// writers leave real new content a full analysis should see —
+			// except merge, which records a rename so inbound links and
+			// evidence retarget to the merged note deterministically.
 			switch s.Action {
-			case "move", "delete", "expand", "merge":
+			case "merge":
+				merges = append(merges, s)
+			case "move", "delete", "expand":
 			default:
 				restamp[s.DocumentPath] = true
 			}
 		}
 		out = append(out, r)
+	}
+	for _, s := range merges {
+		if err := db.RecordMergeRename(ctx, s.DocumentPath, s.TargetPath, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			out = append(out, ApplyResult{ID: s.ID, Action: s.Action, DocumentPath: s.DocumentPath, Status: "warning", Error: "merge rename record: " + err.Error(), BatchID: batch})
+		}
 	}
 	if len(restamp) > 0 {
 		var paths []string

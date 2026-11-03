@@ -29,8 +29,13 @@ tag is prepared.
   pipeline's own output treated as foreign change. Applied
   frontmatter-level writes now re-fingerprint in place
   (`analyzed = current`, `seen_fm`/`seen_body` = current); body writers
-  (`expand`, `merge`, `move`, `delete`) still leave the doc pending for
+  (`expand`, `move`, `delete`) still leave the doc pending for
   genuine new content.
+- An applied `merge` now records the absorbed path as a rename: inbound
+  links retarget to the merged document deterministically (the recorded-
+  rename link repair), recorded evidence rewrites src→target via
+  `RetargetEvidence`, and the source row tombstones — related notes point
+  at the merged note without an LLM pass to redraw edges.
 
 - Dashboard/report progress bars no longer crash on a zero-total job detail
   (`N/0`): `jobPercent` now guards the denominator the way `jobPhase`

@@ -196,3 +196,31 @@ func (d *DB) RetargetEvidence(ctx context.Context, path string) (string, string,
 	}
 	return "", "", false
 }
+
+// RecordMergeRename records an applied merge as a rename: the absorbed
+// path resolves to the merge target, its inbound references retarget to the
+// merged document, and the row is tombstoned. Consumers' recorded evidence
+// rewrites src→target via RetargetEvidence at the next scan — so links and
+// dependents converge on the merged note deterministically, without an LLM
+// pass just to redraw edges.
+func (d *DB) RecordMergeRename(ctx context.Context, src, dst, movedAt string) error {
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO renames(old_path,new_path,moved_at,document_id) VALUES(?,?,?,'')`,
+		src, dst, movedAt); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE document_references SET target_path=? WHERE target_path=?`, dst, src); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE documents SET status='missing',missing_since=? WHERE path=?`, movedAt, src); err != nil {
+		return err
+	}
+	if err := bumpEvidenceGeneration(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
