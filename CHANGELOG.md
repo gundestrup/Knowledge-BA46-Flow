@@ -27,10 +27,11 @@ tag is prepared.
   never restamped, so every accepted title/tags/link edit re-pended the
   doc as `changedFm` and seeded its mention/link dependents — the
   pipeline's own output treated as foreign change. Applied
-  frontmatter-level writes now re-fingerprint in place
-  (`analyzed = current`, `seen_fm`/`seen_body` = current); body writers
-  (`expand`, `move`, `delete`) still leave the doc pending for
-  genuine new content.
+  frontmatter-level writes now re-fingerprint in place: `seen_fm` always
+  follows the applied write, and `analyzed`/`seen_body` catch up only when
+  the semantic body is unchanged — so an fm-only `expand` restamps while a
+  genuine body edit (`expand`, `merge`, `move`, `delete`) still leaves the
+  doc pending for real new content.
 - An applied `merge` now records the absorbed path as a rename: inbound
   links retarget to the merged document deterministically (the recorded-
   rename link repair), recorded evidence rewrites src→target via
