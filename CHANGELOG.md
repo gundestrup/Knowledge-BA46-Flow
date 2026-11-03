@@ -9,6 +9,8 @@ tag is prepared.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-03
+
 ### Added
 
 - `restamp-evidence`: rebuilds recorded v2 prompt evidence for rows analyzed
