@@ -1045,7 +1045,7 @@ func (d *DB) Suggestion(ctx context.Context, id int64) (Suggestion, error) {
 
 // Documents lists every tracked document, ordered by path — used by the HTTP API.
 func (d *DB) Documents(ctx context.Context) ([]Document, error) {
-	rows, err := d.QueryContext(ctx, `SELECT `+documentColumns+` FROM documents ORDER BY path`)
+	rows, err := d.QueryContext(ctx, `SELECT `+documentColumns+` FROM documents ORDER BY path`) // #nosec G202 NOSONAR -- column list is a compile-time constant, never user input
 	if err != nil {
 		return nil, err
 	}
