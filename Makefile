@@ -111,7 +111,8 @@ sonar:
 # mod-tidy fails when go.mod/go.sum drift from go mod tidy — keeps the
 # module files honest without making deps-check informational output a gate.
 mod-tidy:
-	@go mod tidy && git diff --quiet -- go.mod go.sum || 		{ echo "go.mod/go.sum out of sync — run go mod tidy"; exit 1; }
+	@go mod tidy && git diff --quiet -- go.mod go.sum || \
+		{ echo "go.mod/go.sum out of sync — diff:"; git diff -- go.mod go.sum | head -60; exit 1; }
 
 check: version-check mod-tidy fmt-check vet lint test-race build
 
