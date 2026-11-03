@@ -23,6 +23,9 @@ dashboard.suggestions = [
   },
 ];
 assert.deepEqual(
+  // The vm-realm array from the eval'd component is not reference-equal to a
+  // host-realm literal — spread materializes it in this realm for
+  // deepStrictEqual (CodeFactor flags this as unnecessary; it is not).
   [...dashboard.noteGroups().map((note) => note.path)],
   ["a.md", "b.md"],
 );

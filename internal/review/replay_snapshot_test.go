@@ -182,13 +182,13 @@ CREATE TABLE replay(value TEXT); INSERT INTO replay VALUES('committed in WAL'); 
 	if err := snapshotReplayDB(t.Context(), source, destination); err != nil {
 		t.Fatal(err)
 	}
-	copy, err := sql.Open("sqlite", destination)
+	dst, err := sql.Open("sqlite", destination)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer copy.Close()
+	defer dst.Close()
 	var got string
-	if err := copy.QueryRow(`SELECT value FROM replay`).Scan(&got); err != nil || got != "committed in WAL" {
+	if err := dst.QueryRow(`SELECT value FROM replay`).Scan(&got); err != nil || got != "committed in WAL" {
 		t.Fatalf("backup missed WAL data: value=%q err=%v", got, err)
 	}
 	after, err := os.ReadFile(source)

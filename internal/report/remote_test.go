@@ -374,14 +374,14 @@ func TestSemgrepTokenPrefersEnv(t *testing.T) {
 func TestMinCoveragePolicyFlagsLowCodecov(t *testing.T) {
 	coverage := 62.4
 	repo := Repository{Name: "app", Codecov: &coverage}
-	min := 80.0
-	got := deriveProblems(repo, "", TagReleaseException{}, &min)
+	limit := 80.0
+	got := deriveProblems(repo, "", TagReleaseException{}, &limit)
 	if len(got) != 1 || !strings.Contains(got[0], "codecov coverage") {
 		t.Fatalf("expected a coverage problem: %v", got)
 	}
 	// Above the floor or without a configured floor there is no finding.
 	coverage = 92.0
-	if got := deriveProblems(repo, "", TagReleaseException{}, &min); len(got) != 0 {
+	if got := deriveProblems(repo, "", TagReleaseException{}, &limit); len(got) != 0 {
 		t.Fatalf("coverage above floor flagged: %v", got)
 	}
 	coverage = 10.0
@@ -390,7 +390,7 @@ func TestMinCoveragePolicyFlagsLowCodecov(t *testing.T) {
 	}
 	// Missing data is "not reported", never a false finding.
 	repo.Codecov = nil
-	if got := deriveProblems(repo, "", TagReleaseException{}, &min); len(got) != 0 {
+	if got := deriveProblems(repo, "", TagReleaseException{}, &limit); len(got) != 0 {
 		t.Fatalf("absent coverage flagged as low: %v", got)
 	}
 }

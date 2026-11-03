@@ -121,12 +121,12 @@ func NormalizeOrder(content string) (string, error) {
 		limit = maxBytes
 	}
 	window := trimmed[open[1]:limit]
-	close := closeFence.FindStringIndex(window)
-	if close == nil {
+	end := closeFence.FindStringIndex(window)
+	if end == nil {
 		return "", fmt.Errorf("unclosed frontmatter")
 	}
 	var document yaml.Node
-	if err := yaml.Unmarshal([]byte(window[:close[0]]), &document); err != nil {
+	if err := yaml.Unmarshal([]byte(window[:end[0]]), &document); err != nil {
 		return "", fmt.Errorf("parse frontmatter for ordering: %w", err)
 	}
 	if len(document.Content) == 0 || document.Content[0].Kind != yaml.MappingNode {

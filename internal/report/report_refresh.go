@@ -104,9 +104,8 @@ func refreshSemgrepData(ctx context.Context, client *remoteHTTP, snapshot *Snaps
 		if err == nil {
 			refreshSemgrepFindings(data, snapshot.Repos, registry)
 			return
-		} else {
-			reason = err.Error()
 		}
+		reason = err.Error()
 	}
 	markSemgrepStale(snapshot.Repos, reason)
 }

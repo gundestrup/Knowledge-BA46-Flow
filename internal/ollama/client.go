@@ -332,8 +332,8 @@ func (c *Client) autoNumCtx(ctx context.Context, prompt string, numPredict int) 
 	if want < minAutoNumCtx {
 		want = minAutoNumCtx
 	}
-	if max := c.modelContextLength(ctx); want > max {
-		want = max
+	if limit := c.modelContextLength(ctx); want > limit {
+		want = limit
 	}
 	return want
 }
@@ -350,16 +350,16 @@ func (c *Client) modelContextLength(ctx context.Context) int {
 		if err := c.post(ctx, "/api/show", map[string]string{"model": c.model}, &resp); err != nil {
 			return
 		}
-		max := 0
+		peak := 0
 		for k, v := range resp.ModelInfo {
 			if strings.HasSuffix(k, ".context_length") {
-				if n, ok := v.(float64); ok && int(n) > max {
-					max = int(n)
+				if n, ok := v.(float64); ok && int(n) > peak {
+					peak = int(n)
 				}
 			}
 		}
-		if max > 0 {
-			c.ctxLen = max
+		if peak > 0 {
+			c.ctxLen = peak
 		}
 	})
 	return c.ctxLen
