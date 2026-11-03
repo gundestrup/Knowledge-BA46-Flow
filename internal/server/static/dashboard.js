@@ -131,7 +131,9 @@ window.knowledgeDashboard = () => ({
       this.error = this.t(
         "ui.kb.models_query_failed",
         "Could not query models: {{.Error}}",
-        { Error: error.message },
+        {
+          Error: error.message,
+        },
       );
     } finally {
       this.discovering = false;
@@ -236,7 +238,10 @@ window.knowledgeDashboard = () => ({
       ? this.t(
           "ui.kb.last_run_task",
           "Last run for this task: {{.Model}} ({{.Docs}} docs)",
-          { Model: stamp.model, Docs: stamp.docs },
+          {
+            Model: stamp.model,
+            Docs: stamp.docs,
+          },
         )
       : "";
   },
@@ -278,7 +283,10 @@ window.knowledgeDashboard = () => ({
       ? this.t(
           "ui.kb.last_embedding_run",
           "Last embedding run: {{.Model}} ({{.Docs}} docs)",
-          { Model: stamp.model, Docs: stamp.docs },
+          {
+            Model: stamp.model,
+            Docs: stamp.docs,
+          },
         )
       : "";
   },
@@ -330,7 +338,10 @@ window.knowledgeDashboard = () => ({
       let line = this.t(
         "ui.kb.estimate_docs_queued",
         "{{.Stage}}: {{.Count}} document(s) queued",
-        { Stage: stage, Count: e.pending[stage] },
+        {
+          Stage: stage,
+          Count: e.pending[stage],
+        },
       );
       if (stage === "analyze" && e.dependents > 0) {
         line += this.t(

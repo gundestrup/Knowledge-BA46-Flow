@@ -181,6 +181,7 @@ console.log(
 // In-context help: usage.md splits into "### slug" fragments rendered as
 // blocks; the help toggle keeps a single fragment open at a time.
 import { readFileSync } from "node:fs";
+
 const usageMd = readFileSync(
   new URL("../internal/server/static/usage.md", import.meta.url),
   "utf8",

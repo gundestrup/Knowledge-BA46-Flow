@@ -9,8 +9,8 @@
 
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { serveAndBrowse } from "./browser.mjs";
 import { root } from "./screencast-demo.mjs";

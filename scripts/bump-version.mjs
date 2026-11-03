@@ -1,5 +1,5 @@
-import { readFile, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -43,7 +43,10 @@ await writeFile(path.join(root, "VERSION"), `${next}\n`);
 const sync = spawnSync(
   process.execPath,
   [path.join(root, "scripts/sync-version-metadata.mjs")],
-  { cwd: root, stdio: "inherit" },
+  {
+    cwd: root,
+    stdio: "inherit",
+  },
 );
 if (sync.status !== 0) {
   throw new Error(`Could not synchronize release metadata to ${next}`);
