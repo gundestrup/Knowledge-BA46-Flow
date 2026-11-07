@@ -6,7 +6,6 @@
     <meta name="color-scheme" content="light dark" />
     <title>KBM-flow — knowledge review</title>
     <link rel="icon" href="/static/favicon.ico" sizes="any" />
-    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <link
       rel="icon"
       href="/static/favicon-96x96.png"
@@ -25,17 +24,25 @@
     <script defer src="/static/dashboard.js"></script>
     <script defer src="/static/vendor/alpine.min.js"></script>
   </head>
-  <body x-data="knowledgeDashboard" x-init="init()">
+  <body x-data="knowledgeDashboard">
     <aside class="kbm-aside" :class="{ 'is-open': navOpen }">
       <div class="kbm-aside-brand">
-        <img class="kbm-aside-logo" src="/static/logo.png" alt="" />
+        <picture class="kbm-aside-logo-picture">
+          <source srcset="/static/logo.avif" type="image/avif" />
+          <img
+            class="kbm-aside-logo"
+            src="/static/logo.png"
+            width="128"
+            height="128"
+            alt=""
+          />
+        </picture>
         <span>KBM-flow</span>
       </div>
       <nav class="kbm-aside-menu" aria-label="Primary">
-        <p
-          class="menu-label"
-          x-text="t('ui.common.workspaces', 'Workspaces')"
-        ></p>
+        <p class="menu-label" x-text="t('ui.common.workspaces', 'Workspaces')">
+          Workspaces
+        </p>
         <ul class="menu-list">
           <li>
             <a href="/">
@@ -55,20 +62,28 @@
                 <a
                   href="#operations"
                   x-text="t('ui.kb.nav_operations', 'Operations')"
-                ></a>
+                  >Operations</a
+                >
               </li>
               <li>
-                <a href="#graph" x-text="t('ui.kb.nav_graph', 'Graph')"></a>
+                <a href="#graph" x-text="t('ui.kb.nav_graph', 'Graph')"
+                  >Graph</a
+                >
               </li>
               <li>
                 <a
                   href="#suggestions"
                   x-text="t('ui.kb.nav_suggestions', 'Suggestions')"
-                ></a>
+                  >Suggestions</a
+                >
               </li>
-              <li><a href="#jobs" x-text="t('ui.kb.nav_jobs', 'Jobs')"></a></li>
               <li>
-                <a href="#index" x-text="t('ui.kb.nav_index', 'Index')"></a>
+                <a href="#jobs" x-text="t('ui.kb.nav_jobs', 'Jobs')">Jobs</a>
+              </li>
+              <li>
+                <a href="#index" x-text="t('ui.kb.nav_index', 'Index')"
+                  >Index</a
+                >
               </li>
             </ul>
           </li>
@@ -145,6 +160,8 @@
               >
                 <img
                   class="kbm-flag"
+                  width="4"
+                  height="3"
                   :src="localeFlag(displayLocale())"
                   alt=""
                 />
@@ -166,6 +183,8 @@
                 >
                   <img
                     class="kbm-flag"
+                    width="4"
+                    height="3"
                     :src="localeFlag(resolvedLocale)"
                     alt=""
                   />
@@ -182,7 +201,13 @@
                     :class="{ 'is-active': locale === l }"
                     @click="setLocale(l)"
                   >
-                    <img class="kbm-flag" :src="localeFlag(l)" alt="" />
+                    <img
+                      class="kbm-flag"
+                      width="4"
+                      height="3"
+                      :src="localeFlag(l)"
+                      alt=""
+                    />
                     <span x-text="localeLabel(l)"></span>
                   </button>
                 </template>
@@ -194,7 +219,7 @@
       <section class="kbm-title-bar">
         <ul>
           <li>KBM-flow</li>
-          <li x-text="t('ui.common.knowledge', 'Knowledge')"></li>
+          <li x-text="t('ui.common.knowledge', 'Knowledge')">Knowledge</li>
         </ul>
       </section>
       <section class="kbm-hero-bar">
@@ -204,7 +229,9 @@
               <p
                 class="eyebrow mb-1"
                 x-text="t('ui.kb.eyebrow', 'Local knowledge operations')"
-              ></p>
+              >
+                Local knowledge operations
+              </p>
               <h1
                 class="title is-3"
                 x-text="t('ui.kb.hero_title', 'Knowledge, kept useful.')"
@@ -214,7 +241,9 @@
               <p
                 class="subtitle is-6 mb-0"
                 x-text="t('ui.kb.hero_subtitle', 'Review LLM suggestions before they touch your repository.')"
-              ></p>
+              >
+                Review LLM suggestions before they touch your repository.
+              </p>
             </div>
           </div>
         </div>
@@ -484,7 +513,11 @@
                   ></span>
                 </button>
               </div>
-              <div class="is-size-7 has-text-grey mb-2" x-show="estimate">
+              <div
+                class="is-size-7 has-text-grey mb-2"
+                x-show="estimate"
+                x-cloak
+              >
                 <template x-for="line in estimateLines()" :key="line">
                   <p x-text="line"></p>
                 </template>
@@ -518,7 +551,11 @@
                     ?
                   </button>
                 </label>
-                <div class="kbm-help-card" x-show="helpOpen==='reanalyze'">
+                <div
+                  class="kbm-help-card"
+                  x-show="helpOpen==='reanalyze'"
+                  x-cloak
+                >
                   <template x-for="b in helpBlocks('reanalyze')" :key="b.s">
                     <p x-show="b.t==='p'" class="mb-1" x-text="b.s"></p>
                     <li x-show="b.t==='li'" x-text="b.s"></li>
@@ -551,7 +588,11 @@
                     ?
                   </button>
                 </label>
-                <div class="kbm-help-card" x-show="helpOpen==='external'">
+                <div
+                  class="kbm-help-card"
+                  x-show="helpOpen==='external'"
+                  x-cloak
+                >
                   <template x-for="b in helpBlocks('external')" :key="b.s">
                     <p x-show="b.t==='p'" class="mb-1" x-text="b.s"></p>
                     <li x-show="b.t==='li'" x-text="b.s"></li>
@@ -584,7 +625,11 @@
                     ?
                   </button>
                 </label>
-                <div class="kbm-help-card" x-show="helpOpen==='allow-cloud'">
+                <div
+                  class="kbm-help-card"
+                  x-show="helpOpen==='allow-cloud'"
+                  x-cloak
+                >
                   <template x-for="b in helpBlocks('allow-cloud')" :key="b.s">
                     <p x-show="b.t==='p'" class="mb-1" x-text="b.s"></p>
                     <li x-show="b.t==='li'" x-text="b.s"></li>
@@ -617,7 +662,11 @@
                     ?
                   </button>
                 </label>
-                <div class="kbm-help-card" x-show="helpOpen==='web-verify'">
+                <div
+                  class="kbm-help-card"
+                  x-show="helpOpen==='web-verify'"
+                  x-cloak
+                >
                   <template x-for="b in helpBlocks('web-verify')" :key="b.s">
                     <p x-show="b.t==='p'" class="mb-1" x-text="b.s"></p>
                     <li x-show="b.t==='li'" x-text="b.s"></li>
@@ -708,7 +757,7 @@
                         class="stat-label"
                         x-text="t('ui.kb.stat_documents', 'Tracked documents')"
                       ></p>
-                      <p class="stat-number" x-text="documents.length"></p>
+                      <p class="stat-number" x-text="documentTotal"></p>
                     </div>
                   </div>
                 </div>
@@ -908,7 +957,11 @@
                 >
                   ?
                 </button>
-                <div class="kbm-help-card" x-show="helpOpen==='revalidate'">
+                <div
+                  class="kbm-help-card"
+                  x-show="helpOpen==='revalidate'"
+                  x-cloak
+                >
                   <template x-for="b in helpBlocks('revalidate')" :key="b.s">
                     <p x-show="b.t==='p'" class="mb-1" x-text="b.s"></p>
                     <li x-show="b.t==='li'" x-text="b.s"></li>
@@ -1072,7 +1125,7 @@
                         class="title is-6 mb-2"
                         x-show="suggestion.first_in_note"
                       >
-                        <code x-text="note.path"></code>
+                        <code x-text="note.path">Note</code>
                       </h3>
                       <p
                         class="help mb-2"
@@ -1385,6 +1438,32 @@
               </div>
             </header>
             <div class="card-content">
+              <div
+                class="level is-mobile mb-3"
+                x-show="documentTotal > documentPageSize"
+                x-cloak
+              >
+                <p class="is-size-7" x-text="documentPageLabel()"></p>
+                <nav
+                  class="buttons are-small"
+                  :aria-label="t('ui.kb.pages_aria', 'Document pages')"
+                >
+                  <button
+                    type="button"
+                    class="button"
+                    :disabled="documentPage === 0 || documentsLoading"
+                    @click="changeDocumentPage(-1)"
+                    x-text="t('ui.common.previous', 'Previous')"
+                  ></button>
+                  <button
+                    type="button"
+                    class="button"
+                    :disabled="!canNextDocumentPage()"
+                    @click="changeDocumentPage(1)"
+                    x-text="t('ui.common.next', 'Next')"
+                  ></button>
+                </nav>
+              </div>
               <div class="table-container">
                 <table class="table is-fullwidth is-hoverable">
                   <thead>
@@ -1467,7 +1546,7 @@
               </div>
               <p
                 class="has-text-grey is-size-7 mt-3"
-                x-show="documents.length === 0"
+                x-show="documentsLoaded && documentTotal === 0"
                 x-text="t('ui.kb.no_documents', 'No documents indexed. Start with Scan or Scan + analyse.')"
               ></p>
             </div>

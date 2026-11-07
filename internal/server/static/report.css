@@ -18,6 +18,25 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 0.65rem;
+  min-width: 0;
+}
+
+.report-hero .level {
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.report-hero .level-left {
+  flex: 1 1 35rem;
+  min-width: 0;
+}
+
+.report-hero .level-right {
+  max-width: 100%;
+}
+
+.report-hero .buttons {
+  flex-wrap: wrap;
 }
 
 .report-filter {
@@ -100,6 +119,10 @@
 .report-table-container {
   max-height: 72vh;
   overflow: auto;
+}
+
+.report-table-card {
+  overflow: hidden;
 }
 
 .report-table thead {

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -132,6 +134,254 @@ func TestSecurityHeaders(t *testing.T) {
 		!strings.Contains(csp, "script-src 'self'") ||
 		strings.Contains(csp, "unsafe-") {
 		t.Errorf("CSP should forbid remote, inline and eval'd scripts: %q", csp)
+	}
+}
+
+func TestMutatingRoutesRejectCrossOrigin(t *testing.T) {
+	c, db, srv := setup(t)
+	defer srv.Close()
+	c.HTTPAddr = "127.0.0.1:8081"
+	handler := NewMux(c, db, nil)
+	for _, path := range []string{
+		"/api/apply", "/api/suggestions/1/decide", "/api/reconcile",
+		"/api/ops", "/api/report/run", "/api/shutdown", "/api/client-log",
+	} {
+		for _, fetchSite := range []string{"", "cross-site", "same-site"} {
+			t.Run(path+"/"+fetchSite, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8081"+path, nil)
+				req.Header.Set("Origin", "https://other.example")
+				if fetchSite != "" {
+					req.Header.Set("Sec-Fetch-Site", fetchSite)
+				}
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
+				if rec.Code != http.StatusForbidden {
+					t.Fatalf("cross-origin POST %s: status=%d, want 403", path, rec.Code)
+				}
+			})
+		}
+	}
+	if _, err := os.Stat(filepath.Join(c.RepositoryPath, "b.md")); !os.IsNotExist(err) {
+		t.Fatalf("cross-origin requests changed the repository: %v", err)
+	}
+
+	for _, origin := range []string{"", "http://127.0.0.1:8081"} {
+		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8081/api/apply", nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("same-origin/CLI POST origin=%q: status=%d, want 200", origin, rec.Code)
+		}
+	}
+}
+
+func TestLoopbackHostRejectsDNSRebinding(t *testing.T) {
+	c, db, srv := setup(t)
+	defer srv.Close()
+	c.HTTPAddr = "127.0.0.1:8081"
+	handler := NewMux(c, db, nil)
+	for _, tc := range []struct {
+		host string
+		want int
+	}{
+		{"127.0.0.1:8081", http.StatusOK},
+		{"localhost:8081", http.StatusOK},
+		{"[::1]:8081", http.StatusOK},
+		{"evil.example:8081", http.StatusForbidden},
+		{"127.0.0.1.evil.example:8081", http.StatusForbidden},
+	} {
+		t.Run(tc.host, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://"+tc.host+"/api/documents", nil)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("GET host=%q: status=%d, want %d", tc.host, rec.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestDocumentIndexPage(t *testing.T) {
+	_, db, srv := setup(t)
+	defer srv.Close()
+	for _, path := range []string{"b.md", "c.md", "d.md"} {
+		if _, err := db.UpsertScanned(t.Context(), database.Document{
+			Path: path, SHA256: strings.Repeat("a", 64), TagsJSON: "[]",
+		}, "s1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var page struct {
+		Documents []database.DocumentIndexItem `json:"documents"`
+		Total     int                          `json:"total"`
+	}
+	getJSON(t, srv.URL+"/api/documents/page?limit=2&offset=1", &page)
+	if page.Total != 4 || len(page.Documents) != 2 ||
+		page.Documents[0].Path != "b.md" || page.Documents[1].Path != "c.md" {
+		t.Fatalf("page=%+v", page)
+	}
+	getJSON(t, srv.URL+"/api/documents/page?limit=2&offset=4", &page)
+	if page.Total != 4 || page.Documents == nil || len(page.Documents) != 0 {
+		t.Fatalf("empty page=%+v", page)
+	}
+	var full []database.Document
+	getJSON(t, srv.URL+"/api/documents", &full)
+	if len(full) != 4 {
+		t.Fatalf("legacy full list has %d documents, want 4", len(full))
+	}
+	for _, query := range []string{"limit=0", "limit=101", "limit=no", "offset=-1", "offset=bad"} {
+		res, err := http.Get(srv.URL + "/api/documents/page?" + query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusBadRequest {
+			t.Errorf("query %q status=%d, want 400", query, res.StatusCode)
+		}
+	}
+}
+
+func TestTextCompressionAndCachePolicy(t *testing.T) {
+	_, _, srv := setup(t)
+	defer srv.Close()
+	for _, tc := range []struct {
+		path     string
+		cache    string
+		compress bool
+	}{
+		{"/", "no-store", true},
+		{"/api/documents/page?limit=2", "no-store", true},
+		{"/robots.txt", "public, max-age=3600", true},
+		{"/sitemap.xml", "no-store", true},
+		{"/static/vendor/bulma.min.css", "public, max-age=3600", true},
+		{"/static/favicon.ico", "public, max-age=3600", false},
+		{"/static/logo.avif", "public, max-age=3600", false},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, srv.URL+tc.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Accept-Encoding", "gzip")
+			res, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer res.Body.Close()
+			if res.StatusCode != http.StatusOK || res.Header.Get("Cache-Control") != tc.cache {
+				t.Fatalf("status=%d, cache=%q", res.StatusCode, res.Header.Get("Cache-Control"))
+			}
+			if got := res.Header.Get("Content-Encoding"); (got == "gzip") != tc.compress {
+				t.Fatalf("Content-Encoding=%q, compress=%t", got, tc.compress)
+			}
+			if tc.path == "/static/logo.avif" && res.Header.Get("Content-Type") != "image/avif" {
+				t.Fatalf("AVIF Content-Type=%q", res.Header.Get("Content-Type"))
+			}
+			var body io.Reader = res.Body
+			if tc.compress {
+				if !strings.Contains(res.Header.Get("Vary"), "Accept-Encoding") {
+					t.Fatalf("gzip headers: %v", res.Header)
+				}
+				gz, err := gzip.NewReader(res.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer gz.Close()
+				body = gz
+			}
+			compressed, err := io.ReadAll(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity, err := http.NewRequest(http.MethodGet, srv.URL+tc.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity.Header.Set("Accept-Encoding", "gzip;q=0, identity")
+			plain, err := http.DefaultClient.Do(identity)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer plain.Body.Close()
+			raw, err := io.ReadAll(plain.Body)
+			if err != nil || !bytes.Equal(compressed, raw) || plain.Header.Get("Content-Encoding") != "" {
+				t.Fatalf("gzip/identity mismatch: %v, Content-Encoding=%q", err, plain.Header.Get("Content-Encoding"))
+			}
+		})
+	}
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/static/vendor/bulma.min.css", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("Range", "bytes=0-9")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusPartialContent || res.Header.Get("Content-Encoding") != "" {
+		t.Fatalf("range request: status=%d encoding=%q", res.StatusCode, res.Header.Get("Content-Encoding"))
+	}
+	for _, tc := range []struct {
+		method string
+		path   string
+		accept string
+	}{
+		{http.MethodHead, "/static/vendor/bulma.min.css", ""},
+		{http.MethodGet, "/api/documents", "text/event-stream"},
+	} {
+		req, err := http.NewRequest(tc.method, srv.URL+tc.path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Accept-Encoding", "gzip")
+		if tc.accept != "" {
+			req.Header.Set("Accept", tc.accept)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusOK || res.Header.Get("Content-Encoding") != "" ||
+			!strings.Contains(res.Header.Get("Vary"), "Accept-Encoding") {
+			t.Fatalf("%s %s: status=%d encoding=%q vary=%q",
+				tc.method, tc.path, res.StatusCode, res.Header.Get("Content-Encoding"), res.Header.Get("Vary"))
+		}
+	}
+}
+
+func TestWellKnownFiles(t *testing.T) {
+	_, _, srv := setup(t)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/robots.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(res.Body)
+	res.Body.Close()
+	if err != nil || !strings.Contains(res.Header.Get("Content-Type"), "text/plain") ||
+		!strings.Contains(string(body), "Disallow: /api/") {
+		t.Fatalf("robots.txt status=%d content-type=%q body=%q",
+			res.StatusCode, res.Header.Get("Content-Type"), body)
+	}
+
+	res, err = http.Get(srv.URL + "/sitemap.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err = io.ReadAll(res.Body)
+	res.Body.Close()
+	if err != nil || !strings.Contains(res.Header.Get("Content-Type"), "application/xml") ||
+		!strings.Contains(string(body), srv.URL+"/knowledge") ||
+		!strings.Contains(string(body), srv.URL+"/report") {
+		t.Fatalf("sitemap.xml status=%d content-type=%q body=%q",
+			res.StatusCode, res.Header.Get("Content-Type"), body)
 	}
 }
 
@@ -630,6 +880,9 @@ func TestDevStaticDirServesPagesAndAssets(t *testing.T) {
 	}
 	if res.StatusCode != http.StatusOK || string(body) != "/* dev-asset */" {
 		t.Fatalf("dev static asset status=%d body=%q", res.StatusCode, body)
+	}
+	if got := res.Header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("dev static cache=%q, want no-store", got)
 	}
 }
 

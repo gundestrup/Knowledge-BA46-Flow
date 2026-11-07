@@ -2,6 +2,8 @@
 # Tilføj en locale ved at kopiere denne fil til active.<tag>.yaml og oversætte værdierne.
 
 ui.common.home: "Hjem"
+ui.common.next: "Næste"
+ui.common.previous: "Forrige"
 ui.common.refresh: "Opdater"
 ui.common.request_failed: "Anmodningen mislykkedes (HTTP {{.Status}})"
 ui.common.language: "Sprog"
@@ -46,6 +48,7 @@ ui.kb.dead_links:
   one: "{{.Count}} dødt link"
   other: "{{.Count}} døde links"
 ui.kb.documents_heading: "Dokumenter"
+ui.kb.documents_page: "Viser {{.First}}–{{.Last}} af {{.Total}}"
 ui.kb.embed_mismatch: "En anden embedding model re-vectorizes alle dokumenter og kan udvide dependent analysis."
 ui.kb.embedding_model: "Embedding model"
 ui.kb.embedding_model_title: "Uafhængig per-run embedding override; ændring af models opdaterer incompatible vectors"
@@ -126,6 +129,7 @@ ui.kb.origin_enrich: "Enrichment"
 ui.kb.origin_expand: "Expand"
 ui.kb.origin_filter_aria: "Filtrér efter origin"
 ui.kb.origin_freshness: "Freshness"
+ui.kb.pages_aria: "Dokumentsider"
 ui.kb.progress_empty: "Der er endnu ikke registreret nogen aktivitet — kør en scan for at starte trend."
 ui.kb.progress_eyebrow: "Pipeline progress"
 ui.kb.progress_heading: "Noter og forslag over tid"
@@ -276,6 +280,8 @@ ui.report.open_findings:
   other: "{{.Count}} open findings"
 ui.report.open_repo: "Åbn repository"
 ui.report.open_repo_aria: "Åbn {{.Name}} repository i en ny tab"
+ui.report.page: "Viser {{.First}}–{{.Last}} af {{.Total}}"
+ui.report.pages_aria: "Repositoriesider"
 ui.report.present: "present"
 ui.report.projects_reported:
   one: "{{.Count}} project reported"

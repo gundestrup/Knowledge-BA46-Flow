@@ -6,7 +6,6 @@
     <meta name="color-scheme" content="light dark" />
     <title>KBM-flow — home</title>
     <link rel="icon" href="/static/favicon.ico" sizes="any" />
-    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <link
       rel="icon"
       href="/static/favicon-96x96.png"
@@ -24,17 +23,25 @@
     <script defer src="/static/clientlog.js"></script>
     <script defer src="/static/vendor/alpine.min.js"></script>
   </head>
-  <body x-data="landingDashboard" x-init="init()">
+  <body x-data="landingDashboard">
     <aside class="kbm-aside" :class="{ 'is-open': navOpen }">
       <div class="kbm-aside-brand">
-        <img class="kbm-aside-logo" src="/static/logo.png" alt="" />
+        <picture class="kbm-aside-logo-picture">
+          <source srcset="/static/logo.avif" type="image/avif" />
+          <img
+            class="kbm-aside-logo"
+            src="/static/logo.png"
+            width="128"
+            height="128"
+            alt=""
+          />
+        </picture>
         <span>KBM-flow</span>
       </div>
       <nav class="kbm-aside-menu" aria-label="Primary">
-        <p
-          class="menu-label"
-          x-text="t('ui.common.workspaces', 'Workspaces')"
-        ></p>
+        <p class="menu-label" x-text="t('ui.common.workspaces', 'Workspaces')">
+          Workspaces
+        </p>
         <ul class="menu-list">
           <li>
             <a href="/" class="is-active">
@@ -111,6 +118,8 @@
               >
                 <img
                   class="kbm-flag"
+                  width="4"
+                  height="3"
                   :src="localeFlag(displayLocale())"
                   alt=""
                 />
@@ -132,6 +141,8 @@
                 >
                   <img
                     class="kbm-flag"
+                    width="4"
+                    height="3"
                     :src="localeFlag(resolvedLocale)"
                     alt=""
                   />
@@ -148,7 +159,13 @@
                     :class="{ 'is-active': locale === l }"
                     @click="setLocale(l)"
                   >
-                    <img class="kbm-flag" :src="localeFlag(l)" alt="" />
+                    <img
+                      class="kbm-flag"
+                      width="4"
+                      height="3"
+                      :src="localeFlag(l)"
+                      alt=""
+                    />
                     <span x-text="localeLabel(l)"></span>
                   </button>
                 </template>

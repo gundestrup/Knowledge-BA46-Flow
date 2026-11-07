@@ -218,6 +218,12 @@ the configured remote preference; **Local checks only** avoids outbound API
 calls; **Force full refresh** bypasses cache shortcuts. Each repository row
 also has a refresh action for that registry entry. The repository table sorts
 by repository, working-tree state, sync drift, check count, and finding count.
+The browser mounts at most eight summary rows per page. Filtering and sorting
+still operate over the full snapshot and reset to the first page; detail markup
+is created only for the expanded repository.
+While a run is active, the browser polls job status rather than reloading the
+full snapshot on every tick. It fetches the new report and trend history once
+the job finishes.
 Three independent filters combine: **working tree** (all/dirty/clean),
 **checks** (all/has/none — the same count the Checks column shows), and
 **signals** — open PRs, Dependabot alerts, GitHub code-scanning alerts,

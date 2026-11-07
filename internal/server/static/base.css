@@ -418,6 +418,11 @@ body {
   transition: transform 0.2s ease;
 }
 
+.kbm-aside-logo-picture {
+  display: flex;
+  flex: none;
+}
+
 .kbm-aside-logo {
   width: 1.6rem;
   height: 1.6rem;
@@ -571,6 +576,7 @@ body {
 
 .card .card-header {
   border-bottom: 1px solid var(--kbm-line);
+  flex-wrap: wrap;
 }
 
 .card .card-header .card-header-title {
@@ -584,8 +590,21 @@ body {
 .kbm-card-header-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
+  min-width: 0;
   padding-right: 1rem;
+}
+
+@media (max-width: 1023px) {
+  .card .card-header .card-header-title,
+  .kbm-card-header-actions {
+    flex: 1 1 100%;
+  }
+
+  .kbm-card-header-actions {
+    padding: 0 1rem 1rem;
+  }
 }
 
 /* Stat tiles — icon badge left, label + big number stacked right. The badge

@@ -47,6 +47,26 @@
   border-left-color: #c65d4b;
 }
 
+@media (max-width: 768px) {
+  .suggestion-card .level.is-mobile,
+  .suggestion-card .level-left {
+    flex-wrap: wrap;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .suggestion-card .tags,
+  .suggestion-card .tag {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .suggestion-card .tag {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+
 .suggestion-path {
   overflow-wrap: anywhere;
 }

@@ -222,6 +222,60 @@ async function main() {
 
     browser = await launchBrowser(cdpPort);
     const page = await browser.newPage();
+    // Observer-only metrics must be installed before navigation to catch CLS.
+    await page.client.send("Page.addScriptToEvaluateOnNewDocument", {
+      source: `window.__kbmVitals = { cls: 0, lcpMs: null };
+        if (PerformanceObserver.supportedEntryTypes.includes("layout-shift")) {
+          new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+              if (!entry.hadRecentInput) window.__kbmVitals.cls += entry.value;
+            }
+          }).observe({ type: "layout-shift", buffered: true });
+        }
+        if (PerformanceObserver.supportedEntryTypes.includes("largest-contentful-paint")) {
+          new PerformanceObserver((list) => {
+            const entries = list.getEntries();
+            if (entries.length) window.__kbmVitals.lcpMs = entries.at(-1).startTime;
+          }).observe({ type: "largest-contentful-paint", buffered: true });
+        }`,
+    });
+    const initialVitals = async (label) => {
+      const metrics = await page.eval(`({
+        cls: Number((window.__kbmVitals?.cls || 0).toFixed(3)),
+        lcpMs: window.__kbmVitals?.lcpMs == null
+          ? null : Math.round(window.__kbmVitals.lcpMs),
+        domNodes: document.querySelectorAll("*").length
+      })`);
+      console.log(`  lab  ${label}: ${JSON.stringify(metrics)}`);
+      check(`${label} initial CLS is not poor`, metrics.cls < 0.25);
+    };
+    const checkLogo = async (label) => {
+      await page.waitFor(
+        `document.querySelector(".kbm-aside-logo")?.complete &&
+          document.querySelector(".kbm-aside-logo").naturalWidth > 0`,
+        5000,
+        "sidebar logo decoded",
+      );
+      const logo = await page.eval(`(() => {
+        const image = document.querySelector(".kbm-aside-logo");
+        return {
+          selected: new URL(image.currentSrc).pathname,
+          source: image.parentElement.querySelector('source[type="image/avif"]')?.getAttribute("srcset"),
+          fallback: image.getAttribute("src"),
+          width: image.naturalWidth,
+          alt: image.alt
+        };
+      })()`);
+      check(
+        `${label} loads AVIF with PNG fallback`,
+        logo.selected === "/static/logo.avif" &&
+          logo.source === "/static/logo.avif" &&
+          logo.fallback === "/static/logo.png" &&
+          logo.width === 128 &&
+          logo.alt === "",
+        JSON.stringify(logo),
+      );
+    };
     await page.client.send("Page.navigate", { url: `${baseURL}/` });
 
     // ---------------------------------------------------------------
@@ -240,9 +294,12 @@ async function main() {
       landingText,
     );
     check(
-      "landing loaded /api/dashboard",
-      page.requestsMatching("/api/dashboard").length > 0,
+      "landing loads /api/dashboard exactly once",
+      page.requestsMatching("/api/dashboard").length === 1,
+      page.requestSummary(),
     );
+    await initialVitals("landing");
+    await checkLogo("landing");
     page.requests = [];
     await page.eval(
       `[...document.querySelectorAll("button")].find(
@@ -278,8 +335,9 @@ async function main() {
       page.requestsMatching("/api/suggestions?status=pending").length > 0,
     );
     check(
-      "documents API called",
-      page.requestsMatching("/api/documents").length > 0,
+      "document page API called exactly once",
+      page.requestsMatching("/api/documents/page?").length === 1,
+      page.requestSummary(),
     );
     check(
       "documents stat shows 4",
@@ -304,6 +362,8 @@ async function main() {
       10000,
       "knowledge progress chart rendered",
     );
+    await initialVitals("knowledge");
+    await checkLogo("knowledge");
     check(
       "knowledge button icons load from /static/icons",
       await page.eval(
@@ -839,14 +899,30 @@ async function main() {
       })()`,
     );
     check("report status text rendered", statusText === true);
+    check(
+      "report snapshot API called exactly once",
+      page
+        .requestsMatching("/api/report")
+        .filter((request) => new URL(request.url).pathname === "/api/report")
+        .length === 1,
+      page.requestSummary(),
+    );
+    await initialVitals("report");
+    await checkLogo("report");
 
     // Refresh report -> POST /api/report/run -> snapshot with repo rows.
     page.requests = [];
     await page.clickUntilRequest("Refresh report", "POST", "/api/report/run");
     await page.waitFor(
-      `document.querySelectorAll("tbody tr.report-expanded-row").length >= 2`,
+      `document.querySelectorAll("tbody tr.report-repo-row").length >= 2`,
       30000,
       "report rows rendered after refresh",
+    );
+    check(
+      "collapsed repository details are not mounted",
+      (await page.eval(
+        `document.querySelectorAll("tbody tr.report-expanded-row").length`,
+      )) === 0,
     );
     check(
       "refresh fires POST /api/report/run",
@@ -854,8 +930,11 @@ async function main() {
       page.requestSummary(),
     );
     check(
-      "report history API called",
-      page.requestMade("GET", "/api/report/history"),
+      "report run fetches the completed snapshot once",
+      page
+        .requestsMatching("/api/report")
+        .filter((request) => new URL(request.url).pathname === "/api/report")
+        .length === 1,
       page.requestSummary(),
     );
     await page.waitFor(
@@ -863,6 +942,11 @@ async function main() {
         Chart.getChart(document.getElementById("reportHistoryChart")) !== undefined`,
       10000,
       "report history chart rendered",
+    );
+    check(
+      "report history API called",
+      page.requestMade("GET", "/api/report/history"),
+      page.requestSummary(),
     );
 
     // Sort: default sortKey is name/asc — one click flips to desc.
@@ -890,6 +974,12 @@ async function main() {
       `document.querySelector("tbody tr.report-expanded-row pre.report-detail-content").textContent`,
     );
     check(
+      "only the expanded repository has a detail row",
+      (await page.eval(
+        `document.querySelectorAll("tbody tr.report-expanded-row").length`,
+      )) === 1,
+    );
+    check(
       "repo details show HEAD/URL lines",
       details.includes("URL:") &&
         details.includes("HEAD:") &&
@@ -904,14 +994,14 @@ async function main() {
       el.dispatchEvent(new Event("input", { bubbles: true }));
     })()`);
     await page.waitFor(
-      `document.querySelectorAll("tbody tr.report-expanded-row").length === 1`,
+      `document.querySelectorAll("tbody tr.report-repo-row").length === 1`,
       5000,
       "filter narrows rows",
     );
     check(
       "name filter narrows to 1 row",
       (await page.eval(
-        `document.querySelectorAll("tbody tr.report-expanded-row").length`,
+        `document.querySelectorAll("tbody tr.report-repo-row").length`,
       )) === 1,
     );
     await page.eval(`(() => {
@@ -920,26 +1010,24 @@ async function main() {
       el.dispatchEvent(new Event("input", { bubbles: true }));
     })()`);
     await page.waitFor(
-      `document.querySelectorAll("tbody tr.report-expanded-row").length >= 2`,
+      `document.querySelectorAll("tbody tr.report-repo-row").length >= 2`,
       5000,
     );
 
     // Working-tree filter: repo-one has an untracked README (dirty),
     // repo-two committed it (clean). Signal select scopes by alert kind.
     const repoRows = () =>
-      page.eval(
-        `document.querySelectorAll("tbody tr.report-expanded-row").length`,
-      );
+      page.eval(`document.querySelectorAll("tbody tr.report-repo-row").length`);
     await page.selectValue(`select[x-model="treeFilter"]`, "dirty");
     await page.waitFor(
-      `document.querySelectorAll("tbody tr.report-expanded-row").length === 1`,
+      `document.querySelectorAll("tbody tr.report-repo-row").length === 1`,
       5000,
       "dirty filter narrows rows",
     );
     check("working-tree dirty shows 1 row", (await repoRows()) === 1);
     await page.selectValue(`select[x-model="treeFilter"]`, "clean");
     await page.waitFor(
-      `document.querySelectorAll("tbody tr.report-expanded-row").length === 1`,
+      `document.querySelectorAll("tbody tr.report-repo-row").length === 1`,
       5000,
       "clean filter narrows rows",
     );
@@ -950,14 +1038,14 @@ async function main() {
     // checks" empties the table.
     await page.selectValue(`select[x-model="checksFilter"]`, "none");
     await page.waitFor(
-      `document.querySelectorAll("tbody tr.report-expanded-row").length === 2`,
+      `document.querySelectorAll("tbody tr.report-repo-row").length === 2`,
       5000,
       "no-checks filter keeps rows",
     );
     check("checks none shows both rows", (await repoRows()) === 2);
     await page.selectValue(`select[x-model="checksFilter"]`, "has");
     await page.waitFor(
-      `document.querySelectorAll("tbody tr.report-expanded-row").length === 0`,
+      `document.querySelectorAll("tbody tr.report-repo-row").length === 0`,
       5000,
       "has-checks filter empties rows",
     );
@@ -974,7 +1062,7 @@ async function main() {
     ]) {
       await page.selectValue(`select[x-model="signalFilter"]`, signal);
       await page.waitFor(
-        `document.querySelectorAll("tbody tr.report-expanded-row").length === 0`,
+        `document.querySelectorAll("tbody tr.report-repo-row").length === 0`,
         5000,
         `${signal} filter empties rows`,
       );
@@ -982,7 +1070,7 @@ async function main() {
     }
     await page.selectValue(`select[x-model="signalFilter"]`, "all");
     await page.waitFor(
-      `document.querySelectorAll("tbody tr.report-expanded-row").length === 2`,
+      `document.querySelectorAll("tbody tr.report-repo-row").length === 2`,
       5000,
       "signal reset restores rows",
     );
@@ -1002,7 +1090,7 @@ async function main() {
       "/api/report/run?repo=",
     );
     await page.waitFor(
-      `document.querySelectorAll("tbody tr.report-expanded-row").length >= 2`,
+      `document.querySelectorAll("tbody tr.report-repo-row").length >= 2`,
       30000,
       "per-repo refresh completes",
     );
@@ -1062,8 +1150,62 @@ async function main() {
     );
     // Let the force job settle so its poll loop is not mid-flight at teardown.
     await page.waitFor(
-      `document.querySelectorAll("tbody tr.report-expanded-row").length >= 2`,
+      `document.querySelectorAll("tbody tr.report-repo-row").length >= 2`,
       30000,
+    );
+
+    console.log("\nMobile viewport");
+    await page.client.send("Emulation.setDeviceMetricsOverride", {
+      width: 390,
+      height: 844,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    await page.client.send("Page.navigate", { url: `${baseURL}/report` });
+    await page.waitFor(
+      `document.querySelectorAll("tbody tr.report-repo-row").length >= 2 &&
+        window.Chart &&
+        Boolean(Chart.getChart(document.getElementById("reportHistoryChart")))`,
+      10000,
+      "report loaded at narrow viewport",
+    );
+    const widthInfo = `(() => ({
+      scroll: document.documentElement.scrollWidth,
+      client: document.documentElement.clientWidth,
+      offenders: [...document.querySelectorAll("*")]
+        .filter((el) => !el.closest(".table-container") &&
+          getComputedStyle(el).display !== "none" &&
+          el.getBoundingClientRect().right > document.documentElement.clientWidth + 5)
+        .slice(0, 5).map((el) => ({
+          tag: el.tagName, class: el.className?.toString().slice(0, 60),
+          parent: el.parentElement?.className?.toString().slice(0, 60),
+          right: Math.round(el.getBoundingClientRect().right)
+        }))
+    }))()`;
+    const reportWidth = await page.eval(widthInfo);
+    check(
+      "report has no page-level horizontal overflow",
+      reportWidth.scroll <= reportWidth.client + 1,
+      JSON.stringify(reportWidth),
+    );
+    await page.client.send("Page.navigate", { url: `${baseURL}/knowledge` });
+    await page.waitFor(
+      `window.Alpine && Alpine.$data(document.body).documentsLoaded`,
+      10000,
+      "knowledge loaded at narrow viewport",
+    );
+    const knowledgeWidth = await page.eval(widthInfo);
+    check(
+      "knowledge has no page-level horizontal overflow",
+      knowledgeWidth.scroll <= knowledgeWidth.client + 1,
+      JSON.stringify(knowledgeWidth),
+    );
+    await page.client.send("Emulation.clearDeviceMetricsOverride");
+    await page.client.send("Page.navigate", { url: `${baseURL}/report` });
+    await page.waitFor(
+      `document.querySelectorAll("tbody tr.report-repo-row").length >= 2`,
+      10000,
+      "report restored after mobile check",
     );
 
     // ---------------------------------------------------------------

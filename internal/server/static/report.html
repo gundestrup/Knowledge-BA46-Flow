@@ -6,7 +6,6 @@
     <meta name="color-scheme" content="light dark" />
     <title>KBM-flow — repository report</title>
     <link rel="icon" href="/static/favicon.ico" sizes="any" />
-    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <link
       rel="icon"
       href="/static/favicon-96x96.png"
@@ -26,17 +25,25 @@
     <script defer src="/static/report.js"></script>
     <script defer src="/static/vendor/alpine.min.js"></script>
   </head>
-  <body x-data="repoReportDashboard" x-init="init()">
+  <body x-data="repoReportDashboard">
     <aside class="kbm-aside" :class="{ 'is-open': navOpen }">
       <div class="kbm-aside-brand">
-        <img class="kbm-aside-logo" src="/static/logo.png" alt="" />
+        <picture class="kbm-aside-logo-picture">
+          <source srcset="/static/logo.avif" type="image/avif" />
+          <img
+            class="kbm-aside-logo"
+            src="/static/logo.png"
+            width="128"
+            height="128"
+            alt=""
+          />
+        </picture>
         <span>KBM-flow</span>
       </div>
       <nav class="kbm-aside-menu" aria-label="Primary">
-        <p
-          class="menu-label"
-          x-text="t('ui.common.workspaces', 'Workspaces')"
-        ></p>
+        <p class="menu-label" x-text="t('ui.common.workspaces', 'Workspaces')">
+          Workspaces
+        </p>
         <ul class="menu-list">
           <li>
             <a href="/">
@@ -113,6 +120,8 @@
               >
                 <img
                   class="kbm-flag"
+                  width="4"
+                  height="3"
                   :src="localeFlag(displayLocale())"
                   alt=""
                 />
@@ -134,6 +143,8 @@
                 >
                   <img
                     class="kbm-flag"
+                    width="4"
+                    height="3"
                     :src="localeFlag(resolvedLocale)"
                     alt=""
                   />
@@ -150,7 +161,13 @@
                     :class="{ 'is-active': locale === l }"
                     @click="setLocale(l)"
                   >
-                    <img class="kbm-flag" :src="localeFlag(l)" alt="" />
+                    <img
+                      class="kbm-flag"
+                      width="4"
+                      height="3"
+                      :src="localeFlag(l)"
+                      alt=""
+                    />
                     <span x-text="localeLabel(l)"></span>
                   </button>
                 </template>
@@ -162,17 +179,21 @@
       <section class="kbm-title-bar">
         <ul>
           <li>KBM-flow</li>
-          <li x-text="t('ui.kb.repo_report', 'Repository report')"></li>
+          <li x-text="t('ui.kb.repo_report', 'Repository report')">
+            Repository report
+          </li>
         </ul>
       </section>
-      <section class="kbm-hero-bar">
+      <section class="kbm-hero-bar report-hero">
         <div class="level">
           <div class="level-left">
             <div>
               <p
                 class="eyebrow mb-1"
                 x-text="t('ui.report.eyebrow', 'Repository health · read-only checks')"
-              ></p>
+              >
+                Repository health · read-only checks
+              </p>
               <h1
                 class="title is-3"
                 x-text="t('ui.report.hero_title', 'One view across the fleet.')"
@@ -182,17 +203,24 @@
               <p
                 class="subtitle is-6 mb-2"
                 x-text="t('ui.report.hero_subtitle', 'Read-only checks from your repository registry. This report does not sync, commit, or edit registered repositories.')"
-              ></p>
+              >
+                Read-only checks from your repository registry. This report does
+                not sync, commit, or edit registered repositories.
+              </p>
               <div class="report-scope">
                 <span class="report-scope-mark" aria-hidden="true">R</span>
                 <p
                   class="has-text-weight-bold"
                   x-text="t('ui.report.read_only', 'Read-only report')"
-                ></p>
+                >
+                  Read-only report
+                </p>
                 <p
                   class="is-size-7"
                   x-text="snapshot.remote_enabled ? t('ui.report.scope_remote', 'Local and remote checks') : t('ui.common.local_checks_only', 'Local checks only')"
-                ></p>
+                >
+                  Local and remote checks
+                </p>
               </div>
               <p class="is-size-7 has-text-grey mt-2" role="status">
                 <span
@@ -201,7 +229,8 @@
                 ></span>
                 <span
                   x-text="busy ? t('ui.report.run_in_progress', 'A report run is in progress') : statusText()"
-                ></span>
+                  >Loading…</span
+                >
               </p>
             </div>
           </div>
@@ -219,7 +248,8 @@
                 ></span>
                 <span
                   x-text="busy ? t('ui.report.checking', 'Checking repositories…') : t('ui.report.refresh_report', 'Refresh report')"
-                ></span>
+                  >Refresh report</span
+                >
               </button>
               <button
                 type="button"
@@ -233,7 +263,8 @@
                 ></span>
                 <span
                   x-text="t('ui.common.local_checks_only', 'Local checks only')"
-                ></span>
+                  >Local checks only</span
+                >
               </button>
               <button
                 type="button"
@@ -244,7 +275,8 @@
                 <span class="kbm-icon icon-zap" aria-hidden="true"></span>
                 <span
                   x-text="t('ui.report.force_remote', 'Force remote refresh')"
-                ></span>
+                  >Force remote refresh</span
+                >
               </button>
             </div>
           </div>
@@ -322,7 +354,7 @@
               x-text="notice"
             ></div>
           </template>
-          <template x-if="!snapshot.configured">
+          <template x-if="snapshotLoaded && !snapshot.configured">
             <article class="message is-warning">
               <div class="message-body">
                 <span x-text="t('ui.report.config_hint_1', 'Configure')"></span>
@@ -334,7 +366,7 @@
             </article>
           </template>
           <template
-            x-if="snapshot.configured && !snapshot.generated_at && !busy"
+            x-if="snapshotLoaded && snapshot.configured && !snapshot.generated_at && !busy"
           >
             <div
               class="notification is-light"
@@ -713,7 +745,7 @@
                 ></div>
               </template>
 
-              <section class="card mb-5">
+              <section class="card mb-5 report-table-card">
                 <header class="card-header">
                   <div class="card-header-title">
                     <span class="icon is-medium kbm-icon-badge mr-2"
@@ -745,6 +777,7 @@
                           type="search"
                           :placeholder="t('ui.report.search_placeholder', 'Search names, paths, packages')"
                           x-model="filter"
+                          @input="reportPage = 0"
                         />
                       </label>
                       <label class="report-signal-filter">
@@ -754,7 +787,7 @@
                           >Filter by working tree</span
                         >
                         <span class="select is-fullwidth">
-                          <select x-model="treeFilter">
+                          <select x-model="treeFilter" @change="reportPage = 0">
                             <option
                               value="all"
                               x-text="t('ui.report.filter_tree_all', 'All working trees')"
@@ -777,7 +810,10 @@
                           >Filter by checks</span
                         >
                         <span class="select is-fullwidth">
-                          <select x-model="checksFilter">
+                          <select
+                            x-model="checksFilter"
+                            @change="reportPage = 0"
+                          >
                             <option
                               value="all"
                               x-text="t('ui.report.filter_checks_all', 'All check states')"
@@ -800,7 +836,10 @@
                           >Filter by repository signals</span
                         >
                         <span class="select is-fullwidth">
-                          <select x-model="signalFilter">
+                          <select
+                            x-model="signalFilter"
+                            @change="reportPage = 0"
+                          >
                             <option
                               value="all"
                               x-text="t('ui.report.signal_all', 'All signals')"
@@ -863,6 +902,32 @@
                     </template>
                   </p>
 
+                  <div
+                    class="level is-mobile mb-3"
+                    x-show="filteredRepos.length > reportPageSize"
+                    x-cloak
+                  >
+                    <p class="is-size-7" x-text="reportPageLabel()"></p>
+                    <nav
+                      class="buttons are-small"
+                      :aria-label="t('ui.report.pages_aria', 'Repository pages')"
+                    >
+                      <button
+                        type="button"
+                        class="button"
+                        :disabled="reportPage === 0"
+                        @click="changeReportPage(-1)"
+                        x-text="t('ui.common.previous', 'Previous')"
+                      ></button>
+                      <button
+                        type="button"
+                        class="button"
+                        :disabled="!canNextReportPage()"
+                        @click="changeReportPage(1)"
+                        x-text="t('ui.common.next', 'Next')"
+                      ></button>
+                    </nav>
+                  </div>
                   <div class="table-container report-table-container">
                     <table class="table is-fullwidth report-table">
                       <thead>
@@ -949,9 +1014,9 @@
                           </th>
                         </tr>
                       </thead>
-                      <template x-for="repo in filteredRepos" :key="repo.name">
+                      <template x-for="repo in visibleRepos" :key="repo.name">
                         <tbody>
-                          <tr>
+                          <tr class="report-repo-row">
                             <td>
                               <p>
                                 <span
@@ -1200,33 +1265,31 @@
                               </template>
                             </td>
                           </tr>
-                          <tr
-                            x-show="expandedRepo === repo.name"
-                            x-cloak
-                            class="report-expanded-row"
-                          >
-                            <td colspan="5">
-                              <div class="report-detail-links">
-                                <template
-                                  x-for="link in repoLinks(repo)"
-                                  :key="link.url"
-                                >
-                                  <!-- biome-ignore lint/a11y/useValidAnchor: href bound via Alpine; repoLinks only yields entries with a URL -->
-                                  <a
-                                    :href="link.url"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    x-text="link.label"
-                                    >Repository link</a
+                          <template x-if="expandedRepo === repo.name">
+                            <tr class="report-expanded-row">
+                              <td colspan="5">
+                                <div class="report-detail-links">
+                                  <template
+                                    x-for="link in repoLinks(repo)"
+                                    :key="link.url"
                                   >
-                                </template>
-                              </div>
-                              <pre
-                                class="report-detail-content"
-                                x-text="repoDetails(repo, snapshot)"
-                              ></pre>
-                            </td>
-                          </tr>
+                                    <!-- biome-ignore lint/a11y/useValidAnchor: href bound via Alpine; repoLinks only yields entries with a URL -->
+                                    <a
+                                      :href="link.url"
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      x-text="link.label"
+                                      >Repository link</a
+                                    >
+                                  </template>
+                                </div>
+                                <pre
+                                  class="report-detail-content"
+                                  x-text="repoDetails(repo, snapshot)"
+                                ></pre>
+                              </td>
+                            </tr>
+                          </template>
                         </tbody>
                       </template>
                       <tbody>
@@ -1318,7 +1381,7 @@
             </div>
           </template>
 
-          <section class="card">
+          <section class="card" x-show="snapshotLoaded" x-cloak>
             <header class="card-header">
               <div class="card-header-title">
                 <span class="icon is-medium kbm-icon-badge mr-2"

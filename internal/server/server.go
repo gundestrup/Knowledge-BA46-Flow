@@ -5,14 +5,17 @@
 package server
 
 import (
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -38,6 +41,9 @@ var knowledgeUI []byte
 
 //go:embed static/report.html
 var reportUI []byte
+
+//go:embed static/robots.txt
+var robotsTxt []byte
 
 //go:embed static
 var staticFiles embed.FS
@@ -86,6 +92,7 @@ func Listen(ctx context.Context, c config.Config, db *database.DB) error {
 func NewMux(c config.Config, db *database.DB, stop chan<- struct{}) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/documents", documents(db))
+	mux.HandleFunc("GET /api/documents/page", documentIndexPage(db))
 	mux.HandleFunc("GET /api/models", modelsData(c, db))
 	mux.HandleFunc("GET /api/suggestions", suggestions(c, db))
 	mux.HandleFunc("GET /api/suggestions/{id}", suggestion(c, db))
@@ -111,10 +118,54 @@ func NewMux(c config.Config, db *database.DB, stop chan<- struct{}) http.Handler
 	mux.HandleFunc("GET /knowledge/{$}", servePage(dev, "knowledge.html", knowledgeUI))
 	mux.HandleFunc("GET /report", servePage(dev, "report.html", reportUI))
 	mux.HandleFunc("GET /report/{$}", servePage(dev, "report.html", reportUI))
-	mux.Handle("GET /static/", staticHandler(dev))
+	mux.Handle("GET /static/", staticCache(dev != nil, staticHandler(dev)))
+	mux.Handle("GET /robots.txt", staticCache(dev != nil, serveFile(dev, "robots.txt", robotsTxt, "text/plain; charset=utf-8")))
+	mux.HandleFunc("GET /sitemap.xml", sitemapXML)
 	mux.HandleFunc("POST /api/client-log", clientLog)
 	mux.HandleFunc("GET /{$}", servePage(dev, "index.html", landingUI)) // {$} matches the root path only
-	return securityHeaders(requestLog(mux))
+	return securityHeaders(compressResponses(protectLocalRequests(c.HTTPAddr, requestLog(mux))))
+}
+
+// protectLocalRequests blocks browser CSRF and DNS rebinding before a request
+// reaches the API. The normal listener is loopback-only, but a browser visiting
+// another site can still send requests to its own localhost.
+func protectLocalRequests(listenAddr string, next http.Handler) http.Handler {
+	csrf := http.NewCrossOriginProtection()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !allowedRequestHost(listenAddr, r.Host) {
+			writeErr(w, http.StatusForbidden, errors.New("untrusted request host"))
+			return
+		}
+		if err := csrf.Check(r); err != nil {
+			writeErr(w, http.StatusForbidden, errors.New("cross-origin request forbidden"))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func allowedRequestHost(listenAddr, requestHost string) bool {
+	if listenAddr == "" {
+		return true // NewMux unit-test configs; loaded configs always set http_addr.
+	}
+	listenHost, _, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return false
+	}
+	host, _, err := net.SplitHostPort(requestHost)
+	if err != nil {
+		host = requestHost
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	listenHost = strings.ToLower(listenHost)
+	if listenHost == "localhost" || (net.ParseIP(listenHost) != nil && net.ParseIP(listenHost).IsLoopback()) {
+		return host == "localhost" || (net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback())
+	}
+	// Binding all interfaces is already an explicit, unauthenticated opt-in.
+	if listenHost == "0.0.0.0" || listenHost == "::" {
+		return true
+	}
+	return host == listenHost
 }
 
 // requestLog emits one DEBUG line per HTTP request — method, path, status,
@@ -174,11 +225,102 @@ func clientLog(w http.ResponseWriter, r *http.Request) {
 // `new Function` — 'unsafe-eval' must not return.
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/static/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'self'; script-src 'self'")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Only text responses are compressed. Keep ranges, HEAD and event streams
+// untouched; otherwise Content-Length, partial responses and flushing break.
+func compressResponses(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !compressiblePath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Add("Vary", "Accept-Encoding")
+		if r.Method != http.MethodGet || r.Header.Get("Range") != "" ||
+			strings.Contains(r.Header.Get("Accept"), "text/event-stream") || !acceptsGzip(r.Header.Get("Accept-Encoding")) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		defer func() {
+			if err := gz.Close(); err != nil {
+				logging.Debugf("gzip response flush: %v", err)
+			}
+		}()
+		next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, writer: gz}, r)
+	})
+}
+
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	writer *gzip.Writer
+}
+
+func (w *gzipResponseWriter) WriteHeader(status int) {
+	w.Header().Del("Content-Length")
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *gzipResponseWriter) Write(p []byte) (int, error) {
+	w.Header().Del("Content-Length")
+	return w.writer.Write(p)
+}
+
+func compressiblePath(path string) bool {
+	if strings.HasPrefix(path, "/api/") || path == "/" || path == "/knowledge" ||
+		path == "/knowledge/" || path == "/report" || path == "/report/" ||
+		path == "/robots.txt" || path == "/sitemap.xml" {
+		return true
+	}
+	if !strings.HasPrefix(path, "/static/") {
+		return false
+	}
+	for _, suffix := range []string{".css", ".js", ".svg", ".json", ".webmanifest", ".md", ".html"} {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func acceptsGzip(acceptEncoding string) bool {
+	for part := range strings.SplitSeq(acceptEncoding, ",") {
+		name, params, _ := strings.Cut(strings.TrimSpace(part), ";")
+		if strings.TrimSpace(name) != "gzip" {
+			continue
+		}
+		for param := range strings.SplitSeq(params, ";") {
+			key, value, ok := strings.Cut(strings.TrimSpace(param), "=")
+			if ok && key == "q" {
+				q, err := strconv.ParseFloat(value, 64)
+				return err == nil && q > 0
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func staticCache(dev bool, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if dev {
+			w.Header().Set("Cache-Control", "no-store")
+		} else {
+			// Assets have stable names across builds, so do not cache them
+			// immutably: an upgrade must become visible within one hour.
+			w.Header().Set("Cache-Control", "public, max-age=3600")
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -207,6 +349,40 @@ func documents(db *database.DB) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, docs)
+	}
+}
+
+// documentIndexPage sends a bounded projection to the review table while
+// leaving the full /api/documents response intact for existing API clients.
+func documentIndexPage(db *database.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		limit := 20
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < 1 || n > 100 {
+				writeErr(w, http.StatusBadRequest, errors.New("limit must be between 1 and 100"))
+				return
+			}
+			limit = n
+		}
+		offset := 0
+		if raw := r.URL.Query().Get("offset"); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < 0 {
+				writeErr(w, http.StatusBadRequest, errors.New("offset must be a non-negative integer"))
+				return
+			}
+			offset = n
+		}
+		items, total, err := db.DocumentIndexPage(r.Context(), limit, offset)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, struct {
+			Documents []database.DocumentIndexItem `json:"documents"`
+			Total     int                          `json:"total"`
+		}{items, total})
 	}
 }
 
@@ -357,16 +533,43 @@ func devStaticFS() fs.FS {
 // servePage serves one of the UI pages: from devFS when KBM_DEV_STATIC is
 // set, else the embedded copy.
 func servePage(devFS fs.FS, name string, embedded []byte) http.HandlerFunc {
+	return serveFile(devFS, name, embedded, "text/html; charset=utf-8")
+}
+
+func serveFile(devFS fs.FS, name string, embedded []byte, contentType string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if devFS != nil {
 			http.ServeFileFS(w, r, devFS, name)
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Type", contentType)
 		// Embedded static page — no user input to escape.
 		// nosemgrep: no-direct-write-to-responsewriter
 		_, _ = w.Write(embedded)
 	}
+}
+
+// sitemapXML lists the three page URLs under the request host — already
+// validated by protectLocalRequests — so the sitemap follows the configured
+// listen address.
+func sitemapXML(w http.ResponseWriter, r *http.Request) {
+	var b strings.Builder
+	b.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+	b.WriteString("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n")
+	for _, path := range []string{"/", "/knowledge", "/report"} {
+		b.WriteString("  <url><loc>http://")
+		if err := xml.EscapeText(&b, []byte(r.Host)); err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		b.WriteString(path)
+		b.WriteString("</loc></url>\n")
+	}
+	b.WriteString("</urlset>\n")
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	// Embedded static XML — no user input to escape beyond the XML-escaped host.
+	// nosemgrep: no-direct-write-to-responsewriter
+	_, _ = io.WriteString(w, b.String())
 }
 
 func reportData(c config.Config, db *database.DB) http.HandlerFunc {

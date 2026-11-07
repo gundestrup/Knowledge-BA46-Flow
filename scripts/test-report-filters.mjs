@@ -244,4 +244,59 @@ assert.deepEqual(series.findings, [null, 5]);
 // chart instances live in module scope, not on the reactive component.
 dashboard.renderHistoryChart();
 
+dashboard.filter = "";
+dashboard.snapshot.repos = Array.from({ length: 19 }, (_, i) => ({
+  name: `repo-${String(i).padStart(2, "0")}`,
+  path: `/repo-${i}`,
+  problems: [],
+  npm_projects: [],
+}));
+assert.equal(dashboard.visibleRepos.length, 8);
+assert.equal(dashboard.reportPageLabel(), "1–8 of 19");
+dashboard.changeReportPage(1);
+assert.equal(dashboard.visibleRepos[0].name, "repo-08");
+assert.equal(dashboard.reportPageLabel(), "9–16 of 19");
+dashboard.changeReportPage(1);
+assert.equal(dashboard.visibleRepos.length, 3);
+assert.equal(dashboard.canNextReportPage(), false);
+dashboard.sortBy("name");
+assert.equal(dashboard.reportPage, 0);
+assert.equal(dashboard.visibleRepos.length, 8);
+
+const polling = context.window.repoReportDashboard();
+polling.busy = true;
+polling.notice = "Report started";
+let running = true;
+let pollsScheduled = 0;
+const requests = [];
+polling.schedulePoll = () => {
+  pollsScheduled++;
+};
+polling.requestJSON = async (url) => {
+  requests.push(url);
+  if (url === "/api/report/jobs")
+    return [{ status: running ? "running" : "done" }];
+  if (url === "/api/ops") return [];
+  if (url === "/api/report")
+    return { configured: true, repos: [], summary: {}, generated_at: "now" };
+  if (url === "/api/report/history") return { points: [] };
+  throw new Error(`unexpected request: ${url}`);
+};
+await polling.pollJobs();
+await polling.pollJobs();
+assert.equal(polling.busy, true);
+assert.equal(pollsScheduled, 2);
+assert.deepEqual(requests, [
+  "/api/report/jobs",
+  "/api/ops",
+  "/api/report/jobs",
+  "/api/ops",
+]);
+running = false;
+await polling.pollJobs();
+assert.equal(polling.busy, false);
+assert.equal(polling.notice, "");
+assert.equal(requests.filter((url) => url === "/api/report").length, 1);
+assert.equal(requests.filter((url) => url === "/api/report/history").length, 1);
+
 console.log("Report sorting and signal filters passed.");

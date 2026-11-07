@@ -2,6 +2,8 @@
 # Add a locale by copying this file to active.<tag>.yaml and translating values.
 
 ui.common.home: "Home"
+ui.common.next: "Next"
+ui.common.previous: "Previous"
 ui.common.refresh: "Refresh"
 ui.common.request_failed: "Request failed (HTTP {{.Status}})"
 ui.kb.accept_suggestion: "Accept suggestion"
@@ -35,6 +37,7 @@ ui.kb.dead_links:
   one: "{{.Count}} dead link"
   other: "{{.Count}} dead links"
 ui.kb.documents_heading: "Documents"
+ui.kb.documents_page: "{{.First}}–{{.Last}} of {{.Total}}"
 ui.kb.embed_mismatch: "A different embedding model re-vectorizes every document and can expand dependent analysis."
 ui.kb.embedding_model: "Embedding model"
 ui.kb.embedding_model_title: "Independent per-run embedding override; changing models refreshes incompatible vectors"
@@ -115,6 +118,7 @@ ui.kb.origin_enrich: "Enrichment"
 ui.kb.origin_expand: "Expand"
 ui.kb.origin_filter_aria: "Filter by origin"
 ui.kb.origin_freshness: "Freshness"
+ui.kb.pages_aria: "Document pages"
 ui.kb.progress_empty: "No activity recorded yet — run a scan to start the trend."
 ui.kb.progress_eyebrow: "Pipeline progress"
 ui.kb.progress_heading: "Notes and suggestions over time"
@@ -265,6 +269,8 @@ ui.report.open_findings:
   other: "{{.Count}} open findings"
 ui.report.open_repo: "Open repository"
 ui.report.open_repo_aria: "Open {{.Name}} repository in a new tab"
+ui.report.page: "{{.First}}–{{.Last}} of {{.Total}}"
+ui.report.pages_aria: "Repository pages"
 ui.report.present: "present"
 ui.report.projects_reported:
   one: "{{.Count}} project reported"

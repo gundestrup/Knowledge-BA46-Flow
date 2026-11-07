@@ -9,6 +9,46 @@ tag is prepared.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-07
+
+### Added
+
+- `GET /api/documents/page` returns a bounded path-ordered document-table
+  projection with a total count; the full `/api/documents` API is unchanged.
+- `/robots.txt` and `/sitemap.xml` are served at the root: robots allows the
+  pages while disallowing `/api/`, and the sitemap lists the three workspaces
+  under the validated request host.
+- Pinned Biome now lints embedded HTML and accessibility alongside JavaScript
+  and CSS. Browser e2e records initial CLS/LCP before navigation, checks one
+  initial data request per page and detects page-level mobile overflow.
+
+### Fixed
+
+- Alpine page components no longer call `init()` twice. Knowledge renders 20
+  document rows at a time; report renders eight repository rows at a time and
+  creates detail markup only when expanded.
+- Initial shell labels reserve their layout before Alpine hydration; hidden
+  report history/help content no longer flashes while async data arrives.
+  Flag images reserve intrinsic space, card controls wrap at narrow widths,
+  and the mobile report table stays inside its scroll container.
+- Pages no longer request the oversized SVG favicon. Manifest icon paths now
+  point to the assets actually served under `/static/`.
+- The sidebar logo uses a 128px AVIF (~8 KB) derived from the supplied
+  `docs/assets/logo_org.avif`; the existing PNG remains a browser fallback.
+
+### Security
+
+- Unsafe cross-origin browser requests and non-loopback Host headers on the
+  loopback listener are rejected before mutating endpoints or private data
+  handlers run; local CLI requests without browser origin headers still work.
+
+### Changed
+
+- Text responses negotiate gzip with `Vary: Accept-Encoding`; API/HTML are
+  `no-store`, and unversioned static assets revalidate after one hour.
+- Active report runs poll only job status; the full snapshot and trend history
+  are refreshed once when a run completes, rather than every 1.5 seconds.
+
 ### Internal
 
 - `biome.json` `$schema` pointer bumped to 2.6.3 to match the pinned CLI.

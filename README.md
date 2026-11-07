@@ -14,7 +14,7 @@
 
 [ci-badge]: https://github.com/gundestrup/Knowledge-BA46-Flow/actions/workflows/ci.yml/badge.svg
 [ci-workflow]: https://github.com/gundestrup/Knowledge-BA46-Flow/actions/workflows/ci.yml
-[version-badge]: https://img.shields.io/badge/version-0.4.0-blue.svg
+[version-badge]: https://img.shields.io/badge/version-0.5.0-blue.svg
 [changelog]: CHANGELOG.md
 
 KBM-flow is a Go CLI + local web dashboard with **two functions**:
@@ -265,13 +265,18 @@ offline use — the CSP build evaluates directives without
 `'unsafe-eval'` outright. Alpine components use ordinary JavaScript `async`
 functions and `await` for HTTP requests and background-job polling. Exact
 licenses are in `THIRD-PARTY-NOTICES.md`.
+The document table loads 20 rows per request; the report mounts eight summary
+rows per page and creates details only when opened. Static shells stay embedded
+HTML rather than server templates because review and job state are interactive.
+Report progress polls only job status while running, then loads the new snapshot.
 
 ## Development checks
 
 ```bash
 make check       # version check, gofmt check, go vet, race tests, and build
 make coverage    # package coverage report
-make frontend-check # npm ci plus frontend asset, syntax, lint, and format checks
+make frontend-check # npm ci plus asset, JS/CSS/HTML lint, and format checks
+make e2e          # real Chrome UI, initial Web Vitals and mobile smoke (opt-in)
 ```
 
 GitHub Actions runs `make check` and reports coverage on pushes and pull
@@ -280,6 +285,9 @@ Dependabot PRs check Go modules, npm packages, Docker bases, and Actions.
 Coverage helps find untested behavior; it is not a percentage gate.
 `make frontend-check` requires Node.js 26.12+ and npm; `.node-version` pins the
 local Node release used for frontend maintenance.
+`make e2e` needs a local Chrome/Chromium binary; repeat a three-sample deep
+`wvf.scan` for representative Web Vitals when changing the embedded UI (see
+`docs/TESTING.md`). This browser-dependent scan is not a CI score gate.
 
 For UI work, `KBM_DEV_STATIC=internal/server/static ./KBM-flow serve` reads the
 three pages and `/static/` assets from disk on every request — save the file

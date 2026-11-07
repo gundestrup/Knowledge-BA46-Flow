@@ -7,6 +7,7 @@
 
 window.repoReportDashboard = () => ({
   snapshot: { configured: false, repos: [], summary: {} },
+  snapshotLoaded: false,
   jobs: [],
   reportHistory: [],
   busy: false,
@@ -19,6 +20,8 @@ window.repoReportDashboard = () => ({
   sortKey: "name",
   sortDirection: "asc",
   expandedRepo: null,
+  reportPage: 0,
+  reportPageSize: 8,
   pollTimer: null,
 
   async init() {
@@ -30,6 +33,14 @@ window.repoReportDashboard = () => ({
   async refresh() {
     try {
       this.snapshot = await this.requestJSON("/api/report");
+      this.snapshotLoaded = true;
+      this.reportPage = Math.min(
+        this.reportPage,
+        Math.max(
+          0,
+          Math.ceil(this.filteredRepos.length / this.reportPageSize) - 1,
+        ),
+      );
       this.jobs = await this.requestJSON("/api/report/jobs");
       this.opsJobs = await this.requestJSON("/api/ops");
       this.reportHistory =
@@ -41,6 +52,28 @@ window.repoReportDashboard = () => ({
       if (wasBusy && !this.busy) this.notice = "";
       this.schedulePoll();
       this.renderHistoryChart();
+    } catch (error) {
+      this.error = error.message;
+    }
+  },
+
+  // Job progress is small; fetch the full report only once the run finishes.
+  async pollJobs() {
+    try {
+      const [jobs, opsJobs] = await Promise.all([
+        this.requestJSON("/api/report/jobs"),
+        this.requestJSON("/api/ops"),
+      ]);
+      this.jobs = jobs;
+      this.opsJobs = opsJobs;
+      const wasBusy = this.busy;
+      this.busy = this.runningJobs().length > 0;
+      if (wasBusy && !this.busy) {
+        this.notice = "";
+        await this.refresh();
+      } else {
+        this.schedulePoll();
+      }
     } catch (error) {
       this.error = error.message;
     }
@@ -77,7 +110,7 @@ window.repoReportDashboard = () => ({
           Target: target,
         },
       );
-      await this.refresh();
+      await this.pollJobs();
     } catch (error) {
       this.error = error.message;
     }
@@ -107,7 +140,7 @@ window.repoReportDashboard = () => ({
 
   schedulePoll() {
     clearTimeout(this.pollTimer);
-    this.pollTimer = this.busy ? setTimeout(() => this.refresh(), 1500) : null;
+    this.pollTimer = this.busy ? setTimeout(() => this.pollJobs(), 1500) : null;
   },
 
   statusText() {
@@ -235,6 +268,35 @@ window.repoReportDashboard = () => ({
       }
       return this.sortDirection === "asc" ? result : -result;
     });
+  },
+
+  get visibleRepos() {
+    const start = this.reportPage * this.reportPageSize;
+    return this.filteredRepos.slice(start, start + this.reportPageSize);
+  },
+
+  reportPageLabel() {
+    const total = this.filteredRepos.length;
+    return this.t("ui.report.page", "{{.First}}–{{.Last}} of {{.Total}}", {
+      First: total ? this.reportPage * this.reportPageSize + 1 : 0,
+      Last: Math.min(total, (this.reportPage + 1) * this.reportPageSize),
+      Total: total,
+    });
+  },
+
+  canNextReportPage() {
+    return (
+      (this.reportPage + 1) * this.reportPageSize < this.filteredRepos.length
+    );
+  },
+
+  changeReportPage(direction) {
+    const last = Math.max(
+      0,
+      Math.ceil(this.filteredRepos.length / this.reportPageSize) - 1,
+    );
+    this.reportPage = Math.max(0, Math.min(this.reportPage + direction, last));
+    this.expandedRepo = null;
   },
 
   hasOpenPullRequest(repo) {
@@ -526,6 +588,8 @@ window.repoReportDashboard = () => ({
   },
 
   sortBy(key) {
+    this.reportPage = 0;
+    this.expandedRepo = null;
     if (this.sortKey === key) {
       this.sortDirection = this.sortDirection === "asc" ? "desc" : "asc";
       return;

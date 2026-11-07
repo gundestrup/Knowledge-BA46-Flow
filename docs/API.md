@@ -10,11 +10,26 @@ The listen address is set via `http_addr` in the config (default
 `127.0.0.1:8080`). **Security:** `/api/apply` mutates the filesystem, so the
 default binds to loopback only. Setting `0.0.0.0` or a LAN address exposes
 those mutations to the network — there is no authentication layer.
+Browser state-changing requests are checked with Go's cross-origin protection
+(`Origin`/`Sec-Fetch-Site`), and loopback listeners reject non-loopback `Host`
+headers to prevent DNS rebinding. CLI clients without browser origin headers
+remain supported. These checks do not replace authentication if you expose
+the server beyond loopback.
 
 For Docker, run `docker compose run --rm --service-ports kbm-flow serve`.
 The host port remains bound to `127.0.0.1:8080` by the Compose mapping.
 
 All endpoints return JSON. Error responses are `{"error": "..."}`.
+API and page responses use `Cache-Control: no-store` because they can contain
+private repository data. Embedded static assets have a one-hour cache lifetime;
+`KBM_DEV_STATIC` assets are not cached. Text responses negotiate gzip with
+`Vary: Accept-Encoding` (not for range requests or event streams). Binary
+images are served as-is; the pages use the small ICO/PNG favicons.
+The sidebar logo prefers a 128px AVIF and falls back to the existing PNG in
+browsers without AVIF support. The server also answers the conventional
+`GET /robots.txt` (allows the pages, disallows `/api/`) and
+`GET /sitemap.xml` (lists the three workspaces under the validated request
+host) so agents and scanners get a real response instead of a 404.
 
 ## Endpoints
 
@@ -31,6 +46,16 @@ silently mark the local lane complete.
 Every tracked document with analysis metadata (path, title, summary, tags,
 status, strict source hash, semantic fingerprint, task input fingerprints and
 lineage hashes/models). Ordered by path.
+
+### `GET /api/documents/page?limit=20&offset=0`
+
+Bounded, path-ordered document-index projection for the review UI:
+`{"documents":[...],"total":N}`. Only fields shown in the table are returned;
+the full `/api/documents` contract remains unchanged. `limit` defaults to 20
+and must be 1–100; `offset` defaults to 0 and must be non-negative (`400` on
+invalid values). The knowledge table loads 20 rows at a time, while its
+tracked-document total uses `total`. The report table similarly renders
+eight repositories per page and mounts details only for the expanded row.
 
 ### `GET /api/progress`
 

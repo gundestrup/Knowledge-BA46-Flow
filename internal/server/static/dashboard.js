@@ -51,6 +51,11 @@ function lcsLines(a, b) {
 
 window.knowledgeDashboard = () => ({
   documents: [],
+  documentTotal: 0,
+  documentPage: 0,
+  documentPageSize: 20,
+  documentsLoaded: false,
+  documentsLoading: false,
   suggestions: [],
   jobs: [],
   reportJobs: [],
@@ -647,7 +652,77 @@ window.knowledgeDashboard = () => ({
   },
 
   async loadDocuments() {
-    this.documents = await this.requestJSON("/api/documents");
+    this.documentsLoading = true;
+    try {
+      const page = await this.requestJSON(
+        `/api/documents/page?limit=${this.documentPageSize}&offset=${this.documentPage * this.documentPageSize}`,
+      );
+      this.documentTotal = page.total;
+      if (
+        this.documentPage > 0 &&
+        this.documentPage * this.documentPageSize >= page.total
+      ) {
+        this.documentPage = Math.max(
+          0,
+          Math.ceil(page.total / this.documentPageSize) - 1,
+        );
+        const last = await this.requestJSON(
+          `/api/documents/page?limit=${this.documentPageSize}&offset=${this.documentPage * this.documentPageSize}`,
+        );
+        this.documents = last.documents;
+        this.documentTotal = last.total;
+      } else {
+        this.documents = page.documents;
+      }
+      this.documentsLoaded = true;
+    } finally {
+      this.documentsLoading = false;
+    }
+  },
+
+  documentPageLabel() {
+    const first = this.documentTotal
+      ? this.documentPage * this.documentPageSize + 1
+      : 0;
+    return this.t(
+      "ui.kb.documents_page",
+      "{{.First}}–{{.Last}} of {{.Total}}",
+      {
+        First: first,
+        Last: Math.min(
+          this.documentTotal,
+          (this.documentPage + 1) * this.documentPageSize,
+        ),
+        Total: this.documentTotal,
+      },
+    );
+  },
+
+  canNextDocumentPage() {
+    return (
+      !this.documentsLoading &&
+      (this.documentPage + 1) * this.documentPageSize < this.documentTotal
+    );
+  },
+
+  async changeDocumentPage(direction) {
+    if (this.documentsLoading) return;
+    const next = Math.max(
+      0,
+      Math.min(
+        this.documentPage + direction,
+        Math.ceil(this.documentTotal / this.documentPageSize) - 1,
+      ),
+    );
+    if (next === this.documentPage) return;
+    const previous = this.documentPage;
+    this.documentPage = next;
+    try {
+      await this.loadDocuments();
+    } catch (error) {
+      this.documentPage = previous;
+      this.error = error.message;
+    }
   },
 
   filteredSuggestions() {

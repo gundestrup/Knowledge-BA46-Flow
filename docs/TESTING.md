@@ -181,12 +181,42 @@ repositories for the report page, and a config with a dead Ollama URL), starts
 - Every page navigation asserts a zero page-error budget: uncaught
   exceptions, `console.error`, and `Log` errors from the application origin
   fail the run (browser-extension noise is filtered out).
+- The first load of each page asserts one data request (Alpine calls `init()`
+  itself). Collapsed report details are not mounted, and the two workspaces
+  must not overflow a 390px viewport at the page level. After a report run,
+  the full snapshot is fetched once; component tests also pin job-only polls.
+  Chrome decodes the AVIF sidebar logo on all pages and checks its PNG fallback.
 
 The suite exits `0` with a `SKIP` notice when no Chrome/Chromium is found, so
 it stays runnable on headless machines; set `KBM_E2E_CHROME` (or
 `CHROME_PATH`) to a browser binary. It never contacts Ollama or external
 services and deletes its temporary fixture on exit. `window.confirm` is
 stubbed via CDP for the apply confirmation — the only dialog in the app.
+
+## Frontend and Web Vitals quality
+
+`make frontend-check` installs the locked Node dependencies and runs
+`npm run check`: vendored-asset and license-version drift, `node --check`,
+component tests (including document/report paging), locale drift, Biome
+JavaScript/CSS/HTML lint and accessibility rules, and Prettier format checks
+for HTML/CSS/JS and docs. HTML is linted as source, not only formatted.
+`go test ./internal/server` also checks Alpine attribute expressions for
+unsupported host globals. Use `npm run check` without reinstalling when the
+pinned `node_modules` directory is already present; run `make e2e` after
+changing Alpine bindings.
+
+The Chrome e2e registers `PerformanceObserver` for CLS and LCP **before
+navigation**, logs initial lab metrics and DOM counts per page, and rejects
+poor initial CLS (at least `0.25`). These are fixture smoke checks, not a
+reproducible Lighthouse score or a proxy for field Web Vitals. For a
+representative read-only lab comparison, use the sibling
+`website-vitals-flow` scanner or the configured `wvf.scan` MCP tool with
+`deep=true`, `samples=3` for `/`, `/knowledge`, and `/report`. Compare
+CLS, DOM nodes, main-thread time/TBT, request counts, encoded payloads, and
+compression with the same content and Chrome settings. The scanner uses
+real Chrome and optionally Lighthouse; it does not need PSI or Ollama. Keep
+these variable, browser-dependent scans outside the deterministic
+`make check` gate.
 
 ## Screencast recording (demo videos)
 
