@@ -24,6 +24,12 @@ Run the standard quality gate:
 make check
 ```
 
+Before pushing, one command runs everything locally verifiable —
+`make ready`: `check`, `frontend-check`, the browser `e2e` suite,
+`deps-check` (advisory — lists dependency updates for review), `semgrep`,
+and `vuln-check`. Deterministic checks run first; the network-dependent
+SAST and vulnerability scans run last.
+
 `make check` validates `VERSION`, the README badge, and changelog structure;
 verifies `gofmt`; runs `go vet` and `golangci-lint` (when installed); executes
 tests with the race detector; and builds the CLI. Run individual checks while

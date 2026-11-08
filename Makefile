@@ -97,6 +97,12 @@ install-hooks:
 # Export SONAR_TOKEN (sonarcloud.io account token) to include sonar.
 quality: check frontend-check semgrep vuln-check coverage-ci sonar
 
+# Run this before pushing: the pre-push gate plus the browser e2e suite and
+# the advisory dependency-update list. Everything locally verifiable in one
+# command — deterministic checks first, network-dependent scans last.
+# deps-check prints available updates for review; it does not fail the gate.
+ready: check frontend-check e2e deps-check semgrep vuln-check
+
 # SonarCloud upload via the local `sonar` CLI — reads
 # sonar-project.properties (key, org, host URL, coverage paths).
 # Skipped quietly without SONAR_TOKEN; CI stays the authoritative scan.

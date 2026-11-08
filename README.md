@@ -277,6 +277,7 @@ make check       # version check, gofmt check, go vet, race tests, and build
 make coverage    # package coverage report
 make frontend-check # npm ci plus asset, JS/CSS/HTML lint, and format checks
 make e2e          # real Chrome UI, initial Web Vitals and mobile smoke (opt-in)
+make ready        # all of the above plus deps-check, semgrep, vuln-check (pre-push)
 ```
 
 GitHub Actions runs `make check` and reports coverage on pushes and pull

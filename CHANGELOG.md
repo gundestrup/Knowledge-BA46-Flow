@@ -9,6 +9,16 @@ tag is prepared.
 
 ## [Unreleased]
 
+### Added
+
+- `make ready` runs the complete local pre-push gate in one command:
+  `check`, `frontend-check`, `e2e`, `deps-check` (advisory update list),
+  `semgrep`, and `vuln-check`.
+
+### Changed
+
+- The release procedure now requires `make e2e` before tagging.
+
 ## [0.5.0] - 2026-11-07
 
 ### Added

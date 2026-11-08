@@ -32,8 +32,10 @@ release:
 
 2. Move the included changes from `Unreleased` to a dated
    `## [X.Y.Z] - YYYY-MM-DD` section; leave a fresh `Unreleased` heading above it.
-3. Run `make check`, `make frontend-check`, and
-   `make release-check RELEASE_TAG=vX.Y.Z`.
+3. Run `make check`, `make frontend-check`, `make e2e` (requires local
+   Chrome — it exercises the real UI before you tag), and
+   `make release-check RELEASE_TAG=vX.Y.Z`. `make ready` covers all of
+   them plus `deps-check`, `semgrep`, and `vuln-check`.
 4. Build and inspect `./KBM-flow --version`; verify the Docker image reports the
    same version.
 5. Commit and push the release tree, then create and push the annotated `vX.Y.Z`
