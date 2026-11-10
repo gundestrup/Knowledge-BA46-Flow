@@ -23,9 +23,23 @@ KBM-flow is a Go CLI + local web dashboard with **two functions**:
    [knowledge-base-mcp-server](https://github.com/jeanibarz/knowledge-base-mcp-server):
    scans Markdown notes, proposes LLM-assisted fixes (titles, tags, links,
    stub expansion, freshness), and applies only human-reviewed changes.
+   <picture>
+   <source srcset="docs/assets/demo/review-flow.avif" type="image/avif" />
+   <img
+       src="docs/assets/demo/review-flow.webp"
+       alt="KBM-flow review loop — pending suggestions are accepted or rejected by a person, then apply writes them"
+     />
+   </picture>
 2. **Dev dashboard** for your registered repositories: GitHub/Forgejo PRs
    and CI, Sonar/Semgrep/CodeFactor/Codecov signals, and gem/npm/Node
    dependency drift — read-only.
+   <picture>
+   <source srcset="docs/assets/demo/report-flow.avif" type="image/avif" />
+   <img
+       src="docs/assets/demo/report-flow.webp"
+       alt="KBM-flow repository report — refresh run, fleet summary cards, repositories table, expanded repo detail"
+     />
+   </picture>
 
 Details below; everything links to `docs/` for depth.
 

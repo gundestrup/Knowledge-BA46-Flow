@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>KBM-flow demo</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: system-ui, sans-serif;
+        background: #e9e5d8;
+        color: #18352d;
+        padding: 16px 24px 0;
+      }
+      h1 {
+        font-size: 17px;
+        font-weight: 600;
+      }
+      h1 .em {
+        color: #45719f;
+      }
+      h2 {
+        font-size: 12px;
+        font-weight: 400;
+        color: #68756e;
+        margin: 3px 0 12px;
+      }
+      h2 code {
+        font:
+          11px ui-monospace,
+          "SF Mono",
+          Menlo,
+          monospace;
+        color: #45719f;
+      }
+
+      /* terminal */
+      .term {
+        background: #141a16;
+        border-radius: 8px;
+        border: 1px solid #303933;
+        padding: 12px 16px;
+        font:
+          12px/21px ui-monospace,
+          "SF Mono",
+          Menlo,
+          monospace;
+        color: #e6ece8;
+        box-shadow: 0 8px 24px rgba(24, 53, 45, 0.14);
+        min-height: 430px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .tp {
+        color: #7ba7cc;
+      }
+      .tc {
+        color: #e6ece8;
+      }
+      .to {
+        color: #98a69d;
+      }
+      .tok {
+        color: #7ee0a8;
+      }
+      .terr {
+        color: #e08a7b;
+      }
+      .caret {
+        display: inline-block;
+        width: 7px;
+        height: 14px;
+        background: #aeafad;
+        vertical-align: -2px;
+        animation: blink 1s steps(1) infinite;
+      }
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+
+      .cap {
+        font: 11px/1.5 system-ui;
+        color: #68756e;
+        padding: 8px 2px 0;
+        min-height: 30px;
+      }
+      .cap code {
+        color: #45719f;
+        font:
+          10.5px ui-monospace,
+          "SF Mono",
+          Menlo,
+          monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <h1 id="t"><span class="em">KBM-flow</span> · command line</h1>
+    <h2 id="s">
+      The same loop without the dashboard:
+      <code>scan → tasks → review → apply</code>
+    </h2>
+    <div id="stage"></div>
+    <div class="cap" id="cap"></div>
+    <script>
+      const B = '<span class="tp">$</span> <span class="tc">';
+      const E = "</span>";
+
+      /* The review-flow and report-flow scenes are intentionally NOT mocked here:
+   they are recorded from the real UI by scripts/e2e/screencast-review.mjs
+   and screencast-report-flow.mjs so the demo always matches the shipped
+   dashboards. This page only renders the CLI transcript, which has no web
+   UI to record. */
+
+      const SCENES = {
+        "cli-flow": {
+          title: '<span class="em">KBM-flow</span> · command line',
+          sub: "The same loop without the dashboard: <code>scan → tasks → review → apply</code>",
+          chrome: (inner) => `<div class="term">${inner}</div>`,
+          frames: [
+            {
+              body:
+                B +
+                "KBM-flow scan --config config.local.json" +
+                E +
+                "\n" +
+                '<span class="to">Scanned 128 notes · 4 pending · document_id ok</span>\n' +
+                '<span class="to">0 errors · preflight before every LLM op</span>\n' +
+                '<span class="tp">$</span> <span class="caret"></span>',
+              cap: "<code>scan</code> only indexes — it may insert a missing <code>document_id</code>, never rewrites content",
+            },
+            {
+              body:
+                B +
+                "KBM-flow scan --config config.local.json" +
+                E +
+                "\n" +
+                '<span class="to">Scanned 128 notes · 4 pending · document_id ok</span>\n' +
+                B +
+                "KBM-flow tasks" +
+                E +
+                "\n" +
+                '<span class="to">enrich qwen3:4b → analyze gemma3:12b → embed</span>\n' +
+                '<span class="tok">3 suggestions queued for review</span>\n' +
+                '<span class="tp">$</span> <span class="caret"></span>',
+              cap: "<code>tasks</code> stamps model + prompt lineage — a model change re-queues, never rewrites history",
+            },
+            {
+              body:
+                B +
+                "KBM-flow tasks" +
+                E +
+                "\n" +
+                '<span class="tok">3 suggestions queued for review</span>\n' +
+                B +
+                "KBM-flow accept 7" +
+                E +
+                "\n" +
+                '<span class="to">marked #7 accepted</span>\n' +
+                B +
+                'KBM-flow reject 5 --note "move needs target dir first"' +
+                E +
+                "\n" +
+                '<span class="to">marked #5 rejected</span>\n' +
+                '<span class="tp">$</span> <span class="caret"></span>',
+              cap: "<code>review</code> is interactive (<code>y/n/s/q</code>); <code>accept</code>/<code>reject ID</code> decide one at a time",
+            },
+            {
+              body:
+                B +
+                "KBM-flow accept 7 · KBM-flow reject 5" +
+                E +
+                "\n" +
+                B +
+                "KBM-flow apply" +
+                E +
+                "\n" +
+                '<span class="tok">Applied #7 (expand)</span>\n' +
+                '<span class="tok">Applied #3 (enrich)</span>\n' +
+                '<span class="terr">BLOCKED #9: .kb-policy.json denies mutation</span>\n' +
+                '<span class="tp">$</span> <span class="caret"></span>',
+              cap: "Same <code>/api/apply</code> guards as the web UI — hash re-verify, policy check, <code>os.Root</code>-confined writes",
+            },
+          ],
+        },
+      };
+
+      const q = new URLSearchParams(location.search);
+      const scene = SCENES[q.get("demo")] || SCENES["cli-flow"];
+      const frame = scene.frames[+q.get("step") || 0];
+
+      document.getElementById("t").innerHTML = scene.title;
+      document.getElementById("s").innerHTML = scene.sub;
+      document.getElementById("stage").innerHTML = scene.chrome(frame.body);
+      document.getElementById("cap").innerHTML = frame.cap || "&nbsp;";
+    </script>
+  </body>
+</html>

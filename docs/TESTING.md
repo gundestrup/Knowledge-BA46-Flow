@@ -265,6 +265,33 @@ smoothness), `--crf 35` (AVIF, SVT-AV1 `-preset 4` via `--preset`),
 Benchmarks and the rejected-alternative list are in the engineering-memory
 note `workflows/ui-screencast-animated-formats.md`.
 
+### Demo-loop assets (review / report / cli)
+
+`scripts/docs-demo.sh` produces the `docs/assets/demo/` animations from two
+sources:
+
+- `review-flow` and `report-flow` are recorded from the **real** UI by
+  `scripts/e2e/screencast-review.mjs` and
+  `scripts/e2e/screencast-report-flow.mjs` — the same fixture/CDP stack as
+  the screencasts above, with tighter tours (knowledge → LLM config →
+  suggestions → accept/reject → apply; report → refresh run → repos table →
+  expand row). Their durable frames go through an `mpdecimate` pass
+  (`data/demo-frames/<scene>/`) to drop static stretches before conversion;
+  the mp4 keeps the full take.
+- `cli-flow` is a stylized stepped mock rendered by `docs/assets/demo.html`
+  (`?demo=<scene>&step=<n>` — a terminal transcript has no web UI to
+  record). Headless Chrome screenshots each step into
+  `data/demo-frames/<scene>/` (gitignored).
+
+```bash
+sh scripts/docs-demo.sh   # -> docs/assets/demo/<scene>-flow.{png,apng,webp,avif,svg} + real-UI .mp4
+```
+
+It needs `go` (fixture build), Chrome (`CHROME_BIN`), ffmpeg with
+`libsvtav1`, `img2webp`, and `webpinfo` — no server, database, or Ollama.
+The mock scenes are hardcoded in the `SCENES` map in `demo.html`; keep every
+scene at four steps or adjust `steps=` in the script.
+
 The e2e suite is not part of `make check`: it needs a system browser and a
 longer runtime. Run it after frontend changes, and in particular after any
 edit to Alpine expressions or component methods.

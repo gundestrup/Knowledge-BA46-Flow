@@ -14,6 +14,14 @@ tag is prepared.
 - `make ready` runs the complete local pre-push gate in one command:
   `check`, `frontend-check`, `e2e`, `deps-check` (advisory update list),
   `semgrep`, and `vuln-check`.
+- `docs/assets/demo/` animations: `review-flow` and `report-flow` are
+  recorded from the real `/knowledge` and `/report` UIs by
+  `scripts/e2e/screencast-review.mjs` and `screencast-report-flow.mjs`
+  (fixture corpus, headless Chrome, `mpdecimate`-deduped loop); `cli-flow`
+  is a stepped mock rendered by `docs/assets/demo.html`.
+  `scripts/docs-demo.sh` regenerates all of them (poster PNG, mp4 for the
+  real-UI takes, plus APNG/WebP/AVIF/SVG) — both loop WebPs are embedded in
+  the README.
 
 ### Changed
 
