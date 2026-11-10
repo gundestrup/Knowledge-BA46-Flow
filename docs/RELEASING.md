@@ -5,9 +5,9 @@
 - Release versions use the SemVer 2.0.0 `MAJOR.MINOR.PATCH` core format;
   Git tags use the conventional `v` prefix. The checker rejects leading zeroes.
 - The current tooling intentionally does not accept SemVer pre-release
-  identifiers (`-alpha.1`) or build metadata (`+build.1`). The planned `0.1.0`
-  alpha is a valid SemVer version; mark the GitHub Release as a pre-release and
-  include the alpha warning in its notes.
+  identifiers (`-alpha.1`) or build metadata (`+build.1`). The `0.x` beta
+  releases are ordinary SemVer versions published as regular GitHub
+  Releases; keep the BETA notice in the release notes.
 - SemVer defines `0.y.z` as initial development: the public API is not stable
   and may change. `0.1.0` does not imply production readiness.
 - `VERSION` is the single source of truth for the CLI and Docker image version.
@@ -50,10 +50,9 @@ GitHub release with binaries attached — or `--clobber`s onto an existing
 release on re-runs. Add GoReleaser or an image-publishing workflow only
 when you decide to distribute release artifacts.
 
-The initial `VERSION` is `0.1.0`; the repository currently has no release tags.
-When it is ready, publish the first GitHub Release as a pre-release and begin
-the release notes with **ALPHA — NOT FOR PRODUCTION**. The project is still
-under local testing; do not publish a GHCR image until that testing is complete.
+Release tags exist from `v0.1.0` onward; the project is in beta and release
+notes should begin with **BETA**, matching the README notice. Do not
+publish a GHCR image until beta testing is complete.
 If container distribution is later wanted, publish to GHCR from a validated
 release tag (for example, `ghcr.io/gundestrup/knowledge-ba46-flow:v0.1.0`).
 The current CI only builds and smoke-tests Docker images; it does not publish.

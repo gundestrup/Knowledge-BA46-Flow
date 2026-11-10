@@ -9,6 +9,8 @@ tag is prepared.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-10
+
 ### Added
 
 - `make ready` runs the complete local pre-push gate in one command:
@@ -26,6 +28,9 @@ tag is prepared.
 ### Changed
 
 - The release procedure now requires `make e2e` before tagging.
+- Project status moved from **ALPHA** to **BETA**; the README notice and
+  the release docs reflect that release tags `v0.1.0`–`v0.5.0` exist and
+  GHCR image publishing stays gated on completed beta testing.
 
 ## [0.5.0] - 2026-11-07
 
