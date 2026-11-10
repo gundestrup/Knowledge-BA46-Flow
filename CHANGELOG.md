@@ -9,6 +9,13 @@ tag is prepared.
 
 ## [Unreleased]
 
+### Changed
+
+- Dependency updates: `modernc.org/sqlite` 1.62.0, `spf13/pflag` 1.1.0,
+  `golang.org/x/sync` 0.25.0, `golang.org/x/text` 0.44.0,
+  `@biomejs/biome` 2.6.4 (with matching `$schema` pointer), and the Node
+  development pin to 26.13.0.
+
 ## [0.5.1] - 2026-11-10
 
 ### Added
