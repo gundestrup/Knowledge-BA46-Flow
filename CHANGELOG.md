@@ -16,6 +16,12 @@ tag is prepared.
   query path. Body links are still indexed for link repair, but adding a
   catalog/README table row no longer requeues its link targets for
   analysis — index edits no longer fan out into per-target re-analysis.
+- Evidence records from the older fm+body inbound contract self-heal:
+  when the sweep's only inbound delta is recorded linkers that still
+  resolve through body edges (provably navigational, never graph links),
+  the record is restamped in place instead of requeueing the document for
+  analysis. Unprovable removals (no remaining edge) still queue, since
+  they could be real deleted `related` edges.
 
 ### Fixed
 

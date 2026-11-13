@@ -1,9 +1,15 @@
 # TODO — Smarter evidence dependents (stop re-analyzing the corpus on index edits)
 
-Status: Phase 0 + Phase A implemented on branch `smarter-evidence-dependents`
-(marker rows for unindexable sources; inbound evidence = frontmatter graph
-edges only on both query paths). Phases B/C (tiered sweep, apply-originated
-edge handling, separate dependent counts) remain.
+Status: Phase 0 + Phase A + bookkeeping restamp implemented on branch
+`smarter-evidence-dependents`: marker rows for unindexable sources; inbound
+evidence = frontmatter graph edges only on both query paths; and the sweep
+now restamps (not re-analyzes) records whose only inbound delta is sources
+still resolving through body edges — the self-healing migration for old
+fm+body records. Verified on a copy of production state: queue 207 → 170,
+inbound mismatches 55 → 14 (remaining = genuine fm-edge additions).
+Remaining: apply-originated edge tier (option 4), separate dependent counts
+in UI (Phase C), and evaluating whether bounded projection arms
+(~16 neighbors/changed doc) merit a cheaper refresh tier.
 
 ## 1. The observed problem
 

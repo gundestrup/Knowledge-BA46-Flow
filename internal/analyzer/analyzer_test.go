@@ -1647,6 +1647,83 @@ func TestLegacyEvidenceRecoversNewInboundLinkAndRestamps(t *testing.T) {
 	}
 }
 
+func TestRecordedBodyLinkerInboundRestampsWithoutAnalysis(t *testing.T) {
+	c, db := setup(t)
+	writeDoc(t, c.RepositoryPath, "target.md", "# Target\n\nNotes on harbor seal colonies.\n")
+	writeDoc(t, c.RepositoryPath, "catalog.md", "# Catalog\n\nIndex: [Target](target.md).\n")
+	writeDoc(t, c.RepositoryPath, "ghost-target.md", "# Ghost target\n\nNotes on tidal gauges.\n")
+	writeDoc(t, c.RepositoryPath, "other.md", "# Other\n\nQuiet note about moss gardens.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	firstModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: firstModel}, RunOptions{}); err != nil {
+		t.Fatalf("initial analysis error=%v", err)
+	}
+	// Simulate records written under the old fm+body inbound contract:
+	// target.md recorded the catalog's body link, ghost-target.md recorded a
+	// source that no longer links at all.
+	injectInbound := func(path string, sources ...string) {
+		var raw string
+		if err := db.QueryRow(`SELECT analysis_evidence_json FROM documents WHERE path=?`, path).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(raw), &ev); err != nil {
+			t.Fatal(err)
+		}
+		items := make([]any, 0, len(sources))
+		for _, s := range sources {
+			items = append(items, s)
+		}
+		ev["inbound"] = items
+		encoded, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`UPDATE documents SET analysis_evidence_json=? WHERE path=?`, string(encoded), path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	injectInbound("target.md", "catalog.md")
+	injectInbound("ghost-target.md", "ghost.md")
+	// A changed seed so the sweep re-evaluates recorded evidence.
+	writeDoc(t, c.RepositoryPath, "other.md", "# Other\n\nQuiet note about moss gardens and lichen.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	secondModel := &fakeLLM{reply: firstModel.reply}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: secondModel}, RunOptions{}); err != nil {
+		t.Fatalf("run error=%v", err)
+	}
+	processed := map[string]bool{}
+	for _, prompt := range secondModel.prompts {
+		for _, line := range strings.Split(prompt, "\n") {
+			if strings.HasPrefix(line, "Current path: ") {
+				processed[strings.TrimPrefix(line, "Current path: ")] = true
+				break
+			}
+		}
+	}
+	// The catalog residue is provably navigational (a body edge still exists):
+	// restamped, not queued. The ghost removal is unprovable — it could have
+	// been a deleted `related` edge — so it stays on the analysis path.
+	if processed["target.md"] {
+		t.Fatalf("body-only recorded inbound should restamp, not re-analyze: %v", processed)
+	}
+	if !processed["ghost-target.md"] || !processed["other.md"] {
+		t.Fatalf("expected ghost-target + changed doc processed, got %v", processed)
+	}
+	var raw string
+	if err := db.QueryRow(`SELECT analysis_evidence_json FROM documents WHERE path='target.md'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	ev, ok := parseAnalysisEvidenceRecord(raw)
+	if !ok || slices.Contains(ev.Inbound, "catalog.md") {
+		t.Fatalf("bookkeeping inbound not restamped: %q", raw)
+	}
+}
+
 func TestLegacyEvidenceRemovalStillRefreshesConsumer(t *testing.T) {
 	c, db := setup(t)
 	writeDoc(t, c.RepositoryPath, "consumer.md", "# Consumer\n\nNotes on tidal gauges.\n")

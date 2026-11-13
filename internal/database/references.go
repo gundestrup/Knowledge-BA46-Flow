@@ -203,7 +203,11 @@ ON CONFLICT(source_path) DO UPDATE SET source_sha256=excluded.source_sha256`, so
 	return tx.Commit()
 }
 
-func (d *DB) IndexedInboundLinks(ctx context.Context, path string) ([]string, bool, error) {
+// indexedInboundSources returns documents with indexed edges of the given
+// kinds resolving to path. The readiness check is corpus-wide: one unindexed
+// source makes the answer incomplete, so callers get ready=false rather than
+// a partial result.
+func (d *DB) indexedInboundSources(ctx context.Context, path string, kinds []string) ([]string, bool, error) {
 	var incomplete int
 	err := d.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM documents d WHERE d.status<>'missing'
 AND NOT EXISTS(SELECT 1 FROM reference_versions v WHERE v.source_path=d.path AND v.source_sha256=d.sha256))`).Scan(&incomplete)
@@ -218,18 +222,13 @@ AND NOT EXISTS(SELECT 1 FROM reference_versions v WHERE v.source_path=d.path AND
 	if id != "" && !d.uniqueIdentityAt(ctx, path, id) {
 		return nil, true, fmt.Errorf("ambiguous document_id for %s", path)
 	}
-	// Only frontmatter graph edges count as inbound evidence. Body links are
-	// indexed for link repair, but a catalog/README table row is navigational:
-	// letting it join the inbound set would make every index edit requeue its
-	// link targets for full analysis. This also keeps the indexed path
-	// identical in kind to the frontmatter fallback in InboundLinks.
-	kinds := make([]any, 0, len(frontmatter.GraphLinkKeys))
-	placeholders := make([]string, 0, len(frontmatter.GraphLinkKeys))
-	for _, kind := range frontmatter.GraphLinkKeys {
-		kinds = append(kinds, kind)
+	kindArgs := make([]any, 0, len(kinds))
+	placeholders := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		kindArgs = append(kindArgs, kind)
 		placeholders = append(placeholders, "?")
 	}
-	args := append([]any{path, path, id, id}, kinds...)
+	args := append([]any{path, path, id, id}, kindArgs...)
 	rows, err := d.QueryContext(ctx, `SELECT DISTINCT r.source_path FROM document_references r
 JOIN documents d ON d.path=r.source_path AND d.sha256=r.source_sha256 AND d.status<>'missing'
 WHERE r.source_path<>? AND (r.target_path=? OR (?<>'' AND r.target_document_id=?))
@@ -247,4 +246,22 @@ AND r.kind IN (`+strings.Join(placeholders, ",")+`) ORDER BY r.source_path`, arg
 		out = append(out, source)
 	}
 	return out, true, rows.Err()
+}
+
+// IndexedInboundLinks returns the frontmatter graph linkers to path — the
+// inbound evidence contract. Only frontmatter edges (GraphLinkKeys) count:
+// body links are indexed for link repair, but a catalog/README table row is
+// navigational, and letting it join the inbound set would make every index
+// edit requeue its link targets for full analysis. This also keeps the
+// indexed path identical in kind to the frontmatter fallback in InboundLinks.
+func (d *DB) IndexedInboundLinks(ctx context.Context, path string) ([]string, bool, error) {
+	return d.indexedInboundSources(ctx, path, frontmatter.GraphLinkKeys)
+}
+
+// BodyInboundSources returns documents whose indexed body links resolve to
+// path. Body edges are navigational — kept for repair but excluded from
+// inbound evidence — so this exists to prove that a recorded inbound entry
+// was bookkeeping, never to widen the evidence contract.
+func (d *DB) BodyInboundSources(ctx context.Context, path string) ([]string, bool, error) {
+	return d.indexedInboundSources(ctx, path, []string{"body"})
 }

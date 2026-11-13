@@ -332,7 +332,10 @@ each evidence level. Inbound paths count only frontmatter graph edges
 are navigational, so catalog/index table edits never requeue their link
 targets. Inbound paths are compared as sets: a title edit to a
 source that still links here does not refresh the target, but an added or
-removed link refreshes only the target whose inbound context changed. Local
+removed link refreshes only the target whose inbound context changed.
+Recorded entries left over from an earlier fm+body contract are migrated
+lazily: a dropped linker that still resolves through a body edge is
+provably bookkeeping, so the record is restamped rather than re-analyzed. Local
 and external analyses maintain independent evidence records and frontmatter
 stamps. A catalog/index edit does not propagate solely because notes link to
 the index; Catalog backlinks are not treated as entity-body evidence.

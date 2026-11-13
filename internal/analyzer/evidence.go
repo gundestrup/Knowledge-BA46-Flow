@@ -377,7 +377,7 @@ func (p *pipeline) isEvidenceDependent(doc *database.Document, seeds *sweepSeeds
 		return false, "", true, nil
 	}
 	if exactEvidence {
-		contextChanged, detail, err := p.recordedContextChanged(doc, fm, content, ev)
+		contextChanged, detail, bookkeepingOnly, err := p.recordedContextChanged(doc, fm, content, ev)
 		if err != nil {
 			return false, "", false, err
 		}
@@ -391,6 +391,9 @@ func (p *pipeline) isEvidenceDependent(doc *database.Document, seeds *sweepSeeds
 		}
 		if hit, detail := p.dependsOnChangedEvidence(*doc, fm, content, seeds.changed, seeds.changedNewFm, seeds.related); hit {
 			return true, detail, false, nil
+		}
+		if err := p.restampBookkeepingOnly(doc, bookkeepingOnly, seeds); err != nil {
+			return false, "", false, err
 		}
 		return false, "", false, nil
 	}
@@ -434,18 +437,34 @@ func (p *pipeline) legacyInboundAdded(path string, oldEvidence map[string]bool) 
 	return "", nil
 }
 
-func (p *pipeline) recordedContextChanged(doc *database.Document, fm map[string]any, content string, ev analysisEvidence) (bool, string, error) {
+func (p *pipeline) recordedContextChanged(doc *database.Document, fm map[string]any, content string, ev analysisEvidence) (changed bool, detail string, bookkeepingOnly bool, err error) {
 	inbound, err := p.llmVisibleInbound(doc.Path)
 	if err != nil {
-		return false, "", err
+		return false, "", false, err
 	}
 	if !equalStrings(ev.Inbound, inbound) {
-		return true, "inbound links changed (+" + strings.Join(minusStrings(inbound, ev.Inbound), ",") +
-			" -" + strings.Join(minusStrings(ev.Inbound, inbound), ",") + ")", nil
+		// A recorded inbound entry that still exists only as a body link was
+		// navigational bookkeeping under an older evidence contract — never a
+		// graph edge. That delta is provably non-semantic: restamp instead of
+		// paying a full analysis (self-healing migration for old records).
+		removed := minusStrings(ev.Inbound, inbound)
+		if added := minusStrings(inbound, ev.Inbound); len(added) == 0 {
+			bodyOnly, err := p.inboundRemovalsAreBodyLinks(doc.Path, removed)
+			if err != nil {
+				return false, "", false, err
+			}
+			if bodyOnly {
+				bookkeepingOnly = true
+			}
+		}
+		if !bookkeepingOnly {
+			return true, "inbound links changed (+" + strings.Join(minusStrings(inbound, ev.Inbound), ",") +
+				" -" + strings.Join(minusStrings(ev.Inbound, inbound), ",") + ")", false, nil
+		}
 	}
 	siblings, err := scanner.SiblingFiles(p.c, doc.Path)
 	if err != nil {
-		return false, "", err
+		return false, "", false, err
 	}
 	// Only a recorded sibling disappearing is provable context loss (deleted,
 	// renamed, or now-mentioned). A newly added sibling is merely a candidate
@@ -456,13 +475,58 @@ func (p *pipeline) recordedContextChanged(doc *database.Document, fm map[string]
 	rendered := stringSet(siblingPaths)
 	for _, s := range ev.Siblings {
 		if !rendered[s] {
-			return true, "sibling removed: " + s, nil
+			return true, "sibling removed: " + s, false, nil
 		}
 	}
 	if ev.ValidationContext != frontmatterContext(*doc, fm, p.knownDocs) {
-		return true, "validation context changed", nil
+		return true, "validation context changed", false, nil
 	}
-	return false, "", nil
+	return false, "", bookkeepingOnly, nil
+}
+
+// restampBookkeepingOnly rebuilds the evidence record when the sweep's only
+// context delta was bookkeeping residue — a self-healing migration for
+// records written under an older inbound contract, so the noise cannot
+// requeue the document on every later sweep. Estimates preview the same
+// verdict without writing.
+func (p *pipeline) restampBookkeepingOnly(doc *database.Document, bookkeepingOnly bool, seeds *sweepSeeds) error {
+	if !bookkeepingOnly {
+		return nil
+	}
+	fresh, err := p.restampDoc(*doc)
+	if err != nil {
+		return err
+	}
+	if fresh != "" && seeds.acknowledgeRemovals {
+		return p.db.RestampEvidence(p.ctx, doc.Path, p.external, fresh, p.removalGeneration)
+	}
+	return nil
+}
+
+// inboundRemovalsAreBodyLinks reports whether every recorded inbound source
+// dropped from the current set still resolves to target through a body edge —
+// proof the recorded entries were catalog/navigational, not graph links. An
+// incomplete index or any source with no remaining edge fails conservative:
+// an unprovable removal could be a real deleted `related` edge and must stay
+// on the analysis path.
+func (p *pipeline) inboundRemovalsAreBodyLinks(target string, removed []string) (bool, error) {
+	if len(removed) == 0 {
+		return false, nil
+	}
+	bodySources, ready, err := p.db.BodyInboundSources(p.ctx, target)
+	if err != nil {
+		return false, err
+	}
+	if !ready {
+		return false, nil
+	}
+	body := stringSet(bodySources)
+	for _, source := range removed {
+		if !body[source] {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func equalStrings(a, b []string) bool {
