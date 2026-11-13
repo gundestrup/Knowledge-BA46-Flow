@@ -1,15 +1,17 @@
 # TODO — Smarter evidence dependents (stop re-analyzing the corpus on index edits)
 
-Status: Phase 0 + Phase A + bookkeeping restamp implemented on branch
-`smarter-evidence-dependents`: marker rows for unindexable sources; inbound
-evidence = frontmatter graph edges only on both query paths; and the sweep
-now restamps (not re-analyzes) records whose only inbound delta is sources
-still resolving through body edges — the self-healing migration for old
-fm+body records. Verified on a copy of production state: queue 207 → 170,
-inbound mismatches 55 → 14 (remaining = genuine fm-edge additions).
-Remaining: apply-originated edge tier (option 4), separate dependent counts
-in UI (Phase C), and evaluating whether bounded projection arms
-(~16 neighbors/changed doc) merit a cheaper refresh tier.
+Status: Phase 0 + Phase A + bookkeeping restamp + catalog exclusion +
+apply-originated edge tier + Phase C dependent-cause breakdown implemented
+on branch `smarter-evidence-dependents` (schema v18: additive `applied_edges`
+table, analysis state preserved). Verified on a copy of production state:
+queue 207 → 170 (bookkeeping restamp) → **128** (catalog exclusion).
+Remaining dependents are almost entirely semantic projection: 73 entity
+source changed (one new bash note anchors entities mentioned in ~73 docs),
+15 embedding neighbors, 16 consumed evidence, 14 genuine fm-edge additions,
+~8 direct. Remaining candidates for later: entity-source fan-out is the
+largest unbounded arm (one changed source → all its mention consumers);
+consider whether it merits a per-source cap or a cheaper refresh tier like
+the bounded embedding arm.
 
 ## 1. The observed problem
 

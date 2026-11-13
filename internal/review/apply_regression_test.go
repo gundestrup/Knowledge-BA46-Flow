@@ -41,6 +41,30 @@ func applyFixture(t *testing.T, original string, suggestions []database.Suggesti
 	return c, db, rows
 }
 
+func TestApplyRecordsAppliedGraphEdges(t *testing.T) {
+	c, db, rows := applyFixture(t, "# Note\n", []database.Suggestion{{
+		Action: "expand", ProposedContent: "---\nrelated: [other.md]\n---\n# Note\n",
+	}})
+	if err := os.WriteFile(filepath.Join(c.RepositoryPath, "other.md"), []byte("# Other\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := DecideCurrent(t.Context(), c, db, strconv.FormatInt(rows[0].ID, 10), "accepted", ""); err != nil {
+		t.Fatal(err)
+	}
+	results, err := Apply(t.Context(), c, db)
+	if err != nil || len(results) != 1 || !results[0].Applied {
+		t.Fatalf("results=%+v err=%v", results, err)
+	}
+	ok, err := db.AppliedGraphEdgeExists(t.Context(), "note.md", "other.md")
+	if err != nil || !ok {
+		t.Fatalf("applied edge provenance missing ok=%v err=%v", ok, err)
+	}
+	ok, err = db.AppliedGraphEdgeExists(t.Context(), "note.md", "unrelated.md")
+	if err != nil || ok {
+		t.Fatalf("phantom edge provenance ok=%v err=%v", ok, err)
+	}
+}
+
 func TestApplyPreservesLatestManagedMetadata(t *testing.T) {
 	for _, operational := range []string{"", "kbm: {freshness: {verdict: stale}}\n", "kbm: {injected: true}\n"} {
 		t.Run(operational, func(t *testing.T) {

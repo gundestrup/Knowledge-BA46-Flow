@@ -22,6 +22,24 @@ tag is prepared.
   the record is restamped in place instead of requeueing the document for
   analysis. Unprovable removals (no remaining edge) still queue, since
   they could be real deleted `related` edges.
+- High out-degree catalog/index pages (15+ outbound references) are no
+  longer ranked as merge/relation candidates: a link table is never a
+  merge target, and shared catalog-backlink boilerplate only inflated
+  their shingle overlap. Catalogs are excluded from the candidate list,
+  merge-body context, and recorded evidence, so catalog table edits stop
+  fanning out into consumer re-analysis. Older records that consumed a
+  catalog body are restamped in place (catalog-only consumed drift is
+  provably bookkeeping).
+- Inbound graph edges added by an accepted/applied suggestion no longer
+  requeue the link target: the apply path records edge provenance in the
+  new `applied_edges` table (schema v18, additive migration preserving
+  all analysis state), and the sweep restamps the target's evidence
+  instead of paying a full analysis for a link decision a human already
+  reviewed. Authored edge additions without provenance still queue.
+- Run summaries now break dependents down by cause, e.g.
+  `queue 8 direct + 120 dependents (73 entity source changed, 15
+embedding neighbor changed, ...)`, so queue anomalies are diagnosable
+  from job detail instead of a database excavation.
 
 ### Fixed
 

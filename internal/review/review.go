@@ -246,6 +246,9 @@ func applySuggestion(ctx context.Context, c config.Config, db *database.DB, s da
 		}
 		return r
 	}
+	// Snapshot the declared graph edges before the write so provenance can be
+	// recorded for any edges this reviewed suggestion adds.
+	beforeEdges := graphEdgesByKind(readRepoDoc(c, s.DocumentPath))
 	var applyErr error
 	if s.Origin == "identity" {
 		applyErr = validateForReview(ctx, c, db, s)
@@ -273,7 +276,61 @@ func applySuggestion(ctx context.Context, c config.Config, db *database.DB, s da
 	if err := db.MarkAppliedAndSupersede(ctx, s, currentHash); err != nil {
 		r.Error = "applied on disk but could not be marked in database: " + err.Error()
 	}
+	if err := recordAppliedGraphEdges(ctx, c, db, s.DocumentPath, beforeEdges); err != nil && r.Error == "" {
+		r.Error = "applied on disk but could not record edge provenance: " + err.Error()
+	}
 	return r
+}
+
+// readRepoDoc returns a repository document's raw content, "" when unreadable.
+func readRepoDoc(c config.Config, rel string) string {
+	content, err := scanner.ReadDocument(c, rel)
+	if err != nil {
+		return ""
+	}
+	return content
+}
+
+// graphEdgesByKind returns the declared graph targets of a document grouped
+// by edge kind — the before/after basis for applied-edge provenance.
+func graphEdgesByKind(content string) map[string]map[string]bool {
+	fields, _, err := frontmatter.Parse(content)
+	if err != nil || fields == nil {
+		return nil
+	}
+	out := map[string]map[string]bool{}
+	for _, kind := range frontmatter.GraphLinkKeys {
+		for _, target := range frontmatter.StringList(fields, kind) {
+			t := filepath.ToSlash(strings.TrimSpace(target))
+			if t == "" {
+				continue
+			}
+			if out[kind] == nil {
+				out[kind] = map[string]bool{}
+			}
+			out[kind][t] = true
+		}
+	}
+	return out
+}
+
+// recordAppliedGraphEdges persists the graph edges an apply added to docPath.
+// Bookkeeping only: a failure here means the dependents sweep may pay one
+// extra analysis, never a wrong write, so apply itself never fails on it.
+func recordAppliedGraphEdges(ctx context.Context, c config.Config, db *database.DB, docPath string, before map[string]map[string]bool) error {
+	after := graphEdgesByKind(readRepoDoc(c, docPath))
+	added := map[string][]string{}
+	for kind, targets := range after {
+		for target := range targets {
+			if !before[kind][target] {
+				added[kind] = append(added[kind], target)
+			}
+		}
+	}
+	if len(added) == 0 {
+		return nil
+	}
+	return db.RecordAppliedEdges(ctx, docPath, added)
 }
 
 // markApplyFailed records err for the suggestion and returns the message to

@@ -1371,6 +1371,48 @@ func TestMigrationAddsFreshnessVerifyPromptStamp(t *testing.T) {
 	}
 }
 
+func TestMigrationV17PreservesAnalysisStateAndAddsAppliedEdges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	doc := Document{Path: "a.md", SHA256: "deadbeef", Size: 10, TagsJSON: "[]"}
+	_, err = db.UpsertScanned(t.Context(), doc, "scan")
+	require.NoError(t, err)
+	_, err = db.Exec(`UPDATE documents SET analysis_evidence_json='{"inbound":["x.md"]}', analyzed_sha256='deadbeef' WHERE path='a.md'`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	raw, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	if _, err := raw.Exec(`DROP TABLE applied_edges`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`PRAGMA user_version=17`); err != nil {
+		t.Fatal(err)
+	}
+	require.NoError(t, raw.Close())
+
+	db, err = Open(t.Context(), path)
+	require.NoError(t, err)
+	defer db.Close()
+	var evidence, analyzed string
+	require.NoError(t, db.QueryRow(`SELECT analysis_evidence_json, analyzed_sha256 FROM documents WHERE path='a.md'`).Scan(&evidence, &analyzed))
+	if evidence != `{"inbound":["x.md"]}` || analyzed != "deadbeef" {
+		t.Fatalf("migration disturbed analysis state evidence=%q analyzed=%q", evidence, analyzed)
+	}
+	var stamped int
+	require.NoError(t, db.QueryRow(`PRAGMA user_version`).Scan(&stamped))
+	if stamped != schemaVersion {
+		t.Fatalf("user_version=%d want %d", stamped, schemaVersion)
+	}
+	// The recreated table is usable immediately.
+	require.NoError(t, db.RecordAppliedEdges(t.Context(), "a.md", map[string][]string{"related": {"b.md"}}))
+	ok, err := db.AppliedGraphEdgeExists(t.Context(), "a.md", "b.md")
+	require.NoError(t, err)
+	if !ok {
+		t.Fatal("applied_edges row not queryable after migration")
+	}
+}
+
 func TestMigrationV16RestoresEvidenceColumns(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	db, err := Open(t.Context(), path)

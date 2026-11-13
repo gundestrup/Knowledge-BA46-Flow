@@ -240,8 +240,21 @@ func (p *pipeline) sweepDocument(doc database.Document, seeds *sweepSeeds) (bool
 		return false, p.acknowledgeRemoval(doc.Path, seenGeneration, seeds.acknowledgeRemovals)
 	}
 	p.emit(Progress{Path: doc.Path, Outcome: "dependent", Detail: detail})
+	if p.depReasons == nil {
+		p.depReasons = map[string]int{}
+	}
+	p.depReasons[dependentCategory(detail)]++
 	p.forceAnalysis[doc.Path] = true
 	return !seeds.directPaths[doc.Path], nil
+}
+
+// dependentCategory reduces a sweep reason to its cause class so run summaries
+// can show why the queue grew, not just that it did.
+func dependentCategory(detail string) string {
+	if i := strings.IndexAny(detail, ":("); i > 0 {
+		return strings.TrimSpace(detail[:i])
+	}
+	return detail
 }
 
 func (p *pipeline) acknowledgeRemoval(path string, seenGeneration int64, acknowledge bool) error {
@@ -342,31 +355,24 @@ func recordedEvidenceLost(fmEv, fullEv map[string]bool, seeds *sweepSeeds, seenG
 // queue attribution ("why was this doc re-analyzed"). Displayed candidates
 // (Fm) are not dependencies: they invalidate only on structural loss.
 func (p *pipeline) isEvidenceDependent(doc *database.Document, seeds *sweepSeeds) (dep bool, detail string, skip bool, err error) {
-	ev, recorded := parseAnalysisEvidenceRecord(p.laneEvidenceJSON(*doc))
-	if !recorded && p.laneSHA(*doc) != "" {
-		// Never restamped: reconstruct exactly instead of taking the
-		// conservative heuristic sweep. Real runs persist the record;
-		// estimates only preview the same evaluation.
-		fresh, err := p.restampDoc(*doc)
-		if err != nil {
-			return false, "", false, err
-		}
-		if fresh != "" {
-			ev, _ = parseAnalysisEvidenceRecord(fresh)
-			recorded = true
-			if seeds.acknowledgeRemovals {
-				if err := p.db.RestampEvidence(p.ctx, doc.Path, p.external, fresh, p.removalGeneration); err != nil {
-					return false, "", false, err
-				}
-			}
-		}
+	ev, recorded, err := p.evidenceRecord(doc, seeds)
+	if err != nil {
+		return false, "", false, err
 	}
 	fmEv := stringSet(ev.Fm)
 	fullEv := stringSet(ev.Full)
 	seenGeneration := p.laneRemovalGeneration(*doc)
 	exactEvidence := recorded && ev.Version >= 2
+	bookkeepingOnly := false
 	if detail := recordedEvidenceLost(fmEv, fullEv, seeds, seenGeneration, exactEvidence, recorded); detail != "" {
-		return true, detail, false, nil
+		// A changed catalog/index body recorded as consumed merge evidence is
+		// bookkeeping residue — catalogs are never merge targets, and their
+		// recorded presence came from shared backlink boilerplate inflating
+		// the shingle overlap. Restamp instead of paying a full analysis.
+		if !exactEvidence || !p.catalogOnlyConsumedDrift(detail, fullEv, seeds) {
+			return true, detail, false, nil
+		}
+		bookkeepingOnly = true
 	}
 	content, err := scanner.ReadDocument(p.c, doc.Path)
 	if err != nil {
@@ -377,13 +383,14 @@ func (p *pipeline) isEvidenceDependent(doc *database.Document, seeds *sweepSeeds
 		return false, "", true, nil
 	}
 	if exactEvidence {
-		contextChanged, detail, bookkeepingOnly, err := p.recordedContextChanged(doc, fm, content, ev)
+		contextChanged, detail, inboundBookkeeping, err := p.recordedContextChanged(doc, fm, content, ev)
 		if err != nil {
 			return false, "", false, err
 		}
 		if contextChanged {
 			return true, detail, false, nil
 		}
+		bookkeepingOnly = bookkeepingOnly || inboundBookkeeping
 		// New seeds and semantic projections model evidence the prompt would
 		// newly cite; persisted evidence cannot contain it yet.
 		if seeds.inboundNew[doc.Path] {
@@ -424,6 +431,34 @@ func (p *pipeline) isEvidenceDependent(doc *database.Document, seeds *sweepSeeds
 	return false, "", false, nil
 }
 
+// evidenceRecord returns the stored analysis evidence for doc, reconstructing
+// and persisting an exact record for analyzed docs that predate evidence
+// recording. Estimates evaluate the same reconstruction without writing.
+func (p *pipeline) evidenceRecord(doc *database.Document, seeds *sweepSeeds) (analysisEvidence, bool, error) {
+	ev, recorded := parseAnalysisEvidenceRecord(p.laneEvidenceJSON(*doc))
+	if recorded || p.laneSHA(*doc) == "" {
+		return ev, recorded, nil
+	}
+	fresh, err := p.restampDoc(*doc)
+	if err != nil || fresh == "" {
+		return ev, false, err
+	}
+	ev, _ = parseAnalysisEvidenceRecord(fresh)
+	if seeds.acknowledgeRemovals {
+		if err := p.db.RestampEvidence(p.ctx, doc.Path, p.external, fresh, p.removalGeneration); err != nil {
+			return ev, true, err
+		}
+	}
+	return ev, true, nil
+}
+
+// catalogOnlyConsumedDrift reports whether the recorded-loss detail is a
+// consumed-evidence change whose every changed path is a catalog/index page.
+func (p *pipeline) catalogOnlyConsumedDrift(detail string, fullEv map[string]bool, seeds *sweepSeeds) bool {
+	hit := firstHit(fullEv, seeds.changed)
+	return hit != "" && detail == "consumed evidence changed: "+hit && p.onlyCatalogs(fullEv, seeds.changed)
+}
+
 func (p *pipeline) legacyInboundAdded(path string, oldEvidence map[string]bool) (string, error) {
 	inbound, err := p.llmVisibleInbound(path)
 	if err != nil {
@@ -445,21 +480,29 @@ func (p *pipeline) recordedContextChanged(doc *database.Document, fm map[string]
 	if !equalStrings(ev.Inbound, inbound) {
 		// A recorded inbound entry that still exists only as a body link was
 		// navigational bookkeeping under an older evidence contract — never a
-		// graph edge. That delta is provably non-semantic: restamp instead of
-		// paying a full analysis (self-healing migration for old records).
+		// graph edge. A newly added inbound edge recorded in applied_edges is
+		// a reviewed human link decision. Both are provably non-semantic
+		// deltas: restamp instead of paying a full analysis (self-healing
+		// migration for old records, and no echo of our own applied edits).
+		added := minusStrings(inbound, ev.Inbound)
 		removed := minusStrings(ev.Inbound, inbound)
-		if added := minusStrings(inbound, ev.Inbound); len(added) == 0 {
+		switch {
+		case len(added) > 0 && len(removed) == 0:
+			reviewed, err := p.inboundAdditionsAreAppliedEdges(doc.Path, added)
+			if err != nil {
+				return false, "", false, err
+			}
+			bookkeepingOnly = reviewed
+		case len(added) == 0:
 			bodyOnly, err := p.inboundRemovalsAreBodyLinks(doc.Path, removed)
 			if err != nil {
 				return false, "", false, err
 			}
-			if bodyOnly {
-				bookkeepingOnly = true
-			}
+			bookkeepingOnly = bodyOnly
 		}
 		if !bookkeepingOnly {
-			return true, "inbound links changed (+" + strings.Join(minusStrings(inbound, ev.Inbound), ",") +
-				" -" + strings.Join(minusStrings(ev.Inbound, inbound), ",") + ")", false, nil
+			return true, "inbound links changed (+" + strings.Join(added, ",") +
+				" -" + strings.Join(removed, ",") + ")", false, nil
 		}
 	}
 	siblings, err := scanner.SiblingFiles(p.c, doc.Path)
@@ -501,6 +544,34 @@ func (p *pipeline) restampBookkeepingOnly(doc *database.Document, bookkeepingOnl
 		return p.db.RestampEvidence(p.ctx, doc.Path, p.external, fresh, p.removalGeneration)
 	}
 	return nil
+}
+
+// onlyCatalogs reports whether every changed document recorded in ev is a
+// catalog/index page — bookkeeping consumption, never merge evidence.
+func (p *pipeline) onlyCatalogs(ev map[string]bool, changed map[string]bool) bool {
+	for path := range ev {
+		if changed[path] && !p.catalogDocs[path] {
+			return false
+		}
+	}
+	return true
+}
+
+// inboundAdditionsAreAppliedEdges reports whether every newly inbound source
+// recorded an edge via an accepted suggestion — a reviewed link decision the
+// sweep should acknowledge, not re-analyze. Any unproven addition fails
+// conservative and stays on the analysis path.
+func (p *pipeline) inboundAdditionsAreAppliedEdges(target string, added []string) (bool, error) {
+	for _, source := range added {
+		reviewed, err := p.db.AppliedGraphEdgeExists(p.ctx, source, target)
+		if err != nil {
+			return false, err
+		}
+		if !reviewed {
+			return false, nil
+		}
+	}
+	return len(added) > 0, nil
 }
 
 // inboundRemovalsAreBodyLinks reports whether every recorded inbound source
@@ -739,7 +810,7 @@ func (p *pipeline) restampDoc(doc database.Document) (string, error) {
 		mentionsByPath[mention.path] = append(mentionsByPath[mention.path], mention)
 	}
 	ranked := rankCandidates(doc.Path, fm, visibleCandidates(doc.Path, p.allDocs, p.visiblePaths), docSig, p.sigs, p.embeds[doc.Path], p.embeds, mentionsByPath, candidateLimit)
-	ranked = slices.DeleteFunc(ranked, func(c candidate) bool { return !p.currentlyVisible(c.doc.Path) })
+	ranked = slices.DeleteFunc(ranked, func(c candidate) bool { return !p.currentlyVisible(c.doc.Path) || p.catalogDocs[c.doc.Path] })
 	inbound, err := p.llmVisibleInbound(doc.Path)
 	if err != nil {
 		return "", err

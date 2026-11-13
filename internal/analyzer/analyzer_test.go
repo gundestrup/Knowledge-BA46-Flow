@@ -351,7 +351,7 @@ func TestRunDoesNotCallLLMWhenNothingIsPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result != (Result{}) || llm.prompt != "" || len(llm.format) != 0 {
+	if result.Processed != 0 || result.Dependents != 0 || len(result.DependentReasons) != 0 || llm.prompt != "" || len(llm.format) != 0 {
 		t.Fatalf("result=%+v prompt=%q format=%s", result, llm.prompt, llm.format)
 	}
 }
@@ -1721,6 +1721,143 @@ func TestRecordedBodyLinkerInboundRestampsWithoutAnalysis(t *testing.T) {
 	ev, ok := parseAnalysisEvidenceRecord(raw)
 	if !ok || slices.Contains(ev.Inbound, "catalog.md") {
 		t.Fatalf("bookkeeping inbound not restamped: %q", raw)
+	}
+}
+
+func TestAppliedEdgeInboundRestampsWithoutAnalysis(t *testing.T) {
+	c, db := setup(t)
+	writeDoc(t, c.RepositoryPath, "target.md", "# Target\n\nNotes on harbor seal colonies.\n")
+	writeDoc(t, c.RepositoryPath, "control.md", "# Control\n\nTidal gauge notes.\n")
+	writeDoc(t, c.RepositoryPath, "source.md", "# Source\n\nHarbor logistics note.\n")
+	writeDoc(t, c.RepositoryPath, "peer.md", "# Peer\n\nBrass fitting catalogue excerpts.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	firstModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: firstModel}, RunOptions{}); err != nil {
+		t.Fatalf("initial analysis error=%v", err)
+	}
+	// Simulate a reviewed apply that added source.md→target.md: provenance is
+	// in applied_edges. peer.md→control.md was authored by hand — no row.
+	if err := db.RecordAppliedEdges(t.Context(), "source.md", map[string][]string{"related": {"target.md"}}); err != nil {
+		t.Fatal(err)
+	}
+	writeDoc(t, c.RepositoryPath, "source.md", "---\nrelated: [target.md]\n---\n# Source\n\nHarbor logistics note.\n")
+	writeDoc(t, c.RepositoryPath, "peer.md", "---\nrelated: [control.md]\n---\n# Peer\n\nBrass fitting catalogue excerpts.\n")
+	writeDoc(t, c.RepositoryPath, "other.md", "# Other\n\nQuiet note about moss gardens.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	secondModel := &fakeLLM{reply: firstModel.reply}
+	res, err := RunProgress(t.Context(), c, db, Generators{Analysis: secondModel}, RunOptions{})
+	if err != nil {
+		t.Fatalf("run error=%v", err)
+	}
+	processed := map[string]bool{}
+	for _, prompt := range secondModel.prompts {
+		for _, line := range strings.Split(prompt, "\n") {
+			if strings.HasPrefix(line, "Current path: ") {
+				processed[strings.TrimPrefix(line, "Current path: ")] = true
+				break
+			}
+		}
+	}
+	if processed["target.md"] {
+		t.Fatalf("applied-edge inbound should restamp, not re-analyze: %v", processed)
+	}
+	if !processed["control.md"] {
+		t.Fatalf("authored inbound addition must still analyze: %v", processed)
+	}
+	var raw string
+	if err := db.QueryRow(`SELECT analysis_evidence_json FROM documents WHERE path='target.md'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	ev, ok := parseAnalysisEvidenceRecord(raw)
+	if !ok || !slices.Contains(ev.Inbound, "source.md") {
+		t.Fatalf("applied-edge inbound not restamped: %q", raw)
+	}
+	if res.DependentReasons["inbound links changed"] < 1 {
+		t.Fatalf("dependent cause tally missing inbound arm: %+v", res.DependentReasons)
+	}
+}
+
+func TestCatalogBodyExcludedFromMergeEvidence(t *testing.T) {
+	c, db := setup(t)
+	shared := "Harbor seal colonies depend on tidal flows, kelp density, " +
+		"shallow haul-out shelves, quiet coves, seasonal fish runs, " +
+		"rocky ledges and protected nursery lagoons across the coast.\n"
+	var links strings.Builder
+	links.WriteString("---\nrelated: [")
+	for i := 0; i < catalogOutDegree; i++ {
+		if i > 0 {
+			links.WriteString(", ")
+		}
+		fmt.Fprintf(&links, "d%02d.md", i)
+	}
+	links.WriteString("]\n---\n# Catalog\n\n" + shared)
+	writeDoc(t, c.RepositoryPath, "catalog.md", links.String())
+	writeDoc(t, c.RepositoryPath, "topic.md", "# Topic\n\n"+shared+"Distinct topic observations.\n")
+	writeDoc(t, c.RepositoryPath, "similar.md", "# Similar\n\n"+shared+"Similar companion observations.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	model := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: model}, RunOptions{}); err != nil {
+		t.Fatalf("analysis error=%v", err)
+	}
+	var raw string
+	if err := db.QueryRow(`SELECT analysis_evidence_json FROM documents WHERE path='topic.md'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	ev, ok := parseAnalysisEvidenceRecord(raw)
+	if !ok {
+		t.Fatalf("evidence missing: %q", raw)
+	}
+	if slices.Contains(ev.Full, "catalog.md") {
+		t.Fatalf("catalog body consumed as merge evidence: %q", raw)
+	}
+	if !slices.Contains(ev.Full, "similar.md") {
+		t.Fatalf("non-catalog merge candidate lost its body: %q", raw)
+	}
+}
+
+func TestCatalogConsumedEvidenceRestampsWithoutAnalysis(t *testing.T) {
+	c, db := setup(t)
+	var links strings.Builder
+	links.WriteString("---\nrelated: [")
+	for i := 0; i < catalogOutDegree; i++ {
+		if i > 0 {
+			links.WriteString(", ")
+		}
+		fmt.Fprintf(&links, "d%02d.md", i)
+	}
+	links.WriteString("]\n---\n# Catalog\n\nIndex table of notes.\n")
+	writeDoc(t, c.RepositoryPath, "catalog.md", links.String())
+	writeDoc(t, c.RepositoryPath, "consumer.md", "# Consumer\n\nNotes on tidal gauges.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	firstModel := &fakeLLM{reply: `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: firstModel}, RunOptions{}); err != nil {
+		t.Fatalf("initial analysis error=%v", err)
+	}
+	// Record written before catalog exclusion: the catalog's body was consumed.
+	if _, err := db.Exec(`UPDATE documents SET analysis_evidence_json=json_patch(analysis_evidence_json,'{"full":["catalog.md"]}') WHERE path='consumer.md'`); err != nil {
+		t.Fatal(err)
+	}
+	// Edit the catalog body: consumed-evidence drift that is catalog-only.
+	writeDoc(t, c.RepositoryPath, "catalog.md", links.String()+"\nNew row: [Topic](topic.md).\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	secondModel := &fakeLLM{reply: firstModel.reply}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: secondModel}, RunOptions{}); err != nil {
+		t.Fatalf("run error=%v", err)
+	}
+	for _, prompt := range secondModel.prompts {
+		if strings.Contains(prompt, "Current path: consumer.md") {
+			t.Fatal("catalog-only consumed drift should restamp, not re-analyze")
+		}
 	}
 }
 

@@ -404,6 +404,12 @@ func (p *pipeline) mergeContext(ranked []candidate) (string, map[string]string) 
 		if candidate.sim < overlapThreshold || candidate.doc.Size > int64(remaining) {
 			continue
 		}
+		if p.catalogDocs[candidate.doc.Path] {
+			// Catalog/index pages rank high on shingle overlap because every
+			// note carries the same catalog-backlink boilerplate — but a
+			// link table is never a merge target, so never consume its body.
+			continue
+		}
 		path, err := paths.CleanRelative(candidate.doc.Path)
 		if err != nil {
 			continue

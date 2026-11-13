@@ -64,6 +64,21 @@ SELECT 1 FROM suggestions AS other WHERE other.document_path=suggestions.documen
 	return nil
 }
 
+// RecordAppliedEdges stores the graph edges a successful apply added to one
+// document — provenance the dependents sweep uses to recognise that a newly
+// recorded inbound edge came from a human-reviewed link decision.
+func (d *DB) RecordAppliedEdges(ctx context.Context, source string, edges map[string][]string) error {
+	at := time.Now().UTC().Format(time.RFC3339)
+	for kind, targets := range edges {
+		for _, target := range targets {
+			if _, err := d.ExecContext(ctx, `INSERT OR IGNORE INTO applied_edges(source_path,target_path,kind,applied_at) VALUES(?,?,?,?)`, source, target, kind, at); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // MarkAppliedAndSupersede retires old snapshots immediately, without stamping
 // analysis lineage or claiming that the rewritten document was re-analyzed.
 func (d *DB) MarkAppliedAndSupersede(ctx context.Context, s Suggestion, currentHash string) error {

@@ -248,6 +248,29 @@ AND r.kind IN (`+strings.Join(placeholders, ",")+`) ORDER BY r.source_path`, arg
 	return out, true, rows.Err()
 }
 
+// OutboundReferenceCounts returns each source's indexed edge count — the
+// hub/catalog signal: a page linking to dozens of documents is navigational,
+// not a merge candidate.
+func (d *DB) OutboundReferenceCounts(ctx context.Context) (map[string]int, error) {
+	rows, err := d.QueryContext(ctx, `SELECT r.source_path, COUNT(*) FROM document_references r
+JOIN documents d ON d.path=r.source_path AND d.sha256=r.source_sha256 AND d.status<>'missing'
+GROUP BY r.source_path`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var source string
+		var count int
+		if err := rows.Scan(&source, &count); err != nil {
+			return nil, err
+		}
+		out[source] = count
+	}
+	return out, rows.Err()
+}
+
 // IndexedInboundLinks returns the frontmatter graph linkers to path — the
 // inbound evidence contract. Only frontmatter edges (GraphLinkKeys) count:
 // body links are indexed for link repair, but a catalog/README table row is
@@ -256,6 +279,23 @@ AND r.kind IN (`+strings.Join(placeholders, ",")+`) ORDER BY r.source_path`, arg
 // indexed path identical in kind to the frontmatter fallback in InboundLinks.
 func (d *DB) IndexedInboundLinks(ctx context.Context, path string) ([]string, bool, error) {
 	return d.indexedInboundSources(ctx, path, frontmatter.GraphLinkKeys)
+}
+
+// AppliedGraphEdgeExists reports whether a graph edge from source to target
+// was recorded by an accepted suggestion — i.e. the link is a reviewed human
+// decision, not unexplained drift.
+func (d *DB) AppliedGraphEdgeExists(ctx context.Context, source, target string) (bool, error) {
+	kindArgs := make([]any, 0, len(frontmatter.GraphLinkKeys)+2)
+	kindArgs = append(kindArgs, source, target)
+	placeholders := make([]string, 0, len(frontmatter.GraphLinkKeys))
+	for _, kind := range frontmatter.GraphLinkKeys {
+		kindArgs = append(kindArgs, kind)
+		placeholders = append(placeholders, "?")
+	}
+	var found int
+	err := d.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM applied_edges
+WHERE source_path=? AND target_path=? AND kind IN (`+strings.Join(placeholders, ",")+`))`, kindArgs...).Scan(&found)
+	return found != 0, err
 }
 
 // BodyInboundSources returns documents whose indexed body links resolve to

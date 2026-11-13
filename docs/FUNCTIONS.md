@@ -335,7 +335,15 @@ source that still links here does not refresh the target, but an added or
 removed link refreshes only the target whose inbound context changed.
 Recorded entries left over from an earlier fm+body contract are migrated
 lazily: a dropped linker that still resolves through a body edge is
-provably bookkeeping, so the record is restamped rather than re-analyzed. Local
+provably bookkeeping, so the record is restamped rather than re-analyzed.
+The same restamp applies to an added inbound edge recorded in
+`applied_edges` — a link decision a human already reviewed by accepting a
+suggestion — and to consumed-evidence drift whose changed paths are all
+catalog/index pages. High out-degree pages (15+ outbound references) are
+treated as navigational infrastructure: they are excluded from the ranked
+merge/relation candidate list, never consumed as merge bodies, and never
+recorded as evidence, so catalog table edits stop fanning out into
+consumer re-analysis. Local
 and external analyses maintain independent evidence records and frontmatter
 stamps. A catalog/index edit does not propagate solely because notes link to
 the index; Catalog backlinks are not treated as entity-body evidence.

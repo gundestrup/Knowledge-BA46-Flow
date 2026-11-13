@@ -110,16 +110,26 @@ type Result struct {
 	Stubs            int // stub-tagged placeholders; skipped, still valid link targets
 	Relinked         int // deterministic retarget fixes queued after renames
 	Failed           int
-	Rejected         int // unsafe model proposals omitted from review
-	EnrichmentFailed int // optional generation failures; full analysis can still succeed
-	DirectPending    int // documents selected by the task's own pending fingerprints
-	Dependents       int // unchanged docs re-analyzed because their evidence drifted
+	Rejected         int            // unsafe model proposals omitted from review
+	EnrichmentFailed int            // optional generation failures; full analysis can still succeed
+	DirectPending    int            // documents selected by the task's own pending fingerprints
+	Dependents       int            // unchanged docs re-analyzed because their evidence drifted
+	DependentReasons map[string]int // dependents tallied by invalidation cause
 }
 
 // Summary keeps CLI and HTTP job reporting consistent about optional failures.
 func (r Result) Summary(model, fastModel string) string {
-	return fmt.Sprintf("Analyzed %d; queue %d direct + %d evidence dependents; fast-enriched %d; locally enriched %d; skipped %d by MCP policy; failed %d (model %s, fast %s); enrichment failures %d (retryable); rejected %d unsafe edit(s); skipped %d stub placeholder(s).",
-		r.Processed, r.DirectPending, r.Dependents, r.Enriched, r.LocalEnriched, r.Skipped, r.Failed, model, fastModel, r.EnrichmentFailed, r.Rejected, r.Stubs)
+	detail := fmt.Sprintf("Analyzed %d; queue %d direct + %d evidence dependents", r.Processed, r.DirectPending, r.Dependents)
+	if len(r.DependentReasons) > 0 {
+		causes := make([]string, 0, len(r.DependentReasons))
+		for cause, count := range r.DependentReasons {
+			causes = append(causes, fmt.Sprintf("%d %s", count, cause))
+		}
+		slices.Sort(causes)
+		detail += " (" + strings.Join(causes, ", ") + ")"
+	}
+	return detail + fmt.Sprintf("; fast-enriched %d; locally enriched %d; skipped %d by MCP policy; failed %d (model %s, fast %s); enrichment failures %d (retryable); rejected %d unsafe edit(s); skipped %d stub placeholder(s).",
+		r.Enriched, r.LocalEnriched, r.Skipped, r.Failed, model, fastModel, r.EnrichmentFailed, r.Rejected, r.Stubs)
 }
 
 // Progress reports one step of document analysis. Outcome is "enriching" or
@@ -244,6 +254,11 @@ const evidenceNeighborLimit = 16
 // pass-through on a denser one and a wall on a sparser one.
 const evidenceFloorQuantile = 0.95
 
+// catalogOutDegree marks a document as navigational infrastructure: a page
+// linking out to this many documents is a catalog/index, never a merge
+// target — no matter how much its link-table boilerplate overlaps note text.
+const catalogOutDegree = 15
+
 // evidenceFloorSamplePairs caps the sampled pair count used for the floor
 // calibration so large repositories stay cheap — O(sample), not O(n²) cosines.
 const evidenceFloorSamplePairs = 60000
@@ -364,6 +379,7 @@ func RunProgress(ctx context.Context, c config.Config, db *database.DB, gens Gen
 			return out, err
 		}
 		out.Dependents = len(dependents)
+		out.DependentReasons = p.depReasons
 		docs = mergeDocumentLists(docs, dependents)
 	}
 	// The empty-queue check comes after the dependents sweep: removals and
@@ -646,6 +662,8 @@ type pipeline struct {
 	embeddingDisabled bool
 	enrichmentUsed    bool
 	visibleNow        map[string]bool
+	catalogDocs       map[string]bool // high out-degree hubs: never merge targets
+	depReasons        map[string]int  // dependent-cause tally for run summaries
 }
 
 // loadCorpus snapshots the corpus once per run: computes the LLM-visibility
@@ -672,6 +690,16 @@ func (p *pipeline) loadCorpus() error {
 	p.entities.addFrameworkCatalog(frameworkCatalog, p.visiblePaths)
 	p.allDocs = allDocs
 	p.buildCorpusIndexes(allDocs)
+	outDegrees, err := p.db.OutboundReferenceCounts(p.ctx)
+	if err != nil {
+		return err
+	}
+	p.catalogDocs = make(map[string]bool, len(outDegrees))
+	for source, count := range outDegrees {
+		if count >= catalogOutDegree {
+			p.catalogDocs[source] = true
+		}
+	}
 	p.mcpServer = p.c.MCPServer
 	if p.mcpServer == "" {
 		p.mcpServer = config.MCPServerKnowledgeBase
@@ -920,7 +948,7 @@ func (p *pipeline) analyzeDoc(doc database.Document, fm map[string]any, candidat
 		mentionsByPath[mention.path] = append(mentionsByPath[mention.path], mention)
 	}
 	ranked := rankCandidates(doc.Path, fm, candidates, docSig, p.sigs, docEmb, p.embeds, mentionsByPath, candidateLimit)
-	ranked = slices.DeleteFunc(ranked, func(c candidate) bool { return !p.currentlyVisible(c.doc.Path) })
+	ranked = slices.DeleteFunc(ranked, func(c candidate) bool { return !p.currentlyVisible(c.doc.Path) || p.catalogDocs[c.doc.Path] })
 	mergeText, mergeBodies := p.mergeContext(ranked)
 	inbound, err := p.llmVisibleInbound(doc.Path)
 	if err != nil {

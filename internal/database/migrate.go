@@ -20,7 +20,7 @@ import (
 // schemaVersion stamps the shape migrate() produces — bump it on every schema
 // change. A database stamped newer than this build is refused at Open so an
 // old binary cannot silently half-migrate a future layout.
-const schemaVersion = 17
+const schemaVersion = 18
 
 func (d *DB) migrate(ctx context.Context) error {
 	var stamped int
@@ -108,6 +108,17 @@ CREATE TABLE IF NOT EXISTS renames (
  old_path TEXT PRIMARY KEY,
  new_path TEXT NOT NULL,
  moved_at TEXT NOT NULL
+);
+-- applied_edges records graph edges a human added by accepting a suggestion.
+-- An edge written here is a reviewed link decision: when it later shows up as
+-- a new inbound entry in the target's evidence, the sweep restamps rather
+-- than re-analyzing, because no new semantic question arose.
+CREATE TABLE IF NOT EXISTS applied_edges (
+ source_path TEXT NOT NULL,
+ target_path TEXT NOT NULL,
+ kind TEXT NOT NULL,
+ applied_at TEXT NOT NULL,
+ PRIMARY KEY(source_path, target_path, kind)
 );
 CREATE TABLE IF NOT EXISTS jobs (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
