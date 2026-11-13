@@ -2342,6 +2342,8 @@ func TestIndexedInboundLinksReadyAmbiguousAndFallback(t *testing.T) {
 			FrontmatterJSON: `{"document_id":"` + bID + `"}`},
 		{Path: "e.md", SHA256: "e1", Size: 1, ModifiedUnix: 1, TagsJSON: `[]`,
 			FrontmatterJSON: `{"document_id":"33333333-3333-4333-8333-333333333333"}`},
+		{Path: "f.md", SHA256: "f1", Size: 1, ModifiedUnix: 1, TagsJSON: `[]`,
+			FrontmatterJSON: `{"document_id":"44444444-4444-4444-8444-444444444444"}`},
 	}
 	for _, doc := range docs {
 		if _, err := db.UpsertScanned(ctx, doc, "scan1"); err != nil {
@@ -2357,7 +2359,14 @@ func TestIndexedInboundLinksReadyAmbiguousAndFallback(t *testing.T) {
 	}
 	require.NoError(t, db.ReplaceReferences(ctx, "b.md", "b1", nil))
 	if err := db.ReplaceReferences(ctx, "e.md", "e1", []Reference{
-		{WrittenTarget: "old-name.md", TargetPath: "", TargetID: bID, Kind: "body"},
+		{WrittenTarget: "old-name.md", TargetPath: "", TargetID: bID, Kind: "related"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// f.md reaches b.md only through a body link: navigational edges are
+	// indexed for repair but are not inbound evidence, so f.md is excluded.
+	if err := db.ReplaceReferences(ctx, "f.md", "f1", []Reference{
+		{WrittenTarget: "b.md", TargetPath: "b.md", TargetID: bID, Kind: "body"},
 	}); err != nil {
 		t.Fatal(err)
 	}

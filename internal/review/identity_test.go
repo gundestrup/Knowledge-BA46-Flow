@@ -123,9 +123,23 @@ func TestIDRenamePlusEditRepairsIncomingLinksWithFreshSource(t *testing.T) {
 	if err != nil || old.DocumentPath != "new.md" || old.Status != "superseded" || old.Error == "" {
 		t.Fatalf("identity must not override freshness: %+v %v", old, err)
 	}
-	inbound, err := db.InboundLinks(t.Context(), "new.md")
-	if err != nil || len(inbound) != 1 || inbound[0] != "sub/source.md" {
-		t.Fatalf("reverse index lost incoming identity: %v %v", inbound, err)
+	// The reverse index must still carry the incoming edge bound to the
+	// renamed document's stable document_id (the stored written path stays
+	// stale; identity resolves the target at query time). InboundLinks no
+	// longer reports body edges — they are not inbound evidence — so assert
+	// on the reference row itself.
+	refs, err := db.SourceReferences(t.Context(), "sub/source.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retargeted bool
+	for _, ref := range refs {
+		if ref.Kind == "body" && ref.TargetID == id {
+			retargeted = true
+		}
+	}
+	if !retargeted {
+		t.Fatalf("reverse index lost incoming identity: %+v", refs)
 	}
 	live, err := os.ReadFile(filepath.Join(c.RepositoryPath, "sub/source.md"))
 	if err != nil {

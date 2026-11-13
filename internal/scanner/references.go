@@ -41,15 +41,27 @@ func (w *repoWalker) checkInternalLinks() error {
 func (w *repoWalker) indexDocumentLinks(rel, wantHash string, ids map[string]string, counts map[string]int) error {
 	raw, err := ReadDocument(w.c, rel)
 	if err != nil {
-		return nil
+		// Still stamp the version marker: an unreadable source contributes
+		// no edges, and a missing marker would flip the corpus-wide index
+		// readiness check (IndexedInboundLinks) for every other document.
+		return w.db.ReplaceReferences(w.ctx, rel, wantHash, nil)
 	}
 	fields, body, err := frontmatter.Parse(raw)
 	if err != nil {
-		return nil // already reported by frontmatter curation
+		// Same contract: malformed frontmatter yields no edges but must not
+		// poison global readiness — frontmatter curation already reports the
+		// parse error. Replacing also drops stale edges from a previously
+		// parseable version, which is the honest topology.
+		return w.db.ReplaceReferences(w.ctx, rel, wantHash, nil)
 	}
 	sum := sha256.Sum256([]byte(frontmatter.Canonical(raw)))
 	hash := hex.EncodeToString(sum[:])
 	if hash != wantHash {
+		// The source changed mid-scan: drop its edges and stamp the marker so
+		// this partial index does not read as an incomplete one.
+		if err := w.db.ReplaceReferences(w.ctx, rel, wantHash, nil); err != nil {
+			return err
+		}
 		return w.db.SetLinkIssues(w.ctx, rel, `["source changed during scan; scan again"]`)
 	}
 	previous, err := w.db.SourceReferences(w.ctx, rel)

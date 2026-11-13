@@ -327,7 +327,10 @@ unchanged notes whose analysis evidence changed. Each analysis records which
 documents its prompt actually consumed — candidate annotations, separate
 inbound/sibling path sets, rendered frontmatter validation context, body-derived
 candidate scores, merge bodies and entity excerpts — so refresh is exact at
-each evidence level. Inbound paths are compared as sets: a title edit to a
+each evidence level. Inbound paths count only frontmatter graph edges
+(`related`, `contradicted_by`); body links are indexed for link repair but
+are navigational, so catalog/index table edits never requeue their link
+targets. Inbound paths are compared as sets: a title edit to a
 source that still links here does not refresh the target, but an added or
 removed link refreshes only the target whose inbound context changed. Local
 and external analyses maintain independent evidence records and frontmatter

@@ -1220,7 +1220,7 @@ func TestCommonFilenameWordsDoNotFanOutDependents(t *testing.T) {
 	}
 }
 
-func TestCatalogIndexEditRefreshesOnlyNewInboundTargets(t *testing.T) {
+func TestCatalogIndexEditDoesNotFanOutBodyLinkDependents(t *testing.T) {
 	c, db := setup(t)
 	// Production case: an index page that every section note links back to.
 	index := filepath.Join(c.RepositoryPath, "lessons", "README.md")
@@ -1261,8 +1261,9 @@ func TestCatalogIndexEditRefreshesOnlyNewInboundTargets(t *testing.T) {
 	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: firstModel}, RunOptions{}); err != nil {
 		t.Fatalf("initial analysis error=%v", err)
 	}
-	// Net change: four appended catalog rows. The index's frontmatter stays
-	// unchanged; only the four new target inbound sets change.
+	// Net change: four appended catalog rows. Body links are navigational —
+	// only frontmatter graph edges count as inbound evidence, so the new
+	// link targets' inbound sets do not change and no dependents queue.
 	writeIndex("| [One](one.md) | - |\n| [Two](two.md) | - |\n| [Three](three.md) | - |\n| [Four](four.md) | - |\n| [Five](five.md) | - |\n")
 	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
 		t.Fatal(err)
@@ -1281,13 +1282,15 @@ func TestCatalogIndexEditRefreshesOnlyNewInboundTargets(t *testing.T) {
 			}
 		}
 	}
-	// The index plus the four notes newly added to its inbound list. The
-	// existing row and all other catalog linkers keep the same context.
-	if second.Processed != 5 || second.Dependents != 4 {
-		t.Fatalf("expected index + four changed inbound contexts, got %+v paths=%v", second, processedPaths)
+	// Only the index itself re-analyzes (its own body changed). Appended
+	// catalog rows create no inbound dependents, and the existing row and
+	// all other catalog linkers keep the same context.
+	if second.Processed != 1 || second.Dependents != 0 {
+		t.Fatalf("expected only the edited index re-analyzed, got %+v paths=%v", second, processedPaths)
 	}
 	for _, prompt := range secondModel.prompts {
 		if strings.Contains(prompt, "Current path: lessons/one.md") ||
+			strings.Contains(prompt, "Current path: lessons/two.md") ||
 			strings.Contains(prompt, "Current path: lessons/other.md") ||
 			strings.Contains(prompt, "Current path: lessons/noise-") {
 			t.Fatalf("unchanged catalog linker re-analyzed on index-row edit")
@@ -1622,8 +1625,11 @@ func TestLegacyEvidenceRecoversNewInboundLinkAndRestamps(t *testing.T) {
 	if !ok || ev.Version < 2 {
 		t.Fatalf("legacy evidence was not upgraded on re-analysis: %q", raw)
 	}
-	if !slices.Contains(ev.Inbound, "linker.md") || !slices.Contains(ev.Inbound, "rivet-log.md") {
-		t.Fatalf("converted evidence lost the inbound set: %+v", ev)
+	// linker.md reaches target.md only through a body link — navigational,
+	// not graph evidence — so the converted inbound set is just the new
+	// frontmatter linker.
+	if !slices.Contains(ev.Inbound, "rivet-log.md") || slices.Contains(ev.Inbound, "linker.md") {
+		t.Fatalf("converted evidence inbound set wrong: %+v", ev)
 	}
 	var steadyRaw string
 	if err := db.QueryRow(`SELECT analysis_evidence_json FROM documents WHERE path='steady.md'`).Scan(&steadyRaw); err != nil {

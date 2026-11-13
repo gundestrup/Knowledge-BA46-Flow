@@ -11,6 +11,23 @@ tag is prepared.
 
 ### Changed
 
+- Inbound-link evidence now counts only frontmatter graph edges
+  (`related`, `contradicted_by`) on both the indexed and the fallback
+  query path. Body links are still indexed for link repair, but adding a
+  catalog/README table row no longer requeues its link targets for
+  analysis — index edits no longer fan out into per-target re-analysis.
+
+### Fixed
+
+- One document that fails to read or parse (e.g. malformed frontmatter)
+  no longer poisons the corpus-wide reverse-index readiness check: it
+  still records a `reference_versions` marker with zero edges instead of
+  forcing every inbound lookup onto the frontmatter-only fallback. This
+  removes the oscillation where recorded inbound evidence flipped between
+  frontmatter-only and frontmatter+body sets depending on index health.
+
+### Changed
+
 - Dependency updates: `modernc.org/sqlite` 1.62.0, `spf13/pflag` 1.1.0,
   `golang.org/x/sync` 0.25.0, `golang.org/x/text` 0.44.0,
   `@biomejs/biome` 2.6.4 (with matching `$schema` pointer), and the Node

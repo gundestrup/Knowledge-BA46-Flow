@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"knowledge-ba46-flow/internal/frontmatter"
@@ -217,9 +218,22 @@ AND NOT EXISTS(SELECT 1 FROM reference_versions v WHERE v.source_path=d.path AND
 	if id != "" && !d.uniqueIdentityAt(ctx, path, id) {
 		return nil, true, fmt.Errorf("ambiguous document_id for %s", path)
 	}
+	// Only frontmatter graph edges count as inbound evidence. Body links are
+	// indexed for link repair, but a catalog/README table row is navigational:
+	// letting it join the inbound set would make every index edit requeue its
+	// link targets for full analysis. This also keeps the indexed path
+	// identical in kind to the frontmatter fallback in InboundLinks.
+	kinds := make([]any, 0, len(frontmatter.GraphLinkKeys))
+	placeholders := make([]string, 0, len(frontmatter.GraphLinkKeys))
+	for _, kind := range frontmatter.GraphLinkKeys {
+		kinds = append(kinds, kind)
+		placeholders = append(placeholders, "?")
+	}
+	args := append([]any{path, path, id, id}, kinds...)
 	rows, err := d.QueryContext(ctx, `SELECT DISTINCT r.source_path FROM document_references r
 JOIN documents d ON d.path=r.source_path AND d.sha256=r.source_sha256 AND d.status<>'missing'
-WHERE r.source_path<>? AND (r.target_path=? OR (?<>'' AND r.target_document_id=?)) ORDER BY r.source_path`, path, path, id, id)
+WHERE r.source_path<>? AND (r.target_path=? OR (?<>'' AND r.target_document_id=?))
+AND r.kind IN (`+strings.Join(placeholders, ",")+`) ORDER BY r.source_path`, args...)
 	if err != nil {
 		return nil, false, err
 	}

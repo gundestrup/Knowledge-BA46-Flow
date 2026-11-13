@@ -306,6 +306,45 @@ func TestScanStoresFrontmatterAndIssues(t *testing.T) {
 	}
 }
 
+func TestMalformedFrontmatterKeepsReferenceIndexReady(t *testing.T) {
+	repo := t.TempDir()
+	// One unparseable file must contribute no edges but still mark its
+	// reference version — otherwise the global readiness check falls back
+	// to the frontmatter-only path for every other document, and recorded
+	// inbound evidence flips representation.
+	os.WriteFile(filepath.Join(repo, "broken.md"), []byte("---\ntitle: [\n---\n# Body\n"), 0644)
+	os.WriteFile(filepath.Join(repo, "target.md"), []byte("# Target\n"), 0644)
+	os.WriteFile(filepath.Join(repo, "linker.md"), []byte("---\nrelated: [target.md]\n---\n# Linker\n"), 0644)
+	db, err := database.Open(t.Context(), filepath.Join(t.TempDir(), "km.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	c := config.Config{RepositoryPath: repo, Extensions: []string{".md"}, TrashDirectory: ".kbm-trash"}
+	if _, err := Scan(context.Background(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	links, ready, err := db.IndexedInboundLinks(context.Background(), "target.md")
+	if err != nil || !ready {
+		t.Fatalf("malformed doc should not poison index readiness: ready=%v err=%v", ready, err)
+	}
+	if len(links) != 1 || links[0] != "linker.md" {
+		t.Fatalf("indexed inbound=%v, want [linker.md]", links)
+	}
+	// A body link alone is indexed (for repair) but is not inbound evidence.
+	os.WriteFile(filepath.Join(repo, "body-linker.md"), []byte("# Body linker\n\nSee [target](target.md).\n"), 0644)
+	if _, err := Scan(context.Background(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	links, ready, err = db.IndexedInboundLinks(context.Background(), "target.md")
+	if err != nil || !ready {
+		t.Fatalf("second scan readiness: ready=%v err=%v", ready, err)
+	}
+	if len(links) != 1 || links[0] != "linker.md" {
+		t.Fatalf("body link must not join inbound evidence: inbound=%v", links)
+	}
+}
+
 func TestScanSkipsMCPHiddenAndWorkflowPaths(t *testing.T) {
 	repo := t.TempDir()
 	files := map[string]string{
