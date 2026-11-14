@@ -9,6 +9,8 @@ tag is prepared.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-14
+
 ### Changed
 
 - Static dashboard assets now carry a version-scoped `ETag`, so post-TTL
