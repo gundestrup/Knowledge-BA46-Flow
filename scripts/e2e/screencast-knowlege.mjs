@@ -44,7 +44,7 @@ try {
   // and each increment emits a repaint frame.
   const scrollToEl = async (sel, ms = 1000, offset = 80) => {
     const top = await page.eval(
-      `(() => { const el = document.querySelector(${JSON.stringify(sel)}); return el ? el.getBoundingClientRect().top + window.scrollY - ${offset} : document.body.scrollHeight; })()`,
+      `(() => { const el = document.querySelector(${JSON.stringify(sel)}); return el ? el.getBoundingClientRect().top + window.scrollY - ${Number(offset) || 0} : document.body.scrollHeight; })()`,
     );
     const n = 10;
     for (let i = 1; i <= n; i++) {
