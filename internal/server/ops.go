@@ -417,21 +417,21 @@ func (o *ops) runOp(ctx context.Context, j database.Job, request opRequest) (str
 		return r.Summary(), err
 	case "enrich":
 		return o.scanThen(ctx, func() (string, error) {
-			return o.enrich(ctx, j, o.runOptions(ctx, j, request))
+			return o.enrich(ctx, o.runOptions(ctx, j, request))
 		})
 	case "embed":
 		return o.scanThen(ctx, func() (string, error) {
-			return o.embed(ctx, j, o.runOptions(ctx, j, request))
+			return o.embed(ctx, o.runOptions(ctx, j, request))
 		})
 	case "expand", "freshness":
 		return o.scanThen(ctx, func() (string, error) {
-			return o.task(ctx, j, j.Op, o.runOptions(ctx, j, request))
+			return o.task(ctx, j.Op, o.runOptions(ctx, j, request))
 		})
 	case "all":
 		return o.scanThen(ctx, func() (string, error) {
 			opts := o.runOptions(ctx, j, request)
 			analyze := func() (string, error) { return o.analyze(ctx, j, request) }
-			return o.runAll(ctx, j, opts, request.Model, analyze)
+			return o.runAll(ctx, opts, request.Model, analyze)
 		})
 	case "report":
 		r, err := repositoryreport.Run(ctx, o.c.Report, o.db)
@@ -508,7 +508,6 @@ func (o *ops) analyze(ctx context.Context, job database.Job, request opRequest) 
 
 func (o *ops) runAll(
 	ctx context.Context,
-	j database.Job,
 	opts analyzer.RunOptions,
 	model string,
 	analyze func() (string, error),
@@ -519,16 +518,16 @@ func (o *ops) runAll(
 		var err error
 		switch name {
 		case "enrich":
-			detail, err = o.enrich(ctx, j, opts)
+			detail, err = o.enrich(ctx, opts)
 		case "embed":
 			// Generation and embedding overrides are independent.
 			embedOpts := opts
 			embedOpts.Model = ""
-			detail, err = o.embed(ctx, j, embedOpts)
+			detail, err = o.embed(ctx, embedOpts)
 		case "analyze":
 			detail, err = analyze()
 		default:
-			detail, err = o.task(ctx, j, name, opts)
+			detail, err = o.task(ctx, name, opts)
 		}
 		if err != nil {
 			if errors.Is(err, config.ErrNoTaskModel) && (model == "" || name == "embed") {
@@ -542,7 +541,7 @@ func (o *ops) runAll(
 }
 
 // enrich runs only the fast-model metadata pass.
-func (o *ops) enrich(ctx context.Context, j database.Job, opts analyzer.RunOptions) (string, error) {
+func (o *ops) enrich(ctx context.Context, opts analyzer.RunOptions) (string, error) {
 	m, err := o.c.TaskModel(config.TaskEnrich, false, opts.Model)
 	if err != nil {
 		return "", err
@@ -557,7 +556,7 @@ func (o *ops) enrich(ctx context.Context, j database.Job, opts analyzer.RunOptio
 }
 
 // embed recomputes embedding vectors for documents that lack a current one.
-func (o *ops) embed(ctx context.Context, j database.Job, opts analyzer.RunOptions) (string, error) {
+func (o *ops) embed(ctx context.Context, opts analyzer.RunOptions) (string, error) {
 	override := opts.EmbedModel
 	if override == "" {
 		override = opts.Model
@@ -764,7 +763,7 @@ func warnStamp(warnings *[]string, stage, resolved string, stamp database.ModelS
 }
 
 // task runs a suggestion-producing pass (expand or freshness) on its lane.
-func (o *ops) task(ctx context.Context, j database.Job, name string, opts analyzer.RunOptions) (string, error) {
+func (o *ops) task(ctx context.Context, name string, opts analyzer.RunOptions) (string, error) {
 	m, err := o.c.TaskModel(name, opts.External, opts.Model)
 	if err != nil {
 		return "", err

@@ -140,7 +140,7 @@ func RestampApplied(ctx context.Context, c config.Config, db *database.DB, relPa
 		if err != nil {
 			continue
 		}
-		if err := w.indexFile(filepath.Join(c.RepositoryPath, rel), rel, fs.FileInfoToDirEntry(info)); err != nil {
+		if err := w.indexFile(rel, fs.FileInfoToDirEntry(info)); err != nil {
 			return err
 		}
 		if err := db.MarkAppliedCurrent(ctx, rel); err != nil {
@@ -309,7 +309,7 @@ func (w *repoWalker) visit(path string, e os.DirEntry, walkErr error) error {
 	if !w.exts[strings.ToLower(filepath.Ext(e.Name()))] {
 		return nil
 	}
-	return w.indexFile(path, rel, e)
+	return w.indexFile(rel, e)
 }
 
 // relativePath returns the forward-slash repo-relative path; the root itself
@@ -326,7 +326,7 @@ func (w *repoWalker) relativePath(path string, isRoot bool) (string, error) {
 }
 
 // indexFile hashes one document, curates its frontmatter and upserts the row.
-func (w *repoWalker) indexFile(path, rel string, e os.DirEntry) error {
+func (w *repoWalker) indexFile(rel string, e os.DirEntry) error {
 	// Store paths repo-relative, always with forward slashes for cross-platform stability.
 	info, err := e.Info()
 	if err != nil {
