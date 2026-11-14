@@ -42,6 +42,7 @@ ui.kb.embed_mismatch: "A different embedding model re-vectorizes every document 
 ui.kb.embedding_model: "Embedding model"
 ui.kb.embedding_model_title: "Independent per-run embedding override; changing models refreshes incompatible vectors"
 ui.kb.estimate_dependents: " +{{.Dependents}} unchanged via changed evidence → {{.Total}} total"
+ui.kb.estimate_dependent_reasons: " ({{.Causes}})"
 ui.kb.estimate_docs_queued:
   one: "{{.Stage}}: {{.Count}} document queued"
   other: "{{.Stage}}: {{.Count}} documents queued"

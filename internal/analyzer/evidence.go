@@ -1,6 +1,6 @@
 // The evidence machinery: what an analysis prompt actually consumed
 // (recording) and which unchanged documents must be re-analyzed when that
-// evidence drifts (the dependents sweep). Recorded v2 sets are exact; rows
+// evidence drifts (the dependents sweep). Versioned sets are exact; rows
 // without a recording keep the conservative heuristic sweep.
 package analyzer
 
@@ -20,20 +20,19 @@ import (
 	"knowledge-ba46-flow/internal/similarity"
 )
 
-// analysisEvidence records which documents an analysis prompt actually
-// consumed. Fm/Full distinguish candidate annotations and body-derived
-// evidence; inbound and sibling paths are stored separately because they are
-// path-only context. Inbound paths invalidate on set changes, not
-// source-content changes; sibling paths invalidate only when a recorded
-// sibling disappears — additions are projected through the semantic arms.
-// ValidationContext captures the rendered local link/metadata issues.
+// analysisEvidence records which documents and graph edges an analysis prompt
+// actually consumed. Inbound graph edge kinds are persisted because a
+// contradicted_by relationship has different semantics from a related edge.
+// Version 2 used path-only inbound entries; those rows are upgraded lazily.
 type analysisEvidence struct {
-	Version           int      `json:"v,omitempty"`
-	Fm                []string `json:"fm"`
-	Full              []string `json:"full"`
-	Inbound           []string `json:"inbound,omitempty"`
-	Siblings          []string `json:"siblings,omitempty"`
-	ValidationContext string   `json:"validation_context,omitempty"`
+	Version           int                    `json:"v,omitempty"`
+	Fm                []string               `json:"fm"`
+	Full              []string               `json:"full"`
+	Inbound           []string               `json:"inbound,omitempty"`
+	InboundEdges      []database.InboundEdge `json:"inbound_edges,omitempty"`
+	MergeBodies       []string               `json:"merge_bodies,omitempty"`
+	Siblings          []string               `json:"siblings,omitempty"`
+	ValidationContext string                 `json:"validation_context,omitempty"`
 }
 
 func fmLinkTargets(fields map[string]any, keys ...string) []string {
@@ -44,7 +43,7 @@ func fmLinkTargets(fields map[string]any, keys ...string) []string {
 	return out
 }
 
-func marshalAnalysisEvidence(ranked []candidate, inbound, siblings []string, mergeBodies map[string]string, entityPaths []string, validationContext string) string {
+func marshalAnalysisEvidence(ranked []candidate, inbound []database.InboundEdge, siblings []string, mergeBodies map[string]string, entityPaths []string, validationContext string) string {
 	fm := make(map[string]bool)
 	full := make(map[string]bool)
 	for _, c := range ranked {
@@ -52,7 +51,7 @@ func marshalAnalysisEvidence(ranked []candidate, inbound, siblings []string, mer
 		// The candidate annotation includes shingle/embedding similarity;
 		// these scores consume body semantics even when no target body is
 		// included verbatim.
-		if c.sim > 0 || c.rel > 0 {
+		if c.sim > 0 || c.rel > 0 || c.lexical > 0 {
 			full[c.doc.Path] = true
 		}
 	}
@@ -65,11 +64,52 @@ func marshalAnalysisEvidence(ranked []candidate, inbound, siblings []string, mer
 	delete(fm, "")
 	delete(full, "")
 	raw, _ := json.Marshal(analysisEvidence{
-		Version: 2, Fm: slices.Sorted(maps.Keys(fm)), Full: slices.Sorted(maps.Keys(full)),
-		Inbound: sortedUnique(inbound), Siblings: sortedUnique(siblings),
+		Version: 3, Fm: slices.Sorted(maps.Keys(fm)), Full: slices.Sorted(maps.Keys(full)),
+		InboundEdges: sortedInboundEdges(inbound), MergeBodies: slices.Sorted(maps.Keys(mergeBodies)),
+		Siblings:          sortedUnique(siblings),
 		ValidationContext: validationContext,
 	})
 	return string(raw)
+}
+
+func sortedInboundEdges(edges []database.InboundEdge) []database.InboundEdge {
+	out := slices.Clone(edges)
+	slices.SortFunc(out, func(a, b database.InboundEdge) int {
+		if c := strings.Compare(a.SourcePath, b.SourcePath); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Kind, b.Kind)
+	})
+	return slices.CompactFunc(out, func(a, b database.InboundEdge) bool {
+		return a.SourcePath == b.SourcePath && a.Kind == b.Kind
+	})
+}
+
+func inboundEdgeSources(edges []database.InboundEdge) []string {
+	sources := make([]string, 0, len(edges))
+	for _, edge := range edges {
+		sources = append(sources, edge.SourcePath)
+	}
+	return sortedUnique(sources)
+}
+
+func equalInboundEdges(a, b []database.InboundEdge) bool {
+	a, b = sortedInboundEdges(a), sortedInboundEdges(b)
+	return slices.Equal(a, b)
+}
+
+func minusInboundEdges(a, b []database.InboundEdge) []database.InboundEdge {
+	remove := make(map[database.InboundEdge]bool, len(b))
+	for _, edge := range b {
+		remove[edge] = true
+	}
+	out := make([]database.InboundEdge, 0, len(a))
+	for _, edge := range sortedInboundEdges(a) {
+		if !remove[edge] {
+			out = append(out, edge)
+		}
+	}
+	return out
 }
 
 func sortedUnique(values []string) []string {
@@ -132,17 +172,18 @@ func intersectsAfter(set map[string]bool, seeds map[string]int64, generation int
 // Bundling them keeps the dependency arms named and the function signatures
 // stable when a new seed kind appears.
 type sweepSeeds struct {
-	changed             map[string]bool   // semantic/body drift → body-level evidence
-	changedFm           map[string]bool   // frontmatter drift → annotation-level evidence
-	changedNewFm        map[string]bool   // never-analyzed docs → heuristic-only seeds
-	analysisPending     map[string]bool   // already in the direct queue
-	directPaths         map[string]bool   // direct queue membership (dependent vs direct)
-	inbound             map[string]bool   // linkers to fm-changed targets (legacy arm)
-	inboundNew          map[string]bool   // linkers to brand-new targets
-	related             map[string]string // embedding-projection neighbors → trigger doc
-	removed             map[string]int64  // missing docs → removal generation
-	removedInbound      map[string]int64  // linkers to removed targets → generation
-	acknowledgeRemovals bool              // real runs stamp; estimates only preview
+	changed             map[string]bool                // semantic/body drift → body-level evidence
+	changedFm           map[string]bool                // frontmatter drift → annotation-level evidence
+	changedNewFm        map[string]bool                // never-analyzed docs → heuristic-only seeds
+	analysisPending     map[string]bool                // already in the direct queue
+	directPaths         map[string]bool                // direct queue membership (dependent vs direct)
+	inbound             map[string]bool                // linkers to fm-changed targets (legacy arm)
+	inboundNew          map[string]bool                // linkers to brand-new targets
+	related             map[string]string              // embedding-projection neighbors → trigger doc
+	entitySource        map[string]entitySourceTrigger // bounded entity projection
+	removed             map[string]int64               // missing docs → removal generation
+	removedInbound      map[string]int64               // linkers to removed targets → generation
+	acknowledgeRemovals bool                           // real runs stamp; estimates only preview
 }
 
 // evidenceDependents sweeps for documents whose analysis context changed even
@@ -167,7 +208,8 @@ func (p *pipeline) evidenceDependents(docs []database.Document, acknowledgeRemov
 	if err != nil {
 		return nil, err
 	}
-	if len(seeds.changed) == 0 && len(seeds.changedFm) == 0 && !p.needsRemovalSweep(p.removalGeneration) {
+	if len(seeds.changed) == 0 && len(seeds.changedFm) == 0 &&
+		!p.needsRemovalSweep(p.removalGeneration) && !p.needsEvidenceFormatSweep() {
 		return nil, nil
 	}
 	seeds.inbound, seeds.inboundNew, seeds.removedInbound, err = p.inboundMaps(seeds.changedFm, changedNewFm, seeds.removed)
@@ -175,6 +217,10 @@ func (p *pipeline) evidenceDependents(docs []database.Document, acknowledgeRemov
 		return nil, err
 	}
 	seeds.related = p.embeddingDependents(seeds.changed)
+	seeds.entitySource, err = p.entitySourceDependents(seeds.changedFm, changedNewFm)
+	if err != nil {
+		return nil, err
+	}
 	var dependents []database.Document
 	for _, doc := range p.allDocs {
 		if p.ctx.Err() != nil {
@@ -189,6 +235,23 @@ func (p *pipeline) evidenceDependents(docs []database.Document, acknowledgeRemov
 		}
 	}
 	return dependents, nil
+}
+
+// needsEvidenceFormatSweep keeps the lazy v2-to-v3 evidence migration
+// independent of unrelated file changes. Restamping unchanged prompt context
+// is cheap; v2 rows whose rendered contradiction context changed are queued
+// by recordedContextChanged.
+func (p *pipeline) needsEvidenceFormatSweep() bool {
+	for _, doc := range p.allDocs {
+		if p.laneSHA(doc) == "" {
+			continue
+		}
+		ev, ok := parseAnalysisEvidenceRecord(p.laneEvidenceJSON(doc))
+		if ok && ev.Version == 2 {
+			return true
+		}
+	}
+	return false
 }
 
 func visiblePathSet(paths, visible map[string]bool) map[string]bool {
@@ -396,6 +459,9 @@ func (p *pipeline) isEvidenceDependent(doc *database.Document, seeds *sweepSeeds
 		if seeds.inboundNew[doc.Path] {
 			return true, "new inbound reference", false, nil
 		}
+		if trigger, ok := seeds.entitySource[doc.Path]; ok {
+			return true, trigger.detail(), false, nil
+		}
 		if hit, detail := p.dependsOnChangedEvidence(*doc, fm, content, seeds.changed, seeds.changedNewFm, seeds.related); hit {
 			return true, detail, false, nil
 		}
@@ -421,6 +487,9 @@ func (p *pipeline) isEvidenceDependent(doc *database.Document, seeds *sweepSeeds
 	}
 	if seeds.removedInbound[doc.Path] > seenGeneration {
 		return true, "inbound reference removed", false, nil
+	}
+	if trigger, ok := seeds.entitySource[doc.Path]; ok {
+		return true, trigger.detail(), false, nil
 	}
 	if p := firstHitAfter(stringSet(fmLinkTargets(fm, "related", "contradicted_by", "links")), seeds.removed, seenGeneration); p != "" {
 		return true, "linked document removed: " + p, false, nil
@@ -473,36 +542,48 @@ func (p *pipeline) legacyInboundAdded(path string, oldEvidence map[string]bool) 
 }
 
 func (p *pipeline) recordedContextChanged(doc *database.Document, fm map[string]any, content string, ev analysisEvidence) (changed bool, detail string, bookkeepingOnly bool, err error) {
-	inbound, err := p.llmVisibleInbound(doc.Path)
+	inbound, err := p.llmVisibleInboundEdges(doc.Path)
 	if err != nil {
 		return false, "", false, err
 	}
-	if !equalStrings(ev.Inbound, inbound) {
-		// A recorded inbound entry that still exists only as a body link was
-		// navigational bookkeeping under an older evidence contract — never a
-		// graph edge. A newly added inbound edge recorded in applied_edges is
-		// a reviewed human link decision. Both are provably non-semantic
-		// deltas: restamp instead of paying a full analysis (self-healing
-		// migration for old records, and no echo of our own applied edits).
-		added := minusStrings(inbound, ev.Inbound)
-		removed := minusStrings(ev.Inbound, inbound)
+	if ev.Version < 3 {
+		oldPaths := sortedUnique(ev.Inbound)
+		currentPaths := inboundEdgeSources(inbound)
+		addedPaths := minusStrings(currentPaths, oldPaths)
+		removedPaths := minusStrings(oldPaths, currentPaths)
 		switch {
-		case len(added) > 0 && len(removed) == 0:
-			reviewed, err := p.inboundAdditionsAreAppliedEdges(doc.Path, added)
+		case len(addedPaths) > 0 || len(removedPaths) > 0:
+			if len(removedPaths) == 0 {
+				added := edgesForSources(inbound, addedPaths)
+				bookkeepingOnly, err = p.inboundAdditionsAreAppliedEdges(doc.Path, added)
+				if err != nil {
+					return false, "", false, err
+				}
+			}
+			if !bookkeepingOnly {
+				return true, inboundPathDeltaDetail(addedPaths, removedPaths), false, nil
+			}
+		case hasInboundKind(inbound, "contradicted_by"):
+			// V2 prompts showed paths only. Adding the contradiction kind to
+			// this prompt is a real context change and needs one analysis.
+			return true, "inbound contradiction context upgraded", false, nil
+		default:
+			// The rendered path list is unchanged. Restamp v3 evidence without
+			// recalculation; old rows cannot prove that removed paths were
+			// body-only, so any path loss takes the conservative branch above.
+			bookkeepingOnly = true
+		}
+	} else if !equalInboundEdges(ev.InboundEdges, inbound) {
+		added := minusInboundEdges(inbound, ev.InboundEdges)
+		removed := minusInboundEdges(ev.InboundEdges, inbound)
+		if len(added) > 0 && len(removed) == 0 {
+			bookkeepingOnly, err = p.inboundAdditionsAreAppliedEdges(doc.Path, added)
 			if err != nil {
 				return false, "", false, err
 			}
-			bookkeepingOnly = reviewed
-		case len(added) == 0:
-			bodyOnly, err := p.inboundRemovalsAreBodyLinks(doc.Path, removed)
-			if err != nil {
-				return false, "", false, err
-			}
-			bookkeepingOnly = bodyOnly
 		}
 		if !bookkeepingOnly {
-			return true, "inbound links changed (+" + strings.Join(added, ",") +
-				" -" + strings.Join(removed, ",") + ")", false, nil
+			return true, inboundEdgeDeltaDetail(added, removed), false, nil
 		}
 	}
 	siblings, err := scanner.SiblingFiles(p.c, doc.Path)
@@ -525,6 +606,42 @@ func (p *pipeline) recordedContextChanged(doc *database.Document, fm map[string]
 		return true, "validation context changed", false, nil
 	}
 	return false, "", bookkeepingOnly, nil
+}
+
+func edgesForSources(edges []database.InboundEdge, sources []string) []database.InboundEdge {
+	wanted := stringSet(sources)
+	out := make([]database.InboundEdge, 0, len(edges))
+	for _, edge := range edges {
+		if wanted[edge.SourcePath] {
+			out = append(out, edge)
+		}
+	}
+	return sortedInboundEdges(out)
+}
+
+func hasInboundKind(edges []database.InboundEdge, kind string) bool {
+	for _, edge := range edges {
+		if edge.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func inboundPathDeltaDetail(added, removed []string) string {
+	return "inbound links changed (+" + strings.Join(added, ",") +
+		" -" + strings.Join(removed, ",") + ")"
+}
+
+func inboundEdgeDeltaDetail(added, removed []database.InboundEdge) string {
+	label := func(edges []database.InboundEdge) string {
+		values := make([]string, 0, len(edges))
+		for _, edge := range sortedInboundEdges(edges) {
+			values = append(values, edge.SourcePath+"["+edge.Kind+"]")
+		}
+		return strings.Join(values, ",")
+	}
+	return "inbound graph edges changed (+" + label(added) + " -" + label(removed) + ")"
 }
 
 // restampBookkeepingOnly rebuilds the evidence record when the sweep's only
@@ -557,13 +674,15 @@ func (p *pipeline) onlyCatalogs(ev map[string]bool, changed map[string]bool) boo
 	return true
 }
 
-// inboundAdditionsAreAppliedEdges reports whether every newly inbound source
-// recorded an edge via an accepted suggestion — a reviewed link decision the
-// sweep should acknowledge, not re-analyze. Any unproven addition fails
-// conservative and stays on the analysis path.
-func (p *pipeline) inboundAdditionsAreAppliedEdges(target string, added []string) (bool, error) {
-	for _, source := range added {
-		reviewed, err := p.db.AppliedGraphEdgeExists(p.ctx, source, target)
+// inboundAdditionsAreAppliedEdges reports whether every newly inbound edge is
+// a current, reviewed `related` edge. Contradictions and unproven additions
+// stay on the full-analysis path.
+func (p *pipeline) inboundAdditionsAreAppliedEdges(target string, added []database.InboundEdge) (bool, error) {
+	for _, edge := range added {
+		if edge.Kind != "related" {
+			return false, nil
+		}
+		reviewed, err := p.db.AppliedGraphEdgeExists(p.ctx, edge.SourcePath, target, edge.Kind)
 		if err != nil {
 			return false, err
 		}
@@ -572,32 +691,6 @@ func (p *pipeline) inboundAdditionsAreAppliedEdges(target string, added []string
 		}
 	}
 	return len(added) > 0, nil
-}
-
-// inboundRemovalsAreBodyLinks reports whether every recorded inbound source
-// dropped from the current set still resolves to target through a body edge —
-// proof the recorded entries were catalog/navigational, not graph links. An
-// incomplete index or any source with no remaining edge fails conservative:
-// an unprovable removal could be a real deleted `related` edge and must stay
-// on the analysis path.
-func (p *pipeline) inboundRemovalsAreBodyLinks(target string, removed []string) (bool, error) {
-	if len(removed) == 0 {
-		return false, nil
-	}
-	bodySources, ready, err := p.db.BodyInboundSources(p.ctx, target)
-	if err != nil {
-		return false, err
-	}
-	if !ready {
-		return false, nil
-	}
-	body := stringSet(bodySources)
-	for _, source := range removed {
-		if !body[source] {
-			return false, nil
-		}
-	}
-	return true, nil
 }
 
 func equalStrings(a, b []string) bool {
@@ -716,20 +809,143 @@ func (p *pipeline) embeddingDependents(changed map[string]bool) map[string]strin
 	return related
 }
 
+type entitySourceTrigger struct {
+	source string
+	reason string
+}
+
+func (trigger entitySourceTrigger) detail() string {
+	return trigger.reason + ": " + trigger.source
+}
+
+type entitySourceHit struct {
+	path     string
+	mentions int
+	related  float64
+	overlap  float64
+	reason   string
+}
+
+// entitySourceDependents bounds this speculative projection like the
+// embedding-neighbor arm. Only prompt-visible entity candidates qualify, and
+// each changed alias source selects its most relevant consumers.
+func (p *pipeline) entitySourceDependents(changedFm, changedNewFm map[string]bool) (map[string]entitySourceTrigger, error) {
+	sources := p.changedEntitySources(changedFm, changedNewFm)
+	if len(sources) == 0 {
+		return nil, nil
+	}
+	hits, err := p.collectEntitySourceHits(sources, sources)
+	if err != nil {
+		return nil, err
+	}
+	return selectEntitySourceDependents(hits, p.sigs, p.embeds), nil
+}
+
+func (p *pipeline) changedEntitySources(sets ...map[string]bool) map[string]bool {
+	sources := make(map[string]bool)
+	for _, set := range sets {
+		for source := range set {
+			if p.visiblePaths[source] {
+				sources[source] = true
+			}
+		}
+	}
+	return sources
+}
+
+func (p *pipeline) collectEntitySourceHits(sources, entityPaths map[string]bool) (map[string]map[string]entitySourceHit, error) {
+	bySource := make(map[string]map[string]entitySourceHit)
+	for _, doc := range p.allDocs {
+		if err := p.ctx.Err(); err != nil {
+			return nil, err
+		}
+		if doc.Status == "missing" || p.isLanePending(doc) || !p.visiblePaths[doc.Path] {
+			continue
+		}
+		content, err := scanner.ReadDocument(p.c, doc.Path)
+		if err != nil {
+			continue
+		}
+		fm, _, err := frontmatter.Parse(content)
+		if err != nil || frontmatter.NoLLMContext(fm) {
+			continue
+		}
+		mentions := p.entities.matches(doc.Path, content)
+		if len(mentions) == 0 {
+			continue
+		}
+		visible, err := visibleEntityCandidateSet(p, doc, fm, content, mentions)
+		if err != nil {
+			return nil, err
+		}
+		for _, mention := range mentions {
+			if !visible[mention.path] {
+				continue
+			}
+			if entityPaths[mention.path] {
+				addEntitySourceHit(bySource, mention.path, doc.Path, "entity evidence changed")
+			}
+			for _, source := range mention.sourcePaths {
+				if !sources[source] || source == mention.path {
+					continue
+				}
+				addEntitySourceHit(bySource, source, doc.Path, "entity source changed")
+			}
+		}
+	}
+	return bySource, nil
+}
+
+func selectEntitySourceDependents(bySource map[string]map[string]entitySourceHit, sigs map[string][]uint64, embeds map[string][]float32) map[string]entitySourceTrigger {
+	selected := make(map[string]entitySourceTrigger)
+	for _, source := range slices.Sorted(maps.Keys(bySource)) {
+		targets := bySource[source]
+		sourceSig := sigs[source]
+		sourceEmbedding := embeds[source]
+		hits := make([]entitySourceHit, 0, len(targets))
+		for path, hit := range targets {
+			hit.related = similarity.Cosine(embeds[path], sourceEmbedding)
+			hit.overlap = similarity.Estimate(sigs[path], sourceSig)
+			hits = append(hits, hit)
+		}
+		slices.SortFunc(hits, func(a, b entitySourceHit) int {
+			if c := cmp.Compare(b.mentions, a.mentions); c != 0 {
+				return c
+			}
+			if c := cmp.Compare(b.related, a.related); c != 0 {
+				return c
+			}
+			if c := cmp.Compare(b.overlap, a.overlap); c != 0 {
+				return c
+			}
+			return cmp.Compare(a.path, b.path)
+		})
+		for i := 0; i < len(hits) && i < evidenceNeighborLimit; i++ {
+			if _, exists := selected[hits[i].path]; !exists {
+				selected[hits[i].path] = entitySourceTrigger{source: source, reason: hits[i].reason}
+			}
+		}
+	}
+	return selected
+}
+
+func addEntitySourceHit(bySource map[string]map[string]entitySourceHit, source, target, reason string) {
+	if bySource[source] == nil {
+		bySource[source] = make(map[string]entitySourceHit)
+	}
+	hit := bySource[source][target]
+	hit.path = target
+	hit.mentions++
+	if hit.reason == "" || reason == "entity evidence changed" {
+		hit.reason = reason
+	}
+	bySource[source][target] = hit
+}
+
 func (p *pipeline) dependsOnChangedEvidence(doc database.Document, fm map[string]any, content string, changed, changedFm map[string]bool, related map[string]string) (bool, string) {
 	for _, target := range frontmatter.GraphLinkTargets(fm) {
 		if t := filepath.ToSlash(strings.TrimSpace(target)); changedFm[t] {
 			return true, "linked evidence changed: " + t
-		}
-	}
-	for _, mention := range p.entities.matches(doc.Path, content) {
-		if changedFm[mention.path] {
-			return true, "entity evidence changed: " + mention.path
-		}
-		for _, source := range mention.sourcePaths {
-			if changedFm[source] {
-				return true, "entity source changed: " + source
-			}
 		}
 	}
 	if trigger, ok := related[doc.Path]; ok {
@@ -745,6 +961,35 @@ func (p *pipeline) dependsOnChangedEvidence(doc database.Document, fm map[string
 		}
 	}
 	return false, ""
+}
+
+// visibleEntityCandidateSet limits source fan-out to entity hints that reach
+// this document's top-k prompt candidate list. Alias sources outside that
+// list cannot affect the generated prompt and need no analysis.
+func visibleEntityCandidateSet(p *pipeline, doc database.Document, fm map[string]any, content string, mentions []entityMention) (map[string]bool, error) {
+	mentionsByPath := make(map[string][]entityMention)
+	for _, mention := range mentions {
+		mentionsByPath[mention.path] = append(mentionsByPath[mention.path], mention)
+	}
+	docSig := p.sigs[doc.Path]
+	if len(docSig) == 0 {
+		docSig = similarity.Signature(content)
+	}
+	lexical, err := p.db.SearchCandidateRanks(p.ctx, content, doc.Path, lexicalCandidatePool)
+	if err != nil {
+		return nil, err
+	}
+	ranked := rankCandidates(
+		doc.Path, fm, visibleCandidates(doc.Path, p.allDocs, p.visiblePaths),
+		docSig, p.sigs, p.embeds[doc.Path], p.embeds, mentionsByPath, lexical, candidateLimit,
+	)
+	visible := make(map[string]bool, len(ranked))
+	for _, candidate := range ranked {
+		if p.currentlyVisible(candidate.doc.Path) && len(candidate.mentions) > 0 {
+			visible[candidate.doc.Path] = true
+		}
+	}
+	return visible, nil
 }
 
 // RestampEvidence rebuilds v2 evidence records for analyzed rows that lack
@@ -809,9 +1054,14 @@ func (p *pipeline) restampDoc(doc database.Document) (string, error) {
 	for _, mention := range p.entities.matches(doc.Path, content) {
 		mentionsByPath[mention.path] = append(mentionsByPath[mention.path], mention)
 	}
-	ranked := rankCandidates(doc.Path, fm, visibleCandidates(doc.Path, p.allDocs, p.visiblePaths), docSig, p.sigs, p.embeds[doc.Path], p.embeds, mentionsByPath, candidateLimit)
-	ranked = slices.DeleteFunc(ranked, func(c candidate) bool { return !p.currentlyVisible(c.doc.Path) || p.catalogDocs[c.doc.Path] })
-	inbound, err := p.llmVisibleInbound(doc.Path)
+	lexical, err := p.db.SearchCandidateRanks(p.ctx, content, doc.Path, lexicalCandidatePool)
+	if err != nil {
+		return "", err
+	}
+	ranked := rankCandidates(doc.Path, fm, visibleCandidates(doc.Path, p.allDocs, p.visiblePaths), docSig, p.sigs, p.embeds[doc.Path], p.embeds, mentionsByPath, lexical, candidateLimit)
+	ranked = slices.DeleteFunc(ranked, func(c candidate) bool { return !p.currentlyVisible(c.doc.Path) })
+	_, mergeBodies := p.mergeContext(ranked)
+	inbound, err := p.llmVisibleInboundEdges(doc.Path)
 	if err != nil {
 		return "", err
 	}
@@ -821,5 +1071,5 @@ func (p *pipeline) restampDoc(doc database.Document) (string, error) {
 	}
 	_, siblingPaths := siblingContext(siblings, content)
 	_, entityPaths := entityEvidenceContext(p.c, ranked)
-	return marshalAnalysisEvidence(ranked, sortedUnique(inbound), siblingPaths, nil, entityPaths, frontmatterContext(doc, fm, p.knownDocs)), nil
+	return marshalAnalysisEvidence(ranked, inbound, siblingPaths, mergeBodies, entityPaths, frontmatterContext(doc, fm, p.knownDocs)), nil
 }

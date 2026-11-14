@@ -246,9 +246,17 @@ func applySuggestion(ctx context.Context, c config.Config, db *database.DB, s da
 		}
 		return r
 	}
-	// Snapshot the declared graph edges before the write so provenance can be
-	// recorded for any edges this reviewed suggestion adds.
-	beforeEdges := graphEdgesByKind(readRepoDoc(c, s.DocumentPath))
+	// Expand rewrites the source; merge rewrites its target and trashes the
+	// source. Moves change path identity, so their inbound delta stays
+	// conservative rather than being treated as a pure edge addition.
+	edgeSourcePath := ""
+	switch s.Action {
+	case "expand":
+		edgeSourcePath = s.DocumentPath
+	case "merge":
+		edgeSourcePath = s.TargetPath
+	}
+	beforeEdges := graphEdgesByKind(readRepoDoc(c, edgeSourcePath))
 	var applyErr error
 	if s.Origin == "identity" {
 		applyErr = validateForReview(ctx, c, db, s)
@@ -276,8 +284,15 @@ func applySuggestion(ctx context.Context, c config.Config, db *database.DB, s da
 	if err := db.MarkAppliedAndSupersede(ctx, s, currentHash); err != nil {
 		r.Error = "applied on disk but could not be marked in database: " + err.Error()
 	}
-	if err := recordAppliedGraphEdges(ctx, c, db, s.DocumentPath, beforeEdges); err != nil && r.Error == "" {
-		r.Error = "applied on disk but could not record edge provenance: " + err.Error()
+	if edgeSourcePath != "" {
+		if err := recordAppliedGraphEdges(ctx, c, db, edgeSourcePath, beforeEdges); err != nil {
+			message := "applied on disk but could not record edge provenance: " + err.Error()
+			if r.Error == "" {
+				r.Error = message
+			} else {
+				r.Error += "; " + message
+			}
+		}
 	}
 	return r
 }
@@ -315,8 +330,8 @@ func graphEdgesByKind(content string) map[string]map[string]bool {
 }
 
 // recordAppliedGraphEdges persists the graph edges an apply added to docPath.
-// Bookkeeping only: a failure here means the dependents sweep may pay one
-// extra analysis, never a wrong write, so apply itself never fails on it.
+// The source hash ties provenance to the exact written version; a failure here
+// can cost an extra analysis but never changes the applied file.
 func recordAppliedGraphEdges(ctx context.Context, c config.Config, db *database.DB, docPath string, before map[string]map[string]bool) error {
 	after := graphEdgesByKind(readRepoDoc(c, docPath))
 	added := map[string][]string{}
@@ -330,7 +345,11 @@ func recordAppliedGraphEdges(ctx context.Context, c config.Config, db *database.
 	if len(added) == 0 {
 		return nil
 	}
-	return db.RecordAppliedEdges(ctx, docPath, added)
+	sourceHash, err := hashSource(c.RepositoryPath, docPath)
+	if err != nil {
+		return err
+	}
+	return db.RecordAppliedEdges(ctx, docPath, sourceHash, added)
 }
 
 // markApplyFailed records err for the suggestion and returns the message to

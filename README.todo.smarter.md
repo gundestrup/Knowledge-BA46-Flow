@@ -1,17 +1,20 @@
-# TODO — Smarter evidence dependents (stop re-analyzing the corpus on index edits)
+# Smarter evidence dependents
 
-Status: Phase 0 + Phase A + bookkeeping restamp + catalog exclusion +
-apply-originated edge tier + Phase C dependent-cause breakdown implemented
-on branch `smarter-evidence-dependents` (schema v18: additive `applied_edges`
-table, analysis state preserved). Verified on a copy of production state:
-queue 207 → 170 (bookkeeping restamp) → **128** (catalog exclusion).
-Remaining dependents are almost entirely semantic projection: 73 entity
-source changed (one new bash note anchors entities mentioned in ~73 docs),
-15 embedding neighbors, 16 consumed evidence, 14 genuine fm-edge additions,
-~8 direct. Remaining candidates for later: entity-source fan-out is the
-largest unbounded arm (one changed source → all its mention consumers);
-consider whether it merits a per-source cap or a cheaper refresh tier like
-the bounded embedding arm.
+Status: The branch implementation and review fixes are complete. Analysis
+evidence is now v3 and records inbound graph edges by source and kind.
+Database schema v20 adds the lexical FTS5 index; v19 provenance remains
+source-version-scoped. Both migrations are additive and preserve existing
+analysis stamps and evidence.
+
+Historical production-copy measurements on the earlier branch state were
+207 → 170 → 128 queued documents after successive bookkeeping and catalog
+changes. The 128-item run was stopped after queue reporting; it did not
+complete those analyses. A separate older 584-document copy measured 130
+queued before the entity-source bound and 98 after it. The latest comparison
+used fresh copies of the current production database: `main` estimated 435
+items and the current branch worktree estimated 134 (9 direct + 125
+dependents). See §12; these are read-only queue estimates, not completed
+analysis runs.
 
 ## 1. The observed problem
 
@@ -39,9 +42,9 @@ Measured against `.kbm/state.db`:
   and **failed 487 docs** — the backlog was never drained, so evidence
   drift accumulated on top.
 
-## 2. Why it happens (mechanics)
+## 2. Why it happened (pre-fix mechanics)
 
-1. At analysis time each doc records a v2 evidence set into
+1. Before the fixes, each analyzed document recorded a v2 evidence set into
    `analysis_evidence_json`: `fm` (displayed candidates), `full` (consumed
    bodies), `inbound` (who links to me), `siblings`, `validation_context`.
    See `internal/analyzer/evidence.go` and
@@ -50,7 +53,8 @@ Measured against `.kbm/state.db`:
    `recordedContextChanged` compares `ev.Inbound` against the _current_
    `llmVisibleInbound`, siblings, and validation context. Any diff →
    dependent → full LLM re-analysis.
-3. `InboundLinks` counts `document_references` rows of **all kinds** —
+3. The earlier `InboundLinks` path could count `document_references` rows of
+   **all kinds** —
    `kind='body'` (plain markdown links, incl. index/catalog tables) _and_
    fm `related`/`contradicted_by`/`links`. `IndexedInboundLinks`
    (`internal/database/references.go:220`) applies no kind filter, while
@@ -66,6 +70,9 @@ set actually changed queue. That is correct-but-expensive: a mass index
 edit still costs one full analysis per newly-linked target.
 
 ## 3. Second observation (2026-11-13): ~95 docs, and the index-poisoning bug
+
+This section records the historical failure that motivated the fixes; its
+predictions about a future fm-only/fm+body oscillation are no longer current.
 
 Job 130 finished: `Analyzed 421; queue 5 direct + 458 dependents` —
 confirming the model. After ~8 accepted `related`-type suggestions were
@@ -143,7 +150,7 @@ possible":
 | Scan / dedup / fingerprints               | SHA256 variants + MinHash sketch (word 3-shingles, bottom-64)                                                 | Correct — cheap, no model                                   |
 | fm validation, link repair, `document_id` | Fully deterministic + guarded                                                                                 | Correct — provable, reviewable                              |
 | Entity linking                            | Closed-domain gazetteer (aliases from filename/title/H1/link labels/framework catalog, DF-gating, case rules) | Correct — generic NER libs would be _worse_ on this domain  |
-| Candidate recall                          | Hybrid: MinHash Jaccard (literal overlap → merge) + embedding cosine (topical → link) + entity/dir/fm signals | Correct — hybrid lexical+dense retrieval is best practice   |
+| Candidate recall                          | Hybrid: MinHash Jaccard + embedding cosine + FTS5 BM25 + entity/dir/fm signals                                | Lexical, literal and dense retrieval signals are combined   |
 | Enrich                                    | Deterministic first (H1→title, path→tags), fast model only on miss                                            | Correctly tiered already                                    |
 | Analyze                                   | Full LLM (merge/link/contradiction/summary judgment)                                                          | Irreducible — judgment calls                                |
 | Expand / freshness                        | Generative + verification tasks                                                                               | LLM-appropriate                                             |
@@ -158,7 +165,7 @@ is sent to the judgment stage — not a wrong analyzer choice. See
 
 | Option                                           | Assessment                                                                                                                                      |
 | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| SQLite FTS5 (already embed `modernc.org/sqlite`) | BM25-ish lexical recall nearly free; could add a lexical arm to candidates. Nice-to-have — the MinHash+embedding hybrid covers the space.       |
+| SQLite FTS5 (already embed `modernc.org/sqlite`) | Implemented as a bounded BM25 lexical rank arm; it breaks low-semantic-score ties and does not displace strong embedding/overlap candidates.    |
 | Bleve (Lucene-in-Go)                             | Heavier; FTS5 covers the need with no new dep. Skip.                                                                                            |
 | gonum/graph (HITS/PageRank)                      | Hub detection needs only an out-degree count — two lines, not a dependency. Skip.                                                               |
 | goldmark (CommonMark AST)                        | The one real reuse candidate: `links.go`/`entities.go` hand-roll fence/inline-code/link parsing. Robustness win when touching that code anyway. |
@@ -171,7 +178,7 @@ tool; recorded-evidence invalidation is already ahead of common
 practice. The needed fixes are design changes (Phases 0/A/B + the
 apply-edge amendment), not dependencies.
 
-## 6. Options (updated after the Nov-13 findings)
+## 6. Historical options (superseded by the implementation below)
 
 | Option                                         | Change                                                                                                                                                    | Effect                                                                                                                             |
 | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -185,7 +192,11 @@ Note: option 1 is now proven _necessary_ beyond cost — recording fm-only
 inbound makes the indexed and fallback `InboundLinks` paths agree, which
 is the only way `ev.Inbound` stays stable across index-readiness flips.
 
-## 7. Recommended plan (option 3 + amendments)
+## 7. Original plan (superseded)
+
+The phases and estimates in this archival section were written before
+implementation. They are not the current status or operational guidance.
+The implemented behavior and remaining work are summarized in §7.1.
 
 ### Phase 0 — stop the oscillation (smallest, highest value)
 
@@ -257,14 +268,73 @@ is the only way `ev.Inbound` stays stable across index-readiness flips.
 - Side benefits: no cloud-quota burn on bulk edits, smaller review queue,
   less `related: <index>` noise in suggestions.
 
-### Immediate user action (no code change)
+### Historical immediate action (no longer current)
 
-- Fix `lessons-learned/go-build-vcs-stamping-ci-containers.md` frontmatter
-  — quote the title:
-  `title: 'go build "error obtaining VCS status: exit status 128" in CI containers'`
-  — but **expect the ~400-doc wave on the next run** (the fm-only →
-  fm+body flip). Until Phases 0/A land, that wave is unavoidable; do it
-  once rather than repeatedly.
+- The malformed-title example and predicted ~400-document oscillation
+  describe the pre-fix incident only. The scanner now marks unindexable
+  sources, and the inbound contract is stable; this prediction no longer
+  applies.
+
+## 7.1 Current implementation, migration, and follow-up
+
+- The scanner writes a `reference_versions` marker even for unreadable,
+  malformed, or mid-scan-changed sources. One bad document cannot switch the
+  corpus between indexed and fallback inbound results.
+- Inbound evidence is frontmatter graph topology only (`related` and
+  `contradicted_by`); body links remain indexed for link repair and do not
+  fan out to target analysis. Indexed and fallback lookup return the same
+  source/kind pairs.
+- Evidence v3 stores inbound `(source_path, kind)` edges. A `related` ↔
+  `contradicted_by` change, any graph-edge removal, and any unproven addition
+  trigger full analysis. Contradiction edges are explicitly labeled in the
+  prompt.
+- V2 evidence is upgraded lazily. If its visible inbound path set is unchanged
+  and has no newly labeled contradiction context, evidence is restamped with
+  no LLM call. If an old path disappears, current body links cannot prove what
+  the path represented historically, so the document is conservatively
+  analyzed once. This replaces the unsafe mixed body/graph restamp rule.
+- Accepted `related` additions are restamped only when provenance matches the
+  current source version and the edge still exists. A scan that observes edge
+  removal deletes the provenance, so a later manual re-add is not
+  misclassified. `contradicted_by` additions always analyze.
+- Merge provenance is recorded on the merge target; expand provenance is
+  recorded on the rewritten source. Moves/deletes are not treated as pure
+  edge additions.
+- Catalog detection uses at least 15 indexed Markdown body links, not graph degree.
+  Catalogs remain in relation candidates, but their complete bodies are
+  excluded from merge context. Evidence tracks merge bodies separately from
+  body-derived candidate scores; catalog-only score drift can be restamped.
+- The dry-run estimate is read-only and returns `dependent_reasons`, matching
+  the cause breakdown in run summaries. The dashboard shows those causes.
+- SQLite v18 → v19 adds `applied_edges.source_sha256` with an empty default;
+  v19 → v20 adds the FTS5 virtual table. It backfills on scan without
+  recalculating analysis.
+  Legacy provenance rows intentionally cannot suppress invalidation. The
+  additive migration preserves analysis hashes, lane stamps, and evidence;
+  it does not recalculate the corpus.
+- Existing v2 evidence needs no blanket migration: unchanged related-only
+  paths are restamped; ambiguous path removals and newly visible contradiction
+  labels are analyzed once. Estimates preview this without writing.
+- Regression coverage includes mixed body/graph removals, edge-kind changes
+  in both directions, applied contradiction additions, provenance retirement
+  after removal/manual re-add, merge-target provenance, catalog candidate
+  retention/body exclusion, migration preservation, and estimate cause
+  reporting.
+- Same-snapshot dry-run before the entity bound: 9 direct + 121 dependents
+  (130 total). After the bound: 9 direct + 89 dependents (98 total), a
+  reduction of 32 queued documents. The entity-source cause fell from 73 to
+  35; the 16-consumer limit is per changed source, so overlapping sources can
+  still select more than 16 unique consumers. Seven more documents appear
+  under the embedding-neighbor cause after the entity arm is bounded; these
+  remain queued rather than being silently skipped. The cap is heuristic
+  projection, not proof that lower-ranked consumers are irrelevant.
+- Post-bound cause counts: 17 consumed-evidence changes, 22 embedding
+  neighbors, 1 entity-evidence change, 35 entity-source changes, and 14
+  inbound-link changes. The FTS5 table was added to the isolated DB by
+  migration but not backfilled during this read-only dry-run; the next scan
+  fills it. Scanner/index lifecycle and retrieval are covered by local tests.
+- These measurements used an earlier saved copy and are superseded for
+  current-production comparison by §12.
 
 ## 8. How `knowledge-base-mcp-server` does indexing — is it better?
 
@@ -303,8 +373,8 @@ the rule directly — its output genuinely depends on other docs — which
 is exactly why the evidence-record machinery exists. The lesson to take
 isn't "be per-file" but **match invalidation cost to change
 significance**: the server already does this (hash → re-embed, nothing
-else); KBM-flow should tier the same way (fm-edge → re-analyze,
-catalog-edge → restamp).
+else); KBM-flow now tiers the same way (semantic graph changes → re-analyze,
+provable bookkeeping changes → restamp).
 
 Things KBM-flow could still borrow:
 
@@ -314,6 +384,11 @@ Things KBM-flow could still borrow:
 - **Per-model storage isolation:** server stores indexes per
   `(provider, model)` — mirrors KBM's "model stamps are atomic; ranking
   must never mix incompatible models."
+- **Hybrid retrieval:** the current upstream README/docs describe dense,
+  lexical, hybrid, and auto modes. Hybrid fuses BM25 and dense result ranks
+  with RRF; optional cross-encoder reranking and section/metadata/summary
+  views remain retrieval features, not document-invalidation signals. See
+  §12 before considering these for KBM-flow.
 
 ## 9. Can we integrate better?
 
@@ -345,38 +420,163 @@ Integration opportunities, ranked:
    moment (after `apply`/run completion, not during analysis) so the
    server doesn't index half-applied state.
 
-## 10. Open questions before implementing
+## 10. Remaining follow-up
 
-- Should `kind='body'` edges stay visible as prompt _display_ context
-  (annotation) while excluded from invalidation? (Recommended: yes.)
-- Out-degree cap value — measure out-degree distribution first
-  (current max: `lessons-learned/README.md` = 168).
-- Does the deterministic backlink suggestion belong in `write_scope`
-  `metadata-links` only, or all scopes?
-- Evidence schema: bump `v` in `analysis_evidence_json` or extend with an
-  optional `inbound_body` field (backward-compatible, cheaper)?
-- Should the sweep also restamp `enriched_*`/external lanes, or local
-  only?
-- Index readiness semantics: marker-row vs exclude-unindexable — which
-  keeps the "fail closed on real staleness" guarantee?
-- Apply-originated edges: can the dependents sweep tell "edge added by
-  apply" from "edge added by hand"? If not, apply should write a marker
-  (e.g. per-edge `restamp` flag or an acknowledged-generation bump)
-  rather than trying to infer provenance later.
+- The fresh production-copy comparison is recorded in §12. Do not infer
+  actual runtime savings from the dry-run; no analysis models were called.
+- Investigate the 51 legacy inbound dependents. Only restamp the old path-only
+  records if historical edge kinds can be proved; otherwise allow this likely
+  one-time v2-to-v3 convergence to analyze conservatively.
+- Add per-document dry-run explanations, including primary and secondary
+  causes, trigger paths, inbound edge deltas, and projection ranks. Current
+  counts identify categories but not all overlaps or the exact affected notes.
+- Measure entity-source and embedding projection precision on a labeled,
+  local corpus before introducing a corpus-global fan-out budget or a deferred
+  no-LLM refresh lane.
+- Verify the MCP reindex trigger only fires after a complete apply/run, not
+  while analysis is still mutating the queue.
+- Evaluate FTS5 and any hybrid reranking with candidate-recall metrics.
+  Retrieval changes are not expected to reduce the analysis queue by
+  themselves. Goldmark and server-index reuse remain optional, measurement-led
+  work.
 
-## 11. Files touched (when implementing)
+## 11. Implementation files
 
-- `internal/scanner/references.go` — `indexDocumentLinks` early-return
-  paths (index-poisoning fix)
-- `internal/database/references.go` — kind filter / kind-aware inbound
-  query; readiness-check semantics; doc-comment fix
-- `internal/analyzer/evidence.go` — split inbound arms, silent restamp
-  path, apply-originated tier
-- `internal/analyzer/evidence_state.go` (database) — evidence schema v3
-- `internal/analyzer/analyzer.go` — `marshalAnalysisEvidence` split sets
-- `internal/review/` (apply path) — mark apply-originated edges if the
-  tiered rule needs provenance
-- `internal/analyzer/analyzer_test.go` — extend catalog test; new tier
-  tests; malformed-doc readiness regression
-- `docs/FUNCTIONS.md`, `CHANGELOG.md`, possibly `docs/CONFIGURATION.md`
-  (out-degree cap knob)
+- `internal/scanner/references.go` and `internal/database/references.go` —
+  stable reference readiness, typed inbound graph queries, body-link hub
+  counts, and applied-provenance cleanup.
+- `internal/database/migrate.go` and `internal/database/apply.go` — additive
+  v19 provenance migration and source-version-scoped records.
+- `internal/analyzer/evidence.go`, `validation.go`, and `analyzer.go` —
+  evidence v3, kind-aware prompt context, conservative legacy handling,
+  catalog body exclusion, and cause reporting.
+- `internal/analyzer/estimate.go` and `internal/server/ops.go` — read-only
+  dependent-cause estimates exposed to the dashboard/API.
+- `internal/database/search.go` and `internal/database/search_test.go` —
+  optional migration-safe FTS5 candidate retrieval and lifecycle coverage.
+- `internal/review/review.go` — expand and merge-target provenance.
+- Analyzer, database, review, scanner, and server tests cover regressions and
+  additive migration state preservation. User-visible behavior is documented
+  in `docs/FUNCTIONS.md`, `docs/API.md`, and `CHANGELOG.md`.
+
+## 12. Current production-copy dependent audit and retrieval references
+
+### Branch comparison
+
+On 2026-11-14, separate SQLite backups of the production `state.db` were
+opened with `main` at `f9fe99a` and the current `smarter-evidence-dependents`
+worktree (including its uncommitted changes). The source database was schema
+v17 with 628 rows, 44 marked missing; both dry-run APIs considered 584
+documents. `main` estimated 9 direct + 426 dependents = 435 total. The current
+worktree estimated 9 direct + 125 dependents = 134 total: 301 fewer queued
+analyses (69.2%). No scan or model generation ran. The current copy migrated
+to schema v20; the production database remained v17 and untouched.
+
+The corpus working tree had modified and untracked files at measurement time.
+These estimates used the existing scan snapshot and current files without
+running a scan, so a real run's preflight scan may change the counts.
+`main` did not expose a cause breakdown; the table below describes the current
+branch only.
+
+The dependent reason counts are first-hit labels: each queued dependent gets
+one primary reason, so they sum to 125 but do not show every trigger that may
+also apply to the same note:
+
+| Primary cause              | Dependents | Interpretation                                                |
+| -------------------------- | ---------: | ------------------------------------------------------------- |
+| Inbound links changed      |         51 | Mostly the legacy path-only evidence transition; see below.   |
+| Entity source changed      |         35 | Speculative, prompt-visible entity-candidate projection.      |
+| Embedding neighbor changed |         22 | Speculative, corpus-calibrated nearest-neighbor projection.   |
+| Consumed evidence changed  |         16 | A recorded candidate/body/score input changed.                |
+| Entity evidence changed    |          1 | A changed entity source was visible in the candidate context. |
+
+### The 51 inbound dependents
+
+All 578 stored local evidence records in the production copy are v2. A
+read-only comparison of their old path-only `inbound` sets with current
+frontmatter graph references found 53 target records with path-set deltas:
+109 old paths are no longer graph edges, while 27 graph paths are new. The
+removed paths still resolve to current `kind='body'` references; 41 are from
+`languages/README.md`, 5 from `frameworks/css/README.md`, and 3 from
+`cms/README.md`. The dry-run marks 51 unchanged targets as dependents; direct
+pending items and visibility/queue rules make the raw target count differ.
+All active sources had a current `reference_versions` marker, so the old
+indexed query path was in use. The 27 new graph paths are not body-link
+bookkeeping; without historical applied-edge provenance, their additions
+remain valid analysis triggers.
+
+This strongly indicates a one-time representation-convergence wave. The old
+`main` indexed inbound query did not filter `document_references.kind`, while
+the current query uses only `related` and `contradicted_by`. However, v2 saved
+only source paths, not edge kinds, and this database has no historical
+reference snapshot or applied-edge provenance for that old state. A source
+could have had both a body link and a graph edge when the target was analyzed,
+then lost the graph edge while retaining its body link. Therefore the current
+body-only reference is not proof that the old evidence was body-only.
+Restamping all 51 would repeat the mixed-edge safety bug; do it only if an
+archived source/reference snapshot proves the old kinds. Otherwise this is a
+conservative, likely one-time cost: after v3 evidence is written, the same
+path-set delta should not recur. In a stable repeat dry-run, at most these 51
+primary-attributed items disappear; fewer may leave the queue if other
+evidence arms also select them. That post-run behavior has not yet been
+measured.
+
+### Further queue optimization
+
+- The 35 entity-source dependents are already filtered to prompt-visible
+  candidates and capped at 16 per changed source. Several changed sources can
+  still select 35 unique notes. A corpus-global cap could reduce this arm, but
+  would skip lower-ranked possible context; do not silently restamp them.
+- The 22 embedding dependents are also a union of per-source top-16 sets above
+  the calibrated 95th-percentile cosine floor. A global budget, stricter
+  threshold, or explicit deferred-refresh lane could reduce immediate LLM
+  work, but needs measured relevance and an honest stale/deferred state.
+- The 16 consumed-evidence and 1 entity-evidence items have stronger
+  prompt-evidence reasons. Keep them on the analysis path unless per-note
+  diagnostics show the changed field was not actually prompt-visible.
+- Highest-value next diagnostic: expose per-note primary and secondary
+  triggers in dry-run, including source path, edge kind/addition/removal,
+  evidence version, candidate rank, cosine/overlap score, and whether the
+  candidate body or only its annotation changed. This is low risk and enables
+  measurement before changing invalidation semantics.
+
+### What the retrieval projects contribute
+
+Reviewed upstream documentation on 2026-11-14:
+
+- [`knowledge-base-mcp-server` README](https://github.com/jeanibarz/knowledge-base-mcp-server)
+  and [authoring/retrieval notes](https://github.com/jeanibarz/knowledge-base-mcp-server/blob/main/docs/authoring-knowledge.md)
+  describe SHA256-based per-file incremental indexing, heading-aware Markdown
+  chunks (1000-character size, 200-character overlap by default), dense FAISS
+  plus BM25, and `dense`/`lexical`/`hybrid`/`auto` retrieval. Hybrid uses
+  Reciprocal Rank Fusion (RRF), so rank lists with incomparable raw score
+  scales can be combined. Optional reranking and
+  multi-view section/metadata/summary retrieval map results back to canonical
+  source chunks ([reranker/feature flags](https://github.com/jeanibarz/knowledge-base-mcp-server/blob/main/docs/feature-flags.md),
+  [multi-view change](https://github.com/jeanibarz/knowledge-base-mcp-server/pull/580)).
+- [txtai's hybrid-search example](https://github.com/neuml/txtai/blob/master/examples/48_Benefits_of_hybrid_search.ipynb),
+  [search implementation](https://github.com/neuml/txtai/blob/master/src/python/txtai/embeddings/search/base.py),
+  [fusion implementation](https://github.com/neuml/txtai/blob/master/src/python/txtai/embeddings/search/hybrid.py),
+  and [scoring documentation](https://neuml.github.io/txtai/embeddings/configuration/scoring/)
+  show sparse BM25 and dense retrieval over-fetching up to 10x the requested
+  result count before fusion. txtai uses rank fusion for unnormalized scores,
+  weighted fusion for normalized scores, and log-odds fusion for calibrated
+  BB25 scores; its examples compare methods with nDCG, MAP, recall, and
+  precision metrics.
+- These are retrieval/candidate-quality patterns, not solutions to
+  cross-document analysis invalidation. KBM-flow already has incremental
+  hashes, FTS5, and embeddings. The useful next lesson is evaluation: maintain
+  a small local set of changed-note → relevant-candidate judgments and compare
+  Recall@16/nDCG@16 for the current ranker against RRF/over-fetch variants
+  before changing prompt candidates. KBM's lexical arm currently breaks ties
+  only when candidates lack strong embedding/shingle scores; RRF is a
+  plausible retrieval-quality experiment, not a proven queue reduction. Keep
+  chunk or multi-view hits mapped to their canonical document; evidence stamps
+  and merge/apply safety remain document-level. Do not add txtai (Python) as a
+  dependency to this Go application.
+- Hybrid ranking, chunking, reranking, or MCP index reuse may improve retrieval
+  quality or embedding cost, but none is expected to remove the 51 legacy
+  inbound cases or directly lower the analysis queue without separate
+  invalidation changes. FTS5 was not backfilled in this dry-run because that
+  would require scanning; its production-corpus retrieval benefit remains
+  unmeasured.

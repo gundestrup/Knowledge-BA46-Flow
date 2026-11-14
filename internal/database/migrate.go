@@ -20,7 +20,7 @@ import (
 // schemaVersion stamps the shape migrate() produces — bump it on every schema
 // change. A database stamped newer than this build is refused at Open so an
 // old binary cannot silently half-migrate a future layout.
-const schemaVersion = 18
+const schemaVersion = 20
 
 func (d *DB) migrate(ctx context.Context) error {
 	var stamped int
@@ -110,13 +110,12 @@ CREATE TABLE IF NOT EXISTS renames (
  moved_at TEXT NOT NULL
 );
 -- applied_edges records graph edges a human added by accepting a suggestion.
--- An edge written here is a reviewed link decision: when it later shows up as
--- a new inbound entry in the target's evidence, the sweep restamps rather
--- than re-analyzing, because no new semantic question arose.
+-- The source hash scopes that provenance to the exact applied source version.
 CREATE TABLE IF NOT EXISTS applied_edges (
  source_path TEXT NOT NULL,
  target_path TEXT NOT NULL,
  kind TEXT NOT NULL,
+ source_sha256 TEXT NOT NULL DEFAULT '',
  applied_at TEXT NOT NULL,
  PRIMARY KEY(source_path, target_path, kind)
 );
@@ -176,7 +175,13 @@ CREATE TABLE IF NOT EXISTS repo_report_history (
 	if _, err := d.ExecContext(ctx, queueSchema); err != nil {
 		return err
 	}
+	if err := d.ensureFTS(ctx); err != nil {
+		return err
+	}
 	if err := d.upgradeIdentitySchema(ctx); err != nil {
+		return err
+	}
+	if err := d.upgradeAppliedEdges(ctx); err != nil {
 		return err
 	}
 	// v11: decided_at means "left the review queue" — rows superseded or failed
@@ -189,6 +194,39 @@ CREATE TABLE IF NOT EXISTS repo_report_history (
 		}
 	}
 	_, err = d.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion))
+	return err
+}
+
+// upgradeAppliedEdges adds source-version scoping to v18 provenance rows.
+// Legacy rows deliberately keep an empty hash and therefore cannot suppress
+// invalidation; reconstructing their origin from current files is not provable.
+func (d *DB) upgradeAppliedEdges(ctx context.Context) error {
+	rows, err := d.QueryContext(ctx, `SELECT name FROM pragma_table_info('applied_edges')`)
+	if err != nil {
+		return err
+	}
+	hasSourceHash := false
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if name == "source_sha256" {
+			hasSourceHash = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if hasSourceHash {
+		return nil
+	}
+	_, err = d.ExecContext(ctx, `ALTER TABLE applied_edges ADD COLUMN source_sha256 TEXT NOT NULL DEFAULT ''`)
 	return err
 }
 

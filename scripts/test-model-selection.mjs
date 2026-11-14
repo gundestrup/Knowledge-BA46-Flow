@@ -188,6 +188,10 @@ const estimatePayload = {
   pending: { embed: 500, analyze: 10 },
   dependents: 87,
   analyze_total: 97,
+  dependent_reasons: {
+    "entity source changed": 2,
+    "embedding neighbor changed": 1,
+  },
   warnings: ["embed uses emb-b — re-vectorized"],
 };
 dashboard.requestJSON = async (path, options) => {
@@ -210,9 +214,22 @@ assert.match(
   lines.find((l) => l.startsWith("embed")),
   /500/,
 );
+const analyzeLine = lines.find((l) => l.startsWith("analyze"));
+assert.match(analyzeLine, /10 document\(s\) queued \+87 unchanged.*97 total/);
+// Dependent causes render inline, sorted by cause name.
 assert.match(
-  lines.find((l) => l.startsWith("analyze")),
-  /10 document\(s\) queued \+87 unchanged.*97 total/,
+  analyzeLine,
+  /\(1 embedding neighbor changed, 2 entity source changed\)$/,
+);
+// Estimates without a cause breakdown keep the bare total — no empty suffix.
+dashboard.estimate = {
+  pending: { analyze: 2 },
+  dependents: 1,
+  analyze_total: 3,
+};
+assert.match(
+  dashboard.estimateLines()[0],
+  /^analyze: 2 document\(s\) queued \+1 unchanged.*3 total$/,
 );
 // A failed estimate surfaces the error and clears stale numbers.
 dashboard.requestJSON = async () => {

@@ -237,6 +237,7 @@ var enrichSchema = json.RawMessage(`{
 // similarity ranking the top of the list is genuinely relevant, so far fewer
 // than the old 200 alphabetical paths are needed.
 const candidateLimit = 16
+const lexicalCandidatePool = candidateLimit * 4
 
 // overlapThreshold is the estimated Jaccard above which a pair is flagged as
 // a probable duplicate in the prompt context.
@@ -254,9 +255,9 @@ const evidenceNeighborLimit = 16
 // pass-through on a denser one and a wall on a sparser one.
 const evidenceFloorQuantile = 0.95
 
-// catalogOutDegree marks a document as navigational infrastructure: a page
-// linking out to this many documents is a catalog/index, never a merge
-// target — no matter how much its link-table boilerplate overlaps note text.
+// catalogOutDegree marks a document as navigational infrastructure when it
+// contains at least this many indexed body links. Graph edges alone are not a
+// catalog signal, and high-degree pages remain relation candidates.
 const catalogOutDegree = 15
 
 // evidenceFloorSamplePairs caps the sampled pair count used for the floor
@@ -421,7 +422,14 @@ func (p *pipeline) skipWithoutDirectWork(docs []database.Document, embedAvailabl
 		return true, nil
 	}
 	needsRemovalSweep, err := p.db.NeedsRemovalSweep(p.ctx, p.external)
-	return !needsRemovalSweep, err
+	if err != nil || needsRemovalSweep {
+		return false, err
+	}
+	allDocs, err := p.db.Documents(p.ctx)
+	if err != nil {
+		return false, err
+	}
+	return !hasV2Evidence(allDocs, p), nil
 }
 
 type runModels struct {
@@ -947,14 +955,17 @@ func (p *pipeline) analyzeDoc(doc database.Document, fm map[string]any, candidat
 	for _, mention := range mentions {
 		mentionsByPath[mention.path] = append(mentionsByPath[mention.path], mention)
 	}
-	ranked := rankCandidates(doc.Path, fm, candidates, docSig, p.sigs, docEmb, p.embeds, mentionsByPath, candidateLimit)
-	ranked = slices.DeleteFunc(ranked, func(c candidate) bool { return !p.currentlyVisible(c.doc.Path) || p.catalogDocs[c.doc.Path] })
-	mergeText, mergeBodies := p.mergeContext(ranked)
-	inbound, err := p.llmVisibleInbound(doc.Path)
+	lexical, err := p.db.SearchCandidateRanks(p.ctx, content, doc.Path, lexicalCandidatePool)
 	if err != nil {
 		return err
 	}
-	inbound = sortedUnique(inbound)
+	ranked := rankCandidates(doc.Path, fm, candidates, docSig, p.sigs, docEmb, p.embeds, mentionsByPath, lexical, candidateLimit)
+	ranked = slices.DeleteFunc(ranked, func(c candidate) bool { return !p.currentlyVisible(c.doc.Path) })
+	mergeText, mergeBodies := p.mergeContext(ranked)
+	inbound, err := p.llmVisibleInboundEdges(doc.Path)
+	if err != nil {
+		return err
+	}
 	siblings, err := scanner.SiblingFiles(p.c, doc.Path)
 	if err != nil {
 		return err
@@ -1217,6 +1228,7 @@ type candidate struct {
 	doc      database.Document
 	sim      float64
 	rel      float64
+	lexical  float64
 	mentions []entityMention
 	sameDir  bool
 	linked   bool
@@ -1238,7 +1250,7 @@ func visibleCandidates(docPath string, all []database.Document, visible map[stri
 // content similarity first, then same-directory, then documents this doc's
 // frontmatter already links to, then path order. Returns at most limit
 // entries.
-func rankCandidates(docPath string, fm map[string]any, candidates []database.Document, docSig []uint64, sigs map[string][]uint64, docEmb []float32, embeds map[string][]float32, mentions map[string][]entityMention, limit int) []candidate {
+func rankCandidates(docPath string, fm map[string]any, candidates []database.Document, docSig []uint64, sigs map[string][]uint64, docEmb []float32, embeds map[string][]float32, mentions map[string][]entityMention, lexical map[string]float64, limit int) []candidate {
 	docDir := filepath.ToSlash(filepath.Dir(docPath))
 	linked := map[string]bool{}
 	for _, l := range frontmatter.GraphLinkTargets(fm) {
@@ -1250,6 +1262,7 @@ func rankCandidates(docPath string, fm map[string]any, candidates []database.Doc
 			doc:      d,
 			sim:      similarity.Estimate(docSig, sigs[d.Path]),
 			rel:      similarity.Cosine(docEmb, embeds[d.Path]),
+			lexical:  lexical[d.Path],
 			mentions: mentions[d.Path],
 			sameDir:  filepath.ToSlash(filepath.Dir(d.Path)) == docDir,
 			linked:   linked[d.Path],
@@ -1266,6 +1279,14 @@ func rankCandidates(docPath string, fm map[string]any, candidates []database.Doc
 		}
 		if c := cmp.Compare(b.sim, a.sim); c != 0 {
 			return c
+		}
+		// Lexical retrieval breaks ties only when neither candidate already
+		// has a strong dense or literal signal; it should not displace a
+		// high-confidence semantic neighbor.
+		if max(a.rel, a.sim) < overlapThreshold && max(b.rel, b.sim) < overlapThreshold {
+			if c := cmp.Compare(b.lexical, a.lexical); c != 0 {
+				return c
+			}
 		}
 		if a.sameDir != b.sameDir {
 			if a.sameDir {
@@ -1300,6 +1321,9 @@ func renderCandidates(ranked []candidate) string {
 		var tags []string
 		if err := json.Unmarshal([]byte(c.doc.TagsJSON), &tags); err == nil && len(tags) > 0 {
 			ann = append(ann, "["+strings.Join(tags, ", ")+"]")
+		}
+		if c.lexical > 0 {
+			ann = append(ann, "lexical match")
 		}
 		if c.rel > 0 {
 			ann = append(ann, fmt.Sprintf("%.0f%% related", c.rel*100))
@@ -1338,16 +1362,6 @@ func overlapContext(ranked []candidate) string {
 		return ""
 	}
 	return "High content overlap (possible duplicates):\n" + strings.Join(lines, "\n") + "\n"
-}
-
-func filterLLMVisiblePaths(paths []string, visible map[string]bool) []string {
-	filtered := make([]string, 0, len(paths))
-	for _, path := range paths {
-		if visible[path] {
-			filtered = append(filtered, path)
-		}
-	}
-	return filtered
 }
 
 // validAction whitelists the actions apply knows how to execute.
@@ -1461,13 +1475,22 @@ func (p *pipeline) rejectionContext(path string) string {
 	return "Human reviewers previously REJECTED these suggestions for this note — do not re-propose them; a reviewer note is ground truth you may lack:\n" + strings.Join(lines, "\n") + "\n"
 }
 
-// inboundContext lists documents with an indexed link to this one — input for
-// deciding whether a backlink belongs in `related`.
-func inboundContext(inbound []string) string {
+// inboundContext lists frontmatter linkers and distinguishes contradiction
+// edges so the model can treat them as high-signal context.
+func inboundContext(inbound []database.InboundEdge) string {
 	if len(inbound) == 0 {
 		return ""
 	}
-	return "Inbound links (documents whose frontmatter links here):\n- " + strings.Join(inbound, "\n- ") + "\n"
+	lines := make([]string, 0, len(inbound))
+	for _, edge := range sortedInboundEdges(inbound) {
+		line := edge.SourcePath
+		if edge.Kind == "contradicted_by" {
+			line += " [contradicted_by]"
+		}
+		lines = append(lines, line)
+	}
+	return "Inbound links (documents whose frontmatter links here):\n- " +
+		strings.Join(lines, "\n- ") + "\n"
 }
 
 // siblingContext lists same-directory files the document never mentions —

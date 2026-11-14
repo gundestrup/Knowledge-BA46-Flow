@@ -65,13 +65,15 @@ SELECT 1 FROM suggestions AS other WHERE other.document_path=suggestions.documen
 }
 
 // RecordAppliedEdges stores the graph edges a successful apply added to one
-// document — provenance the dependents sweep uses to recognise that a newly
-// recorded inbound edge came from a human-reviewed link decision.
-func (d *DB) RecordAppliedEdges(ctx context.Context, source string, edges map[string][]string) error {
+// source version — provenance the dependents sweep can safely reuse.
+func (d *DB) RecordAppliedEdges(ctx context.Context, source, sourceSHA string, edges map[string][]string) error {
 	at := time.Now().UTC().Format(time.RFC3339)
 	for kind, targets := range edges {
 		for _, target := range targets {
-			if _, err := d.ExecContext(ctx, `INSERT OR IGNORE INTO applied_edges(source_path,target_path,kind,applied_at) VALUES(?,?,?,?)`, source, target, kind, at); err != nil {
+			if _, err := d.ExecContext(ctx, `INSERT INTO applied_edges(source_path,target_path,kind,source_sha256,applied_at)
+VALUES(?,?,?,?,?) ON CONFLICT(source_path,target_path,kind) DO UPDATE SET
+source_sha256=excluded.source_sha256,applied_at=excluded.applied_at`,
+				source, target, kind, sourceSHA, at); err != nil {
 				return err
 			}
 		}

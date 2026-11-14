@@ -454,6 +454,15 @@ func (w *repoWalker) indexFile(path, rel string, e os.DirEntry) error {
 	if err != nil {
 		return err
 	}
+	title, summary, tagText := "", "", ""
+	if frontmatterErr == nil {
+		title, _ = fields["title"].(string)
+		summary, _ = fields["summary"].(string)
+		tagText = strings.Join(frontmatter.StringList(fields, "tags"), " ")
+	}
+	if err := w.db.IndexSearchDocument(w.ctx, rel, hashes.combined, title, summary, tagText, body); err != nil {
+		return err
+	}
 	w.result.Seen++
 	w.paths[rel] = true
 	if changed {

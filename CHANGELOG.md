@@ -16,30 +16,37 @@ tag is prepared.
   query path. Body links are still indexed for link repair, but adding a
   catalog/README table row no longer requeues its link targets for
   analysis — index edits no longer fan out into per-target re-analysis.
-- Evidence records from the older fm+body inbound contract self-heal:
-  when the sweep's only inbound delta is recorded linkers that still
-  resolve through body edges (provably navigational, never graph links),
-  the record is restamped in place instead of requeueing the document for
-  analysis. Unprovable removals (no remaining edge) still queue, since
-  they could be real deleted `related` edges.
-- High out-degree catalog/index pages (15+ outbound references) are no
-  longer ranked as merge/relation candidates: a link table is never a
-  merge target, and shared catalog-backlink boilerplate only inflated
-  their shingle overlap. Catalogs are excluded from the candidate list,
-  merge-body context, and recorded evidence, so catalog table edits stop
-  fanning out into consumer re-analysis. Older records that consumed a
-  catalog body are restamped in place (catalog-only consumed drift is
-  provably bookkeeping).
-- Inbound graph edges added by an accepted/applied suggestion no longer
-  requeue the link target: the apply path records edge provenance in the
-  new `applied_edges` table (schema v18, additive migration preserving
-  all analysis state), and the sweep restamps the target's evidence
-  instead of paying a full analysis for a link decision a human already
-  reviewed. Authored edge additions without provenance still queue.
-- Run summaries now break dependents down by cause, e.g.
-  `queue 8 direct + 120 dependents (73 entity source changed, 15
-embedding neighbor changed, ...)`, so queue anomalies are diagnosable
-  from job detail instead of a database excavation.
+- Analysis evidence v3 records inbound frontmatter graph edges with their
+  exact kind. Changing `related` to/from `contradicted_by`, removing a graph
+  edge, or adding an unproven edge triggers full analysis; a `related` addition
+  with valid applied provenance is restamped. Contradiction edges are labeled
+  in the prompt. Body links remain indexed for link repair but do not invalidate
+  inbound analysis evidence. Ambiguous path-only v2 removals are analyzed
+  conservatively rather than being inferred as body-only from current links;
+  unchanged legacy context is restamped without model calls.
+- High body-link-degree pages (15+ indexed Markdown body links) are treated as
+  navigation catalogs for merge-body selection, but remain in relation
+  candidate annotations. Catalog bodies are not injected as merge context;
+  their body-derived candidate-score evidence is tracked separately and
+  catalog-only drift can restamp without re-analysis. Graph-edge degree alone
+  does not classify a substantive authority page as a catalog.
+- Applied `related` edge provenance is exact-kind and source-version scoped.
+  Schema v19 adds `applied_edges.source_sha256` additively, preserving existing
+  analysis state; scanning a removed edge retires its marker, so later manual
+  re-additions cannot reuse stale provenance. Expand writes record the source;
+  merge writes record the target. Applied `contradicted_by` additions still
+  require analysis.
+- Run summaries and the read-only dry-run API now expose dependent-cause
+  counts through `dependent_reasons`; the dashboard displays those causes.
+- Entity-source projection is bounded to the 16 highest-ranked
+  prompt-visible consumers per changed source. Ranking uses mention count,
+  embedding similarity, then lexical overlap; lower-ranked speculative
+  consumers are not forced through full analysis.
+- SQLite FTS5 adds a scan-maintained BM25 candidate signal after strong
+  embedding and shingle matches. The v19→v20 migration creates the derived
+  virtual table additively; scanning backfills it without changing analysis
+  lineage or recalculating documents. Builds without FTS5 fall back to the
+  existing hybrid ranking.
 
 ### Fixed
 

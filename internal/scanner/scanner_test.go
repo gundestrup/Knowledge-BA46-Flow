@@ -55,6 +55,29 @@ func TestScanDetectsOnlyChangedMarkdown(t *testing.T) {
 	}
 }
 
+func TestScanIndexesLexicalCandidateText(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "harbor.md"), []byte("---\ntitle: Harbor Seal Survey\nsummary: Tidal habitat observations\n---\n# Harbor Seal Survey\n\nKelp beds near the northern inlet.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := database.Open(t.Context(), filepath.Join(t.TempDir(), "search.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	c := config.Config{RepositoryPath: repo, Extensions: []string{".md"}, MaxDocumentBytes: 10000}
+	if _, err := Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	ranks, err := db.SearchCandidateRanks(t.Context(), "harbor seal tidal habitat", "query.md", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ranks["harbor.md"] == 0 {
+		t.Fatalf("scan did not index frontmatter and body text: %v", ranks)
+	}
+}
+
 func TestPathTags(t *testing.T) {
 	got := pathTags("frameworks/bulma/theme_controller.md")
 	want := []string{"frameworks", "bulma", "theme-controller"}
@@ -117,6 +140,10 @@ func TestScanExcludesDirectoriesAndMarksRemovedFilesMissing(t *testing.T) {
 	}
 	if len(docs) != 1 || docs[0].Path != "visible.md" || docs[0].Status != "missing" {
 		t.Fatalf("documents=%+v", docs)
+	}
+	ranks, err := db.SearchCandidateRanks(context.Background(), "visible", "query.md", 8)
+	if err != nil || ranks["visible.md"] != 0 {
+		t.Fatalf("missing document remained in lexical candidates: ranks=%v err=%v", ranks, err)
 	}
 }
 

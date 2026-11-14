@@ -42,9 +42,10 @@ func applyFixture(t *testing.T, original string, suggestions []database.Suggesti
 }
 
 func TestApplyRecordsAppliedGraphEdges(t *testing.T) {
-	c, db, rows := applyFixture(t, "# Note\n", []database.Suggestion{{
+	c, db, rows := applyFixture(t, "---\ndocument_id: 11111111-1111-4111-8111-111111111111\n---\n# Note\n", []database.Suggestion{{
 		Action: "expand", ProposedContent: "---\nrelated: [other.md]\n---\n# Note\n",
 	}})
+	c.Extensions = []string{".md"}
 	if err := os.WriteFile(filepath.Join(c.RepositoryPath, "other.md"), []byte("# Other\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -55,13 +56,52 @@ func TestApplyRecordsAppliedGraphEdges(t *testing.T) {
 	if err != nil || len(results) != 1 || !results[0].Applied {
 		t.Fatalf("results=%+v err=%v", results, err)
 	}
-	ok, err := db.AppliedGraphEdgeExists(t.Context(), "note.md", "other.md")
-	if err != nil || !ok {
-		t.Fatalf("applied edge provenance missing ok=%v err=%v", ok, err)
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
 	}
-	ok, err = db.AppliedGraphEdgeExists(t.Context(), "note.md", "unrelated.md")
+	ok, err := db.AppliedGraphEdgeExists(t.Context(), "note.md", "other.md", "related")
+	if err != nil || !ok {
+		var appliedHash, documentHash string
+		_ = db.QueryRow(`SELECT source_sha256 FROM applied_edges WHERE source_path='note.md' AND target_path='other.md'`).Scan(&appliedHash)
+		_ = db.QueryRow(`SELECT sha256 FROM documents WHERE path='note.md'`).Scan(&documentHash)
+		var targetPath, refHash string
+		_ = db.QueryRow(`SELECT target_path,source_sha256 FROM document_references WHERE source_path='note.md' AND kind='related'`).Scan(&targetPath, &refHash)
+		content, _ := os.ReadFile(filepath.Join(c.RepositoryPath, "note.md"))
+		t.Fatalf("applied edge provenance missing ok=%v err=%v apply=%q doc=%q ref=%q target=%q file=%q", ok, err, appliedHash, documentHash, refHash, targetPath, content)
+	}
+	ok, err = db.AppliedGraphEdgeExists(t.Context(), "note.md", "unrelated.md", "related")
 	if err != nil || ok {
 		t.Fatalf("phantom edge provenance ok=%v err=%v", ok, err)
+	}
+}
+
+func TestApplyMergeRecordsEdgesOnTarget(t *testing.T) {
+	c, db, rows := applyFixture(t, "# Source\n\nSource prose.\n", []database.Suggestion{{
+		Action: "merge", TargetPath: "target.md",
+		ProposedContent: "---\nrelated: [other.md]\n---\n# Target\n\nTarget prose.\n\n# Source\n\nSource prose.\n",
+	}})
+	c.Extensions = []string{".md"}
+	for path, content := range map[string]string{
+		"target.md": "# Target\n\nTarget prose.\n",
+		"other.md":  "# Other\n",
+	} {
+		if err := os.WriteFile(filepath.Join(c.RepositoryPath, path), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := DecideCurrent(t.Context(), c, db, strconv.FormatInt(rows[0].ID, 10), "accepted", ""); err != nil {
+		t.Fatal(err)
+	}
+	results, err := Apply(t.Context(), c, db)
+	if err != nil || len(results) != 1 || !results[0].Applied {
+		t.Fatalf("results=%+v err=%v", results, err)
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := db.AppliedGraphEdgeExists(t.Context(), "target.md", "other.md", "related")
+	if err != nil || !ok {
+		t.Fatalf("merge target edge provenance missing ok=%v err=%v", ok, err)
 	}
 }
 

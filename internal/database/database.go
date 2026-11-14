@@ -87,8 +87,8 @@ type Document struct {
 	SeenRemovalGeneration         int64 `json:"-"`
 	SeenExternalRemovalGeneration int64 `json:"-"`
 	// AnalysisEvidenceJSON records which other documents the local analysis
-	// actually consumed: candidate paths/scores, path-only inbound/sibling
-	// sets and rendered validation context. Empty for legacy rows.
+	// actually consumed: candidate/body evidence, typed inbound graph edges,
+	// siblings and rendered validation context. Empty for legacy rows.
 	AnalysisEvidenceJSON string `json:"-"`
 	// ExternalAnalysisEvidenceJSON keeps the independent external lane's
 	// prompt evidence separate from local analysis.
@@ -492,6 +492,12 @@ func (d *DB) MarkMissing(ctx context.Context, seen string) error {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM reference_versions WHERE source_path IN (SELECT path FROM documents WHERE status='missing')`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM applied_edges WHERE source_path IN (SELECT path FROM documents WHERE status='missing')`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM document_fts WHERE path IN (SELECT path FROM documents WHERE status='missing')`); err != nil && !ftsUnavailable(err) {
 		return err
 	}
 	return tx.Commit()

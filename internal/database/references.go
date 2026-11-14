@@ -44,12 +44,16 @@ func (d *DB) SetLinkIssues(ctx context.Context, path, issuesJSON string) error {
 	return err
 }
 
-// InboundLinks returns the paths of documents whose frontmatter `related` or
-// `contradicted_by` lists path — the "who links here" view used to detect
-// missing backlinks. The LIKE prefilter may over-match; the Go verification
-// on the parsed frontmatter keeps only exact list entries.
-func (d *DB) InboundLinks(ctx context.Context, path string) ([]string, error) {
-	if indexed, ready, err := d.IndexedInboundLinks(ctx, path); err != nil || ready {
+// InboundEdge identifies a frontmatter graph edge pointing at a document.
+type InboundEdge struct {
+	SourcePath string `json:"source_path"`
+	Kind       string `json:"kind"`
+}
+
+// InboundEdges returns visible-by-policy-independent graph topology for path.
+// Callers that expose the result to a model must filter source visibility.
+func (d *DB) InboundEdges(ctx context.Context, path string) ([]InboundEdge, error) {
+	if indexed, ready, err := d.IndexedInboundEdges(ctx, path); err != nil || ready {
 		return indexed, err
 	}
 	rows, err := d.QueryContext(ctx, `SELECT path,frontmatter_json FROM documents
@@ -58,7 +62,7 @@ WHERE status<>'missing' AND path<>? AND frontmatter_json LIKE '%' || ? || '%'`, 
 		return nil, err
 	}
 	defer rows.Close()
-	out := []string{}
+	out := []InboundEdge{}
 	for rows.Next() {
 		var p, fm string
 		if err := rows.Scan(&p, &fm); err != nil {
@@ -68,17 +72,35 @@ WHERE status<>'missing' AND path<>? AND frontmatter_json LIKE '%' || ? || '%'`, 
 		if err := json.Unmarshal([]byte(fm), &fields); err != nil {
 			continue
 		}
-		if fmLinksTo(fields, path) {
-			out = append(out, p)
+		for _, kind := range frontmatter.GraphLinkKeys {
+			if slices.Contains(frontmatter.StringList(fields, kind), path) {
+				out = append(out, InboundEdge{SourcePath: p, Kind: kind})
+			}
 		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	slices.SortFunc(out, func(a, b InboundEdge) int {
+		if c := strings.Compare(a.SourcePath, b.SourcePath); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Kind, b.Kind)
+	})
+	return out, nil
 }
 
-// fmLinksTo reports whether the document's declared graph targets contain
-// target as an exact string entry (scalar or list).
-func fmLinksTo(fields map[string]any, target string) bool {
-	return slices.Contains(frontmatter.GraphLinkTargets(fields), target)
+// InboundLinks returns the unique paths of graph linkers to path.
+func (d *DB) InboundLinks(ctx context.Context, path string) ([]string, error) {
+	edges, err := d.InboundEdges(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	sources := make([]string, 0, len(edges))
+	for _, edge := range edges {
+		sources = append(sources, edge.SourcePath)
+	}
+	return slices.Compact(sources), nil
 }
 
 type Reference struct {
@@ -200,14 +222,24 @@ func (d *DB) ReplaceReferences(ctx context.Context, source, hash string, refs []
 ON CONFLICT(source_path) DO UPDATE SET source_sha256=excluded.source_sha256`, source, hash); err != nil {
 		return err
 	}
+	// Provenance is valid only while the source still declares that exact edge.
+	// Cleaning it on scan means a later manual re-add cannot inherit an old
+	// accepted-apply marker.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM applied_edges
+WHERE source_path=? AND NOT EXISTS(
+ SELECT 1 FROM document_references r
+ WHERE r.source_path=applied_edges.source_path
+ AND r.target_path=applied_edges.target_path AND r.kind=applied_edges.kind)`, source); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
-// indexedInboundSources returns documents with indexed edges of the given
+// indexedInboundEdges returns documents with indexed edges of the given
 // kinds resolving to path. The readiness check is corpus-wide: one unindexed
 // source makes the answer incomplete, so callers get ready=false rather than
 // a partial result.
-func (d *DB) indexedInboundSources(ctx context.Context, path string, kinds []string) ([]string, bool, error) {
+func (d *DB) indexedInboundEdges(ctx context.Context, path string, kinds []string) ([]InboundEdge, bool, error) {
 	var incomplete int
 	err := d.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM documents d WHERE d.status<>'missing'
 AND NOT EXISTS(SELECT 1 FROM reference_versions v WHERE v.source_path=d.path AND v.source_sha256=d.sha256))`).Scan(&incomplete)
@@ -229,31 +261,33 @@ AND NOT EXISTS(SELECT 1 FROM reference_versions v WHERE v.source_path=d.path AND
 		placeholders = append(placeholders, "?")
 	}
 	args := append([]any{path, path, id, id}, kindArgs...)
-	rows, err := d.QueryContext(ctx, `SELECT DISTINCT r.source_path FROM document_references r
+	rows, err := d.QueryContext(ctx, `SELECT DISTINCT r.source_path,r.kind FROM document_references r
 JOIN documents d ON d.path=r.source_path AND d.sha256=r.source_sha256 AND d.status<>'missing'
 WHERE r.source_path<>? AND (r.target_path=? OR (?<>'' AND r.target_document_id=?))
-AND r.kind IN (`+strings.Join(placeholders, ",")+`) ORDER BY r.source_path`, args...)
+AND r.kind IN (`+strings.Join(placeholders, ",")+`) ORDER BY r.source_path,r.kind`, args...)
 	if err != nil {
 		return nil, false, err
 	}
 	defer rows.Close()
-	out := []string{}
+	out := []InboundEdge{}
 	for rows.Next() {
-		var source string
-		if err := rows.Scan(&source); err != nil {
+		var edge InboundEdge
+		if err := rows.Scan(&edge.SourcePath, &edge.Kind); err != nil {
 			return nil, false, err
 		}
-		out = append(out, source)
+		out = append(out, edge)
 	}
 	return out, true, rows.Err()
 }
 
-// OutboundReferenceCounts returns each source's indexed edge count — the
-// hub/catalog signal: a page linking to dozens of documents is navigational,
-// not a merge candidate.
+// OutboundReferenceCounts returns indexed body-link counts — a table of
+// navigation links is a catalog signal, while authored graph edges alone do
+// not make a substantive authority page a hub.
 func (d *DB) OutboundReferenceCounts(ctx context.Context) (map[string]int, error) {
 	rows, err := d.QueryContext(ctx, `SELECT r.source_path, COUNT(*) FROM document_references r
 JOIN documents d ON d.path=r.source_path AND d.sha256=r.source_sha256 AND d.status<>'missing'
+WHERE r.kind='body' AND
+ (lower(r.target_path) LIKE '%.md' OR lower(r.target_path) LIKE '%.markdown')
 GROUP BY r.source_path`)
 	if err != nil {
 		return nil, err
@@ -278,30 +312,38 @@ GROUP BY r.source_path`)
 // edit requeue its link targets for full analysis. This also keeps the
 // indexed path identical in kind to the frontmatter fallback in InboundLinks.
 func (d *DB) IndexedInboundLinks(ctx context.Context, path string) ([]string, bool, error) {
-	return d.indexedInboundSources(ctx, path, frontmatter.GraphLinkKeys)
+	edges, ready, err := d.IndexedInboundEdges(ctx, path)
+	if err != nil || !ready {
+		return nil, ready, err
+	}
+	sources := make([]string, 0, len(edges))
+	for _, edge := range edges {
+		if len(sources) == 0 || sources[len(sources)-1] != edge.SourcePath {
+			sources = append(sources, edge.SourcePath)
+		}
+	}
+	return sources, true, nil
 }
 
-// AppliedGraphEdgeExists reports whether a graph edge from source to target
-// was recorded by an accepted suggestion — i.e. the link is a reviewed human
-// decision, not unexplained drift.
-func (d *DB) AppliedGraphEdgeExists(ctx context.Context, source, target string) (bool, error) {
-	kindArgs := make([]any, 0, len(frontmatter.GraphLinkKeys)+2)
-	kindArgs = append(kindArgs, source, target)
-	placeholders := make([]string, 0, len(frontmatter.GraphLinkKeys))
-	for _, kind := range frontmatter.GraphLinkKeys {
-		kindArgs = append(kindArgs, kind)
-		placeholders = append(placeholders, "?")
+// IndexedInboundEdges returns typed frontmatter graph edges to path.
+func (d *DB) IndexedInboundEdges(ctx context.Context, path string) ([]InboundEdge, bool, error) {
+	return d.indexedInboundEdges(ctx, path, frontmatter.GraphLinkKeys)
+}
+
+// AppliedGraphEdgeExists reports whether the current source version contains a
+// reviewed `related` edge to target. Contradiction edges intentionally remain
+// analysis-triggering even when a person accepted the change.
+func (d *DB) AppliedGraphEdgeExists(ctx context.Context, source, target, kind string) (bool, error) {
+	if kind != "related" {
+		return false, nil
 	}
 	var found int
-	err := d.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM applied_edges
-WHERE source_path=? AND target_path=? AND kind IN (`+strings.Join(placeholders, ",")+`))`, kindArgs...).Scan(&found)
+	err := d.QueryRowContext(ctx, `SELECT EXISTS(
+SELECT 1 FROM applied_edges a
+JOIN documents d ON d.path=a.source_path AND d.sha256=a.source_sha256 AND d.status<>'missing'
+JOIN document_references r ON r.source_path=a.source_path AND r.source_sha256=d.sha256
+ AND r.kind=a.kind AND r.target_path=a.target_path
+WHERE a.source_path=? AND a.target_path=? AND a.kind=? AND a.source_sha256<>'')`,
+		source, target, kind).Scan(&found)
 	return found != 0, err
-}
-
-// BodyInboundSources returns documents whose indexed body links resolve to
-// path. Body edges are navigational — kept for repair but excluded from
-// inbound evidence — so this exists to prove that a recorded inbound entry
-// was bookkeeping, never to widen the evidence contract.
-func (d *DB) BodyInboundSources(ctx context.Context, path string) ([]string, bool, error) {
-	return d.indexedInboundSources(ctx, path, []string{"body"})
 }

@@ -48,15 +48,26 @@ func (p *pipeline) currentlyVisible(path string) bool {
 	return visible
 }
 
-// llmVisibleInbound returns the paths linking to target that may appear in a
-// prompt: visible in the scan snapshot and still LLM-eligible on disk now.
-func (p *pipeline) llmVisibleInbound(target string) ([]string, error) {
-	inbound, err := p.db.InboundLinks(p.ctx, target)
+// llmVisibleInboundEdges returns graph edges that may appear in a prompt:
+// visible in the scan snapshot and still LLM-eligible on disk now.
+func (p *pipeline) llmVisibleInboundEdges(target string) ([]database.InboundEdge, error) {
+	inbound, err := p.db.InboundEdges(p.ctx, target)
 	if err != nil {
 		return nil, err
 	}
-	inbound = filterLLMVisiblePaths(inbound, p.visiblePaths)
-	return slices.DeleteFunc(inbound, func(path string) bool { return !p.currentlyVisible(path) }), nil
+	inbound = slices.DeleteFunc(inbound, func(edge database.InboundEdge) bool {
+		return !p.visiblePaths[edge.SourcePath] || !p.currentlyVisible(edge.SourcePath)
+	})
+	return sortedInboundEdges(inbound), nil
+}
+
+// llmVisibleInbound is retained for the legacy evidence fallback.
+func (p *pipeline) llmVisibleInbound(target string) ([]string, error) {
+	edges, err := p.llmVisibleInboundEdges(target)
+	if err != nil {
+		return nil, err
+	}
+	return inboundEdgeSources(edges), nil
 }
 
 func (p *pipeline) validateSuggestion(s database.Suggestion, content string, mergeBodies map[string]string, multipleMoves bool) error {

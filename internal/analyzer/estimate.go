@@ -12,13 +12,14 @@ import (
 // The HTTP dry-run uses it to show the consequence of a selection before
 // committing to a run.
 type Estimate struct {
-	Pending         int `json:"pending"`
-	Dependents      int `json:"dependents"`
-	Total           int `json:"total"`
-	SemanticChanges int `json:"semantic_changes"`
-	PromptChanges   int `json:"prompt_changes"`
-	ModelDrift      int `json:"model_drift"`
-	Unstamped       int `json:"unstamped"`
+	Pending          int            `json:"pending"`
+	Dependents       int            `json:"dependents"`
+	DependentReasons map[string]int `json:"dependent_reasons,omitempty"`
+	Total            int            `json:"total"`
+	SemanticChanges  int            `json:"semantic_changes"`
+	PromptChanges    int            `json:"prompt_changes"`
+	ModelDrift       int            `json:"model_drift"`
+	Unstamped        int            `json:"unstamped"`
 }
 
 // EstimateAnalysis computes the RunProgress queue — pending resolution plus
@@ -43,7 +44,7 @@ func EstimateAnalysis(ctx context.Context, c config.Config, db *database.DB, opt
 	if err != nil {
 		return Estimate{}, err
 	}
-	if opts.EnrichOnly || (len(direct) == 0 && !needsRemovalSweep) {
+	if opts.EnrichOnly || (len(direct) == 0 && !needsRemovalSweep && !hasV2Evidence(allDocs, p)) {
 		return est, nil
 	}
 	p.removalGeneration, err = db.RemovalGeneration(ctx)
@@ -59,8 +60,22 @@ func EstimateAnalysis(ctx context.Context, c config.Config, db *database.DB, opt
 		return Estimate{}, err
 	}
 	est.Dependents = len(dependents)
+	est.DependentReasons = p.depReasons
 	est.Total = len(mergeDocumentLists(direct, dependents))
 	return est, nil
+}
+
+func hasV2Evidence(docs []database.Document, p *pipeline) bool {
+	for _, doc := range docs {
+		if p.laneSHA(doc) == "" {
+			continue
+		}
+		ev, ok := parseAnalysisEvidenceRecord(p.laneEvidenceJSON(doc))
+		if ok && ev.Version == 2 {
+			return true
+		}
+	}
+	return false
 }
 
 func pendingForEstimate(allDocs []database.Document, p *pipeline, opts RunOptions) ([]database.Document, Estimate) {

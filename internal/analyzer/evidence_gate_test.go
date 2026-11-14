@@ -98,10 +98,17 @@ func TestEmbeddingDependentsRespectCalibratedGate(t *testing.T) {
 	if result.Dependents > est.Dependents+evidenceNeighborLimit {
 		t.Fatalf("dependents=%d exceeded exact evidence %d plus neighbor cap %d", result.Dependents, est.Dependents, evidenceNeighborLimit)
 	}
+	nearProcessed := 0
 	for _, prompt := range second.prompts {
 		if strings.Contains(prompt, "Current path: far-") {
 			t.Fatalf("unrelated note was re-analyzed on embedding proximity alone: %s", prompt[:200])
 		}
+		if strings.Contains(prompt, "Current path: near-") {
+			nearProcessed++
+		}
+	}
+	if nearProcessed == 0 {
+		t.Fatal("no near-cluster note was re-analyzed — the calibrated projection is inert")
 	}
 }
 
@@ -139,5 +146,72 @@ func TestEvidenceGateSilentWithoutEmbeddings(t *testing.T) {
 	}
 	if result.Processed != 1 {
 		t.Fatalf("lexically unrelated corpus re-analyzed %d docs, want 1", result.Processed)
+	}
+}
+
+// TestEmbeddingDependentsSelectsNeighborsAboveFloor pins the projection's
+// selection quality directly: the calibrated floor must admit genuinely
+// near neighbors, reject orthogonal noise, and — past the cap — keep the
+// highest-scoring candidates rather than the first paths in sort order.
+func TestEmbeddingDependentsSelectsNeighborsAboveFloor(t *testing.T) {
+	// changed.md anchors a six-doc cluster whose shared two axes give every
+	// in-cluster pair cosine ≈0.99 while thirteen far docs sit on their own
+	// orthogonal axes. Cluster pairs are ~6.5% of the corpus, so the 95th
+	// percentile floor lands inside the cluster instead of collapsing to 0.
+	changedVec := func() []float32 {
+		v := make([]float32, 24)
+		v[0], v[1] = 9, 1
+		return v
+	}
+	embeds := map[string][]float32{"changed.md": changedVec()}
+	nearVec := func(i int) []float32 {
+		v := make([]float32, 24)
+		v[0], v[1], v[2+i] = 9, 1, 1
+		return v
+	}
+	farVec := func(i int) []float32 {
+		v := make([]float32, 24)
+		v[8+i] = 1
+		return v
+	}
+	for i := 0; i < 5; i++ {
+		embeds[fmt.Sprintf("near-%02d.md", i)] = nearVec(i)
+	}
+	for i := 0; i < 13; i++ {
+		embeds[fmt.Sprintf("far-%02d.md", i)] = farVec(i)
+	}
+	p := &pipeline{embeds: embeds}
+	selected := p.embeddingDependents(map[string]bool{"changed.md": true})
+	if len(selected) != 5 {
+		t.Fatalf("selected %d neighbors, want the five cluster members: %v", len(selected), selected)
+	}
+	for path, source := range selected {
+		if !strings.HasPrefix(path, "near-") || source != "changed.md" {
+			t.Fatalf("unexpected projection %s <- %s", path, source)
+		}
+	}
+
+	// Every near doc clearing the floor past the cap is ranked by cosine:
+	// near-19's stronger direction must win over lexical path order while
+	// the lowest-scoring members drop off the bounded projection.
+	embeds = map[string][]float32{"changed.md": changedVec()}
+	for i := 0; i < 20; i++ {
+		embeds[fmt.Sprintf("near-%02d.md", i)] = nearVec(i)
+	}
+	strongest := nearVec(21)
+	strongest[0] = 10 // cosine ≈0.995 — above the ≈0.994 uniform cluster
+	embeds["near-19.md"] = strongest
+	p = &pipeline{embeds: embeds}
+	selected = p.embeddingDependents(map[string]bool{"changed.md": true})
+	if len(selected) != evidenceNeighborLimit {
+		t.Fatalf("selected %d neighbors, want capped %d", len(selected), evidenceNeighborLimit)
+	}
+	if _, ok := selected["near-19.md"]; !ok {
+		t.Fatalf("highest-cosine neighbor lost to path order: %v", selected)
+	}
+	for _, dropped := range []string{"near-15.md", "near-16.md", "near-17.md", "near-18.md"} {
+		if _, ok := selected[dropped]; ok {
+			t.Fatalf("lower-ranked %s should drop off the %d-neighbor cap: %v", dropped, evidenceNeighborLimit, selected)
+		}
 	}
 }

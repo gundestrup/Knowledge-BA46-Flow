@@ -476,6 +476,18 @@ The tests cover:
 - exact entity-match ranking from visible document names and explicit Markdown
   links; curated-catalog target resolution, evidence-dependent reanalysis,
   punctuation-bearing language names, and fenced/indented-code exclusion
+- evidence-dependent sweep semantics: typed v3 inbound edges (kind changes and
+  unproven additions/removals queue; applied `related` additions restamp),
+  conservative v2 path-only upgrades, catalog exclusion from merge bodies,
+  catalog-only drift restamps, bounded entity-source/embedding projections
+  (cap keeps top-ranked consumers; calibrated floor rejects orthogonal noise),
+  per-cause dependent tallies in run summaries and the dry-run estimate
+- applied-edge provenance end-to-end: apply records source-version-scoped
+  edges for expand and merge targets, scan-observed removal retires the
+  marker, manual re-additions requeue, and additive v17–v20 migrations
+  preserve analysis stamps and evidence while adding `applied_edges` and
+  `document_fts`; FTS5 indexing follows source versions, degrades gracefully
+  when unavailable, and keeps missing documents out of lexical candidates
 - non-blocking enrichment generation failures, independent deadlines, bounded
   output/cutoff rejection, enrichment-only retries after successful analysis,
   missing-field proposal construction, distinct patch outcomes and retained

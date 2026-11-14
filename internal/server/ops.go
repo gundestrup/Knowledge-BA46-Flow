@@ -648,12 +648,21 @@ func (o *ops) estimate(w http.ResponseWriter, r *http.Request, c config.Config, 
 			"Analysis queue reasons (overlapping facets): semantic changes %d; prompt/policy changes %d; model drift %d; previously unstamped %d.",
 			analyzeEst.SemanticChanges, analyzeEst.PromptChanges, analyzeEst.ModelDrift, analyzeEst.Unstamped))
 	}
+	if len(analyzeEst.DependentReasons) > 0 {
+		causes := make([]string, 0, len(analyzeEst.DependentReasons))
+		for cause, count := range analyzeEst.DependentReasons {
+			causes = append(causes, fmt.Sprintf("%d %s", count, cause))
+		}
+		sort.Strings(causes)
+		warnings = append(warnings, "Dependent causes: "+strings.Join(causes, ", "))
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"op":            b.Op,
-		"documents":     total,
-		"pending":       pending,
-		"dependents":    analyzeEst.Dependents,
-		"analyze_total": analyzeEst.Total,
+		"op":                b.Op,
+		"documents":         total,
+		"pending":           pending,
+		"dependents":        analyzeEst.Dependents,
+		"dependent_reasons": analyzeEst.DependentReasons,
+		"analyze_total":     analyzeEst.Total,
 		"analysis_reasons": map[string]int{
 			"semantic_changes":      analyzeEst.SemanticChanges,
 			"prompt_policy_changes": analyzeEst.PromptChanges,

@@ -8,12 +8,14 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"knowledge-ba46-flow/internal/config"
 	"knowledge-ba46-flow/internal/database"
 	"knowledge-ba46-flow/internal/frontmatter"
+	"knowledge-ba46-flow/internal/review"
 	"knowledge-ba46-flow/internal/scanner"
 	"knowledge-ba46-flow/internal/similarity"
 )
@@ -896,7 +898,7 @@ func TestRankCandidatesPrefersSimilarityThenSameDirAndLinked(t *testing.T) {
 	sigs := map[string][]uint64{
 		"sim/dup.md": similarity.Signature("alpha beta gamma delta epsilon"),
 	}
-	got := rankCandidates("runbooks/deploy.md", fm, cands, docSig, sigs, nil, nil, nil, 50)
+	got := rankCandidates("runbooks/deploy.md", fm, cands, docSig, sigs, nil, nil, nil, nil, 50)
 	want := []string{"sim/dup.md", "runbooks/other.md", "zzz/linked.md", "aaa/far.md"}
 	if len(got) != len(want) {
 		t.Fatalf("got=%v", got)
@@ -921,14 +923,28 @@ func TestRankCandidatesPrefersEmbeddingRelatedness(t *testing.T) {
 	embeds := map[string][]float32{
 		"zzz/topical.md": {0.9, 0.1, 0}, // topically close, no text overlap
 	}
-	got := rankCandidates("runbooks/deploy.md", nil, cands, docSig, sigs, docEmb, embeds, nil, 50)
+	got := rankCandidates("runbooks/deploy.md", nil, cands, docSig, sigs, docEmb, embeds, nil, nil, 50)
 	if got[0].doc.Path != "zzz/topical.md" {
 		t.Fatalf("embedding-related doc should outrank text overlap: %+v", got)
 	}
 	// Without embeddings the shingle winner comes first — the fallback.
-	got = rankCandidates("runbooks/deploy.md", nil, cands, docSig, sigs, nil, nil, nil, 50)
+	got = rankCandidates("runbooks/deploy.md", nil, cands, docSig, sigs, nil, nil, nil, nil, 50)
 	if got[0].doc.Path != "runbooks/overlap.md" {
 		t.Fatalf("shingle fallback broken: %+v", got)
+	}
+}
+
+func TestRankCandidatesUsesLexicalRecallWithoutDisplacingStrongSignals(t *testing.T) {
+	cands := []database.Document{{Path: "a/lexical.md"}, {Path: "z/semantic.md"}}
+	lexical := map[string]float64{"a/lexical.md": 1}
+	got := rankCandidates("query.md", nil, cands, nil, nil, nil, nil, nil, lexical, 1)
+	if got[0].doc.Path != "a/lexical.md" {
+		t.Fatalf("lexical recall did not break a low-signal tie: %+v", got)
+	}
+	got = rankCandidates("query.md", nil, cands, nil, nil, []float32{1, 0},
+		map[string][]float32{"z/semantic.md": {1, 0}}, nil, lexical, 1)
+	if got[0].doc.Path != "z/semantic.md" {
+		t.Fatalf("lexical recall displaced a strong embedding match: %+v", got)
 	}
 }
 
@@ -1116,7 +1132,7 @@ func TestInboundEvidenceChangesOnlyWhenLinkTopologyChanges(t *testing.T) {
 		}
 	}
 	ev, ok := parseAnalysisEvidenceRecord(targetRow.AnalysisEvidenceJSON)
-	if !ok || !slices.Contains(ev.Inbound, "z-source.md") || slices.Contains(ev.Fm, "z-source.md") {
+	if !ok || !slices.Contains(ev.InboundEdges, database.InboundEdge{SourcePath: "z-source.md", Kind: "related"}) || slices.Contains(ev.Fm, "z-source.md") {
 		t.Fatalf("expected inbound path-only evidence outside ranked annotations: %+v", ev)
 	}
 
@@ -1162,6 +1178,84 @@ func TestInboundEvidenceChangesOnlyWhenLinkTopologyChanges(t *testing.T) {
 	if targetPrompts != 1 {
 		t.Fatalf("target should refresh once when inbound topology changes, got %d", targetPrompts)
 	}
+}
+
+func TestInboundEdgeKindChangesQueueTargetAndExposeContradiction(t *testing.T) {
+	c, db := setup(t)
+	writeDoc(t, c.RepositoryPath, "target.md", "# Target\n\nClaim about tidal gauges.\n")
+	writeDoc(t, c.RepositoryPath, "source.md", "---\nrelated: [target.md]\n---\n# Source\n\nEvidence about tidal gauges.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	reply := `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: &fakeLLM{reply: reply}}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, graphKind := range []string{"contradicted_by", "related"} {
+		writeDoc(t, c.RepositoryPath, "source.md", fmt.Sprintf("---\n%s: [target.md]\n---\n# Source\n\nEvidence about tidal gauges.\n", graphKind))
+		if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+			t.Fatal(err)
+		}
+		model := &fakeLLM{reply: reply}
+		result, err := RunProgress(t.Context(), c, db, Generators{Analysis: model}, RunOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		processedTarget := false
+		for _, prompt := range model.prompts {
+			if strings.Contains(prompt, "Current path: target.md") {
+				processedTarget = true
+				if graphKind == "contradicted_by" && !strings.Contains(prompt, "source.md [contradicted_by]") {
+					t.Fatalf("contradiction kind missing from prompt: %s", prompt)
+				}
+			}
+		}
+		if !processedTarget || result.Dependents < 1 {
+			t.Fatalf("%s edge-kind change did not queue target: result=%+v prompts=%v", graphKind, result, model.prompts)
+		}
+	}
+}
+
+func TestAppliedContradictionEdgeStillQueuesTarget(t *testing.T) {
+	c, db := setup(t)
+	writeDoc(t, c.RepositoryPath, "target.md", "# Target\n\nClaim about tidal gauges.\n")
+	writeDoc(t, c.RepositoryPath, "source.md", "# Source\n\nEvidence about tidal gauges.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	reply := `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: &fakeLLM{reply: reply}}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	writeDoc(t, c.RepositoryPath, "source.md", "---\ncontradicted_by: [target.md]\n---\n# Source\n\nEvidence about tidal gauges.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	docs, err := db.Documents(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, doc := range docs {
+		if doc.Path == "source.md" {
+			err = db.RecordAppliedEdges(t.Context(), doc.Path, doc.SHA256, map[string][]string{"contradicted_by": {"target.md"}})
+			break
+		}
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := &fakeLLM{reply: reply}
+	result, err := RunProgress(t.Context(), c, db, Generators{Analysis: model}, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, prompt := range model.prompts {
+		if strings.Contains(prompt, "Current path: target.md") && strings.Contains(prompt, "[contradicted_by]") {
+			return
+		}
+	}
+	t.Fatalf("applied contradiction addition was not analyzed: result=%+v prompts=%v", result, model.prompts)
 }
 
 func TestCommonFilenameWordsDoNotFanOutDependents(t *testing.T) {
@@ -1217,6 +1311,208 @@ func TestCommonFilenameWordsDoNotFanOutDependents(t *testing.T) {
 	}
 	if refreshed != 1 {
 		t.Fatalf("rare-word dependent expected once, got %d", refreshed)
+	}
+}
+
+func TestEntitySourceProjectionCapsPromptVisibleFanout(t *testing.T) {
+	c, db := setup(t)
+	writeDoc(t, c.RepositoryPath, "candidate.md", "# Candidate\n\nQuartz Widget reference.\n")
+	writeDoc(t, c.RepositoryPath, "changed-source.md", "# Source\n\nOriginal source prose.\n")
+	for i := 0; i < evidenceNeighborLimit+5; i++ {
+		writeDoc(t, c.RepositoryPath, fmt.Sprintf("consumer-%02d.md", i),
+			fmt.Sprintf("# Consumer %02d\n\nQuartz Widget is mentioned in these unrelated field observations %02d.\n", i, i))
+	}
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	reply := `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: &fakeLLM{reply: reply}}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	writeDoc(t, c.RepositoryPath, "changed-source.md", "# Source\n\nRevised source prose.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+
+	p := newPipeline(t.Context(), c, db, Generators{}, RunOptions{}, runModels{analysis: c.OllamaModel}, false)
+	if err := p.loadCorpus(); err != nil {
+		t.Fatal(err)
+	}
+	p.entities = &entityIndex{byPhrase: map[string][]entityAlias{
+		"quartz widget": {{
+			path: "candidate.md", sourcePaths: []string{"changed-source.md"},
+			label: "Quartz Widget", rawPhrase: "Quartz Widget",
+		}},
+	}}
+	selected, err := p.entitySourceDependents(
+		nil, map[string]bool{"changed-source.md": true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != evidenceNeighborLimit {
+		t.Fatalf("selected %d entity consumers, want bounded top %d", len(selected), evidenceNeighborLimit)
+	}
+	for path, trigger := range selected {
+		if trigger.source != "changed-source.md" || trigger.reason != "entity source changed" {
+			t.Fatalf("%s has unexpected trigger %+v", path, trigger)
+		}
+	}
+}
+
+func TestEntityEvidenceChangeQueuesConsumerWithReason(t *testing.T) {
+	c, db := setup(t)
+	writeDoc(t, c.RepositoryPath, "entity.md", "# Entity\n\nThe Quartz Widget reference document.\n")
+	writeDoc(t, c.RepositoryPath, "consumer.md", "# Consumer\n\nQuartz Widget appears throughout these field observations.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	reply := `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: &fakeLLM{reply: reply}}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	writeDoc(t, c.RepositoryPath, "entity.md", "---\nsummary: Revised entity summary\n---\n# Entity\n\nThe Quartz Widget reference document.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+
+	p := newPipeline(t.Context(), c, db, Generators{}, RunOptions{}, runModels{analysis: c.OllamaModel}, false)
+	if err := p.loadCorpus(); err != nil {
+		t.Fatal(err)
+	}
+	p.entities = &entityIndex{byPhrase: map[string][]entityAlias{
+		"quartz widget": {{
+			path: "entity.md", label: "Quartz Widget", rawPhrase: "Quartz Widget",
+		}},
+	}}
+	// The changed document IS the entity's own page — a consumer that cites
+	// it as prompt-visible evidence must queue under the entity-evidence
+	// cause, not the alias-source arm.
+	selected, err := p.entitySourceDependents(
+		map[string]bool{"entity.md": true}, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trigger, ok := selected["consumer.md"]
+	if !ok {
+		t.Fatalf("consumer not selected: %v", selected)
+	}
+	if trigger.source != "entity.md" || trigger.reason != "entity evidence changed" {
+		t.Fatalf("unexpected trigger %+v, want entity evidence changed from entity.md", trigger)
+	}
+}
+
+func TestSelectEntitySourceDependentsKeepsTopRankedConsumers(t *testing.T) {
+	// More consumers than the cap must keep the most-mentioned, then most
+	// relevant — never the first paths in sort order.
+	bySource := map[string]map[string]entitySourceHit{"src.md": {}}
+	for i := 0; i < evidenceNeighborLimit+4; i++ {
+		path := fmt.Sprintf("consumer-%02d.md", i)
+		bySource["src.md"][path] = entitySourceHit{
+			path: path, mentions: 100 - i, reason: "entity source changed",
+		}
+	}
+	selected := selectEntitySourceDependents(bySource, map[string][]uint64{}, map[string][]float32{})
+	if len(selected) != evidenceNeighborLimit {
+		t.Fatalf("selected %d consumers, want capped %d", len(selected), evidenceNeighborLimit)
+	}
+	for i := 0; i < evidenceNeighborLimit; i++ {
+		path := fmt.Sprintf("consumer-%02d.md", i)
+		if _, ok := selected[path]; !ok {
+			t.Fatalf("top-mentioned %s dropped from bounded selection", path)
+		}
+	}
+	for i := evidenceNeighborLimit; i < evidenceNeighborLimit+4; i++ {
+		path := fmt.Sprintf("consumer-%02d.md", i)
+		if _, ok := selected[path]; ok {
+			t.Fatalf("lower-mentioned %s should drop off the %d-consumer cap", path, evidenceNeighborLimit)
+		}
+	}
+}
+
+func TestApplyProvenanceRestampsAcrossScanAndSweep(t *testing.T) {
+	c, db := setup(t)
+	writeDoc(t, c.RepositoryPath, "note.md", "# Note\n\nHarbor seal colonies.\n")
+	writeDoc(t, c.RepositoryPath, "target.md", "# Target\n\nTidal gauge notes.\n")
+	writeDoc(t, c.RepositoryPath, "control.md", "# Control\n\nKelp forest survey.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	reply := `{"title":"T","summary":"S","tags":[],"obsolete":false,"suggestions":[]}`
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: &fakeLLM{reply: reply}}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// An accepted expand proposal rewrites note.md with a related edge. The
+	// apply path must record provenance that survives the next scan and lets
+	// the sweep restamp target.md instead of re-analyzing it.
+	docs, err := db.Documents(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var note database.Document
+	for _, d := range docs {
+		if d.Path == "note.md" {
+			note = d
+		}
+	}
+	if err := db.SaveAnalysis(t.Context(), note, "fake", "", "", nil, []database.Suggestion{{
+		Action:          "expand",
+		ProposedContent: "---\nrelated: [target.md]\n---\n# Note\n\nHarbor seal colonies.\n",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.PendingSuggestions(t.Context())
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("suggestions=%v err=%v", rows, err)
+	}
+	if err := review.DecideCurrent(t.Context(), c, db, strconv.FormatInt(rows[0].ID, 10), "accepted", ""); err != nil {
+		t.Fatal(err)
+	}
+	results, err := review.Apply(t.Context(), c, db)
+	if err != nil || len(results) != 1 || !results[0].Applied {
+		t.Fatalf("apply results=%+v err=%v", results, err)
+	}
+	// An authored edge with no provenance must still queue its target.
+	writeDoc(t, c.RepositoryPath, "linker.md", "---\nrelated: [control.md]\n---\n# Linker\n\nKelp forest survey notes.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := db.AppliedGraphEdgeExists(t.Context(), "note.md", "target.md", "related")
+	if err != nil || !ok {
+		t.Fatalf("apply provenance missing ok=%v err=%v", ok, err)
+	}
+
+	second := &fakeLLM{reply: reply}
+	res, err := RunProgress(t.Context(), c, db, Generators{Analysis: second}, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processed := map[string]bool{}
+	for _, prompt := range second.prompts {
+		for _, line := range strings.Split(prompt, "\n") {
+			if strings.HasPrefix(line, "Current path: ") {
+				processed[strings.TrimPrefix(line, "Current path: ")] = true
+				break
+			}
+		}
+	}
+	if processed["target.md"] {
+		t.Fatalf("target of applied edge was re-analyzed instead of restamped: %v", processed)
+	}
+	if !processed["control.md"] {
+		t.Fatalf("unproven authored inbound edge did not queue its target: %v", processed)
+	}
+	if res.DependentReasons["inbound graph edges changed"] < 1 {
+		t.Fatalf("dependent cause tally missing inbound arm: %+v", res.DependentReasons)
+	}
+	var raw string
+	if err := db.QueryRow(`SELECT analysis_evidence_json FROM documents WHERE path='target.md'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	ev, ok := parseAnalysisEvidenceRecord(raw)
+	if !ok || !slices.Contains(ev.InboundEdges, database.InboundEdge{SourcePath: "note.md", Kind: "related"}) {
+		t.Fatalf("applied edge not restamped into target evidence: %q", raw)
 	}
 }
 
@@ -1456,7 +1752,7 @@ func TestMarshalAnalysisEvidenceRecordsOnlyInjected(t *testing.T) {
 		{doc: database.Document{Path: "mentioned.md"}, mentions: []entityMention{{path: "mentioned.md"}}},
 		{doc: database.Document{Path: "scored.md"}, sim: 0.2, rel: 0.7},
 	}
-	raw := marshalAnalysisEvidence(ranked, []string{"inbound.md"}, []string{"sib.md"},
+	raw := marshalAnalysisEvidence(ranked, []database.InboundEdge{{SourcePath: "inbound.md", Kind: "related"}}, []string{"sib.md"},
 		map[string]string{"merge.md": "body"}, []string{"entity-prose.md"},
 		"Frontmatter validation context")
 	fmSet, fullSet, ok := parseAnalysisEvidence(raw)
@@ -1482,8 +1778,9 @@ func TestMarshalAnalysisEvidenceRecordsOnlyInjected(t *testing.T) {
 		t.Fatalf("unrendered entity mention must not record body evidence: %s", raw)
 	}
 	ev, ok := parseAnalysisEvidenceRecord(raw)
-	if !ok || ev.Version != 2 || ev.ValidationContext != "Frontmatter validation context" ||
-		!equalStrings(ev.Inbound, []string{"inbound.md"}) || !equalStrings(ev.Siblings, []string{"sib.md"}) {
+	if !ok || ev.Version != 3 || ev.ValidationContext != "Frontmatter validation context" ||
+		!equalInboundEdges(ev.InboundEdges, []database.InboundEdge{{SourcePath: "inbound.md", Kind: "related"}}) ||
+		!equalStrings(ev.Siblings, []string{"sib.md"}) || !slices.Contains(ev.MergeBodies, "merge.md") {
 		t.Fatalf("validation context/version not recorded: %+v", ev)
 	}
 }
@@ -1628,7 +1925,8 @@ func TestLegacyEvidenceRecoversNewInboundLinkAndRestamps(t *testing.T) {
 	// linker.md reaches target.md only through a body link — navigational,
 	// not graph evidence — so the converted inbound set is just the new
 	// frontmatter linker.
-	if !slices.Contains(ev.Inbound, "rivet-log.md") || slices.Contains(ev.Inbound, "linker.md") {
+	if !slices.Contains(ev.InboundEdges, database.InboundEdge{SourcePath: "rivet-log.md", Kind: "related"}) ||
+		slices.Contains(ev.InboundEdges, database.InboundEdge{SourcePath: "linker.md", Kind: "related"}) {
 		t.Fatalf("converted evidence inbound set wrong: %+v", ev)
 	}
 	var steadyRaw string
@@ -1647,10 +1945,12 @@ func TestLegacyEvidenceRecoversNewInboundLinkAndRestamps(t *testing.T) {
 	}
 }
 
-func TestRecordedBodyLinkerInboundRestampsWithoutAnalysis(t *testing.T) {
+func TestLegacyBodyInboundRemovalIsConservative(t *testing.T) {
 	c, db := setup(t)
 	writeDoc(t, c.RepositoryPath, "target.md", "# Target\n\nNotes on harbor seal colonies.\n")
 	writeDoc(t, c.RepositoryPath, "catalog.md", "# Catalog\n\nIndex: [Target](target.md).\n")
+	writeDoc(t, c.RepositoryPath, "mixed-target.md", "# Mixed target\n\nNotes on tidal gauges.\n")
+	writeDoc(t, c.RepositoryPath, "mixed.md", "---\nrelated: [mixed-target.md]\n---\n# Mixed\n\n[Target](mixed-target.md).\n")
 	writeDoc(t, c.RepositoryPath, "ghost-target.md", "# Ghost target\n\nNotes on tidal gauges.\n")
 	writeDoc(t, c.RepositoryPath, "other.md", "# Other\n\nQuiet note about moss gardens.\n")
 	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
@@ -1672,6 +1972,8 @@ func TestRecordedBodyLinkerInboundRestampsWithoutAnalysis(t *testing.T) {
 		if err := json.Unmarshal([]byte(raw), &ev); err != nil {
 			t.Fatal(err)
 		}
+		ev["v"] = float64(2)
+		delete(ev, "inbound_edges")
 		items := make([]any, 0, len(sources))
 		for _, s := range sources {
 			items = append(items, s)
@@ -1686,8 +1988,10 @@ func TestRecordedBodyLinkerInboundRestampsWithoutAnalysis(t *testing.T) {
 		}
 	}
 	injectInbound("target.md", "catalog.md")
+	injectInbound("mixed-target.md", "mixed.md")
 	injectInbound("ghost-target.md", "ghost.md")
 	// A changed seed so the sweep re-evaluates recorded evidence.
+	writeDoc(t, c.RepositoryPath, "mixed.md", "# Mixed\n\n[Target](mixed-target.md).\n")
 	writeDoc(t, c.RepositoryPath, "other.md", "# Other\n\nQuiet note about moss gardens and lichen.\n")
 	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
 		t.Fatal(err)
@@ -1705,22 +2009,81 @@ func TestRecordedBodyLinkerInboundRestampsWithoutAnalysis(t *testing.T) {
 			}
 		}
 	}
-	// The catalog residue is provably navigational (a body edge still exists):
-	// restamped, not queued. The ghost removal is unprovable — it could have
-	// been a deleted `related` edge — so it stays on the analysis path.
-	if processed["target.md"] {
-		t.Fatalf("body-only recorded inbound should restamp, not re-analyze: %v", processed)
-	}
-	if !processed["ghost-target.md"] || !processed["other.md"] {
-		t.Fatalf("expected ghost-target + changed doc processed, got %v", processed)
+	// V2 stored only paths, so current body links cannot prove whether an old
+	// entry came from a body link or a removed graph edge. Both refresh once.
+	if !processed["target.md"] || !processed["mixed-target.md"] ||
+		!processed["ghost-target.md"] || !processed["other.md"] {
+		t.Fatalf("expected both ambiguous legacy removals and changed doc processed, got %v", processed)
 	}
 	var raw string
 	if err := db.QueryRow(`SELECT analysis_evidence_json FROM documents WHERE path='target.md'`).Scan(&raw); err != nil {
 		t.Fatal(err)
 	}
 	ev, ok := parseAnalysisEvidenceRecord(raw)
-	if !ok || slices.Contains(ev.Inbound, "catalog.md") {
-		t.Fatalf("bookkeeping inbound not restamped: %q", raw)
+	if !ok || ev.Version != 3 || len(ev.InboundEdges) != 0 {
+		t.Fatalf("legacy inbound evidence not refreshed to typed graph evidence: %q", raw)
+	}
+}
+
+func TestLegacyEvidenceMigrationEstimateIsReadOnlyAndRunRestamps(t *testing.T) {
+	c, db := setup(t)
+	writeDoc(t, c.RepositoryPath, "target.md", "# Target\n\nTarget prose.\n")
+	writeDoc(t, c.RepositoryPath, "source.md", "---\nrelated: [target.md]\n---\n# Source\n\nSource prose.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	reply := `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: &fakeLLM{reply: reply}}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	var raw string
+	if err := db.QueryRow(`SELECT analysis_evidence_json FROM documents WHERE path='target.md'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var legacy map[string]any
+	if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	legacy["v"] = float64(2)
+	delete(legacy, "inbound_edges")
+	legacy["inbound"] = []string{"source.md"}
+	encoded, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE documents SET analysis_evidence_json=? WHERE path='target.md'`, string(encoded)); err != nil {
+		t.Fatal(err)
+	}
+
+	estimate, err := EstimateAnalysis(t.Context(), c, db, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if estimate.Pending != 0 || estimate.Dependents != 0 {
+		t.Fatalf("unchanged related-only v2 context should restamp without analysis: %+v", estimate)
+	}
+	var afterEstimate string
+	if err := db.QueryRow(`SELECT analysis_evidence_json FROM documents WHERE path='target.md'`).Scan(&afterEstimate); err != nil {
+		t.Fatal(err)
+	}
+	if afterEstimate != string(encoded) {
+		t.Fatal("estimate mutated legacy evidence")
+	}
+
+	model := &fakeLLM{reply: reply}
+	result, err := RunProgress(t.Context(), c, db, Generators{Analysis: model}, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Processed != 0 || result.Dependents != 0 || len(model.prompts) != 0 {
+		t.Fatalf("migration should only restamp evidence: result=%+v prompts=%d", result, len(model.prompts))
+	}
+	if err := db.QueryRow(`SELECT analysis_evidence_json FROM documents WHERE path='target.md'`).Scan(&afterEstimate); err != nil {
+		t.Fatal(err)
+	}
+	parsed, ok := parseAnalysisEvidenceRecord(afterEstimate)
+	if !ok || parsed.Version != 3 {
+		t.Fatalf("run did not restamp v2 evidence to v3: %s", afterEstimate)
 	}
 }
 
@@ -1737,15 +2100,26 @@ func TestAppliedEdgeInboundRestampsWithoutAnalysis(t *testing.T) {
 	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: firstModel}, RunOptions{}); err != nil {
 		t.Fatalf("initial analysis error=%v", err)
 	}
-	// Simulate a reviewed apply that added source.md→target.md: provenance is
-	// in applied_edges. peer.md→control.md was authored by hand — no row.
-	if err := db.RecordAppliedEdges(t.Context(), "source.md", map[string][]string{"related": {"target.md"}}); err != nil {
-		t.Fatal(err)
-	}
+	// Simulate a reviewed apply that added source.md→target.md. peer.md→control.md
+	// is authored by hand and has no provenance row.
 	writeDoc(t, c.RepositoryPath, "source.md", "---\nrelated: [target.md]\n---\n# Source\n\nHarbor logistics note.\n")
 	writeDoc(t, c.RepositoryPath, "peer.md", "---\nrelated: [control.md]\n---\n# Peer\n\nBrass fitting catalogue excerpts.\n")
 	writeDoc(t, c.RepositoryPath, "other.md", "# Other\n\nQuiet note about moss gardens.\n")
 	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	docs, err := db.Documents(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sourceSHA string
+	for _, doc := range docs {
+		if doc.Path == "source.md" {
+			sourceSHA = doc.SHA256
+			break
+		}
+	}
+	if err := db.RecordAppliedEdges(t.Context(), "source.md", sourceSHA, map[string][]string{"related": {"target.md"}}); err != nil {
 		t.Fatal(err)
 	}
 	secondModel := &fakeLLM{reply: firstModel.reply}
@@ -1773,12 +2147,37 @@ func TestAppliedEdgeInboundRestampsWithoutAnalysis(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev, ok := parseAnalysisEvidenceRecord(raw)
-	if !ok || !slices.Contains(ev.Inbound, "source.md") {
+	if !ok || !slices.Contains(ev.InboundEdges, database.InboundEdge{SourcePath: "source.md", Kind: "related"}) {
 		t.Fatalf("applied-edge inbound not restamped: %q", raw)
 	}
-	if res.DependentReasons["inbound links changed"] < 1 {
+	if res.DependentReasons["inbound graph edges changed"] < 1 {
 		t.Fatalf("dependent cause tally missing inbound arm: %+v", res.DependentReasons)
 	}
+
+	// Once a scan observes removal, provenance is retired. Re-adding the same
+	// edge bytes by hand must not reuse the earlier acceptance marker.
+	writeDoc(t, c.RepositoryPath, "source.md", "# Source\n\nHarbor logistics note.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	removedModel := &fakeLLM{reply: firstModel.reply}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: removedModel}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	writeDoc(t, c.RepositoryPath, "source.md", "---\nrelated: [target.md]\n---\n# Source\n\nHarbor logistics note.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	manualModel := &fakeLLM{reply: firstModel.reply}
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: manualModel}, RunOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, prompt := range manualModel.prompts {
+		if strings.Contains(prompt, "Current path: target.md") {
+			return
+		}
+	}
+	t.Fatalf("manual re-add incorrectly inherited old apply provenance: %v", manualModel.prompts)
 }
 
 func TestCatalogBodyExcludedFromMergeEvidence(t *testing.T) {
@@ -1787,17 +2186,27 @@ func TestCatalogBodyExcludedFromMergeEvidence(t *testing.T) {
 		"shallow haul-out shelves, quiet coves, seasonal fish runs, " +
 		"rocky ledges and protected nursery lagoons across the coast.\n"
 	var links strings.Builder
-	links.WriteString("---\nrelated: [")
+	links.WriteString("# Catalog\n\n" + shared)
 	for i := 0; i < catalogOutDegree; i++ {
-		if i > 0 {
-			links.WriteString(", ")
-		}
-		fmt.Fprintf(&links, "d%02d.md", i)
+		fmt.Fprintf(&links, "- [d%02d](d%02d.md)\n", i, i)
 	}
-	links.WriteString("]\n---\n# Catalog\n\n" + shared)
 	writeDoc(t, c.RepositoryPath, "catalog.md", links.String())
 	writeDoc(t, c.RepositoryPath, "topic.md", "# Topic\n\n"+shared+"Distinct topic observations.\n")
 	writeDoc(t, c.RepositoryPath, "similar.md", "# Similar\n\n"+shared+"Similar companion observations.\n")
+	var authority strings.Builder
+	authority.WriteString("---\nrelated: [")
+	for i := 0; i < catalogOutDegree; i++ {
+		if i > 0 {
+			authority.WriteString(", ")
+		}
+		fmt.Fprintf(&authority, "authority-%02d.md", i)
+	}
+	authority.WriteString("]\n---\n# Authority\n\n" + shared + "Primary field observations.\n")
+	writeDoc(t, c.RepositoryPath, "authority.md", authority.String())
+	for i := 0; i < candidateLimit-2; i++ {
+		writeDoc(t, c.RepositoryPath, fmt.Sprintf("noise-%02d.md", i),
+			fmt.Sprintf("# Noise %02d\n\nUnrelated content token-%02d.\n", i, i))
+	}
 	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
 		t.Fatal(err)
 	}
@@ -1813,10 +2222,16 @@ func TestCatalogBodyExcludedFromMergeEvidence(t *testing.T) {
 	if !ok {
 		t.Fatalf("evidence missing: %q", raw)
 	}
-	if slices.Contains(ev.Full, "catalog.md") {
+	if !slices.Contains(ev.Fm, "catalog.md") {
+		t.Fatalf("catalog should remain available as a relation candidate: %q", raw)
+	}
+	if !slices.Contains(ev.Fm, "authority.md") || len(ev.Fm) != candidateLimit {
+		t.Fatalf("high-degree authority or ranked-candidate capacity was lost: fm=%v", ev.Fm)
+	}
+	if slices.Contains(ev.MergeBodies, "catalog.md") {
 		t.Fatalf("catalog body consumed as merge evidence: %q", raw)
 	}
-	if !slices.Contains(ev.Full, "similar.md") {
+	if !slices.Contains(ev.MergeBodies, "similar.md") {
 		t.Fatalf("non-catalog merge candidate lost its body: %q", raw)
 	}
 }
@@ -1824,14 +2239,10 @@ func TestCatalogBodyExcludedFromMergeEvidence(t *testing.T) {
 func TestCatalogConsumedEvidenceRestampsWithoutAnalysis(t *testing.T) {
 	c, db := setup(t)
 	var links strings.Builder
-	links.WriteString("---\nrelated: [")
+	links.WriteString("# Catalog\n\nIndex table of notes.\n")
 	for i := 0; i < catalogOutDegree; i++ {
-		if i > 0 {
-			links.WriteString(", ")
-		}
-		fmt.Fprintf(&links, "d%02d.md", i)
+		fmt.Fprintf(&links, "- [d%02d](d%02d.md)\n", i, i)
 	}
-	links.WriteString("]\n---\n# Catalog\n\nIndex table of notes.\n")
 	writeDoc(t, c.RepositoryPath, "catalog.md", links.String())
 	writeDoc(t, c.RepositoryPath, "consumer.md", "# Consumer\n\nNotes on tidal gauges.\n")
 	if _, err := scanner.Scan(t.Context(), c, db); err != nil {

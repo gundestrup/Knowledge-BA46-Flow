@@ -315,44 +315,52 @@ Analysis runs in up to three stages per document:
    embedding vectors (backfilled lazily at analysis time) drive cosine
    relatedness — semantic "same topic" matching; a bottom-k minwise sketch
    over word 3-shingles computed during `scan` provides literal-overlap
-   similarity and the ≥50% probable-duplicate flag. Both blobs live in
-   SQLite, no FTS dependency. `no_llm_context` documents are never embedded
+   similarity and the ≥50% probable-duplicate flag; SQLite FTS5 BM25 adds a
+   bounded lexical rank signal for candidates without strong dense or literal
+   matches. These derived indexes live in SQLite. `no_llm_context` documents are never embedded
    or shown as candidates, but still count as valid link targets. The prompt
    lists at most 16 ranked candidates. At most two high-overlap candidates
    are also supplied in full within a shared 12 KB body budget; only these
    may be merge targets. Partial target bodies are never sent as complete.
 
 When scan finds a new or changed visible note, the analyzer also refreshes
-unchanged notes whose analysis evidence changed. Each analysis records which
-documents its prompt actually consumed — candidate annotations, separate
-inbound/sibling path sets, rendered frontmatter validation context, body-derived
-candidate scores, merge bodies and entity excerpts — so refresh is exact at
-each evidence level. Inbound paths count only frontmatter graph edges
-(`related`, `contradicted_by`); body links are indexed for link repair but
-are navigational, so catalog/index table edits never requeue their link
-targets. Inbound paths are compared as sets: a title edit to a
-source that still links here does not refresh the target, but an added or
-removed link refreshes only the target whose inbound context changed.
-Recorded entries left over from an earlier fm+body contract are migrated
-lazily: a dropped linker that still resolves through a body edge is
-provably bookkeeping, so the record is restamped rather than re-analyzed.
-The same restamp applies to an added inbound edge recorded in
-`applied_edges` — a link decision a human already reviewed by accepting a
-suggestion — and to consumed-evidence drift whose changed paths are all
-catalog/index pages. High out-degree pages (15+ outbound references) are
-treated as navigational infrastructure: they are excluded from the ranked
-merge/relation candidate list, never consumed as merge bodies, and never
-recorded as evidence, so catalog table edits stop fanning out into
-consumer re-analysis. Local
-and external analyses maintain independent evidence records and frontmatter
-stamps. A catalog/index edit does not propagate solely because notes link to
-the index; Catalog backlinks are not treated as entity-body evidence.
-Legacy rows without the new evidence shape use a conservative heuristic
-sweep until analyzed; bounded embedding/signature projection remains for
-model candidates a prompt might newly cite, and never-analyzed seeds keep
-heuristic propagation. Deletion and reference-topology events use monotonic
-generations acknowledged per lane, so they are idempotent, retryable after
-failures, and do not requeue the same dependents on every later run.
+unchanged notes whose analysis evidence changed. Evidence v3 records which
+documents the prompt consumed — candidate annotations, body-derived candidate
+scores, merge bodies and entity excerpts — plus typed inbound graph edges,
+sibling paths and rendered validation context. Body links remain indexed for
+repair but are excluded from inbound analysis evidence. Unproven graph-edge
+additions, removals and kind changes refresh the target; a `related` addition
+with valid apply provenance is restamped instead. Changing `related` to/from
+`contradicted_by` is explicitly detected, and contradiction edges are labeled
+in the prompt. A title edit to an incoming source that leaves its graph edges
+unchanged does not refresh the target.
+
+V2 evidence is upgraded lazily. Unchanged inbound paths with no newly visible
+contradiction label are restamped without a model call. When a legacy path
+disappears, current body links cannot prove whether the old prompt path was
+body-only or a graph edge, so that target is analyzed once rather than risking
+stale results. A newly added `related` edge can be restamped only if its
+provenance matches the current source hash and the edge is still present;
+scanning a removal deletes the marker, so a manual re-add cannot reuse it.
+Applied `contradicted_by` additions always trigger analysis.
+
+Pages with 15 or more indexed Markdown body links are treated as navigation
+catalogs for merge selection. They remain in relation-candidate annotations,
+but their complete bodies are not supplied as merge context. Catalog-only
+body-derived score drift can be restamped; substantive high-degree graph
+authorities are not classified as catalogs by graph-edge count alone. Local and external
+analyses keep independent evidence records and stamps. Older rows without an
+exact evidence record still use the conservative heuristic sweep; bounded
+embedding/signature projection remains for candidates a prompt might newly
+cite. Entity-source projections are also bounded to 16 highest-ranked
+prompt-visible consumers per changed source; this is a relevance heuristic,
+not a guarantee that lower-ranked consumers are unrelated. Deletion and topology generations are acknowledged per lane, preserving
+retry safety without requeueing the same event.
+
+The analysis estimate and run summary both expose dependent causes. The dry-run
+API's `dependent_reasons` field is read-only: it previews the same evidence
+sweep as execution, but does not restamp evidence or acknowledge removal
+generations.
 Entity-name matching weighs rarity — a filename word present in more than
 ~2% of the corpus never becomes an alias. The embedding arm is
 rank-based rather than an absolute score: each changed note contributes at most
@@ -476,12 +484,11 @@ the interruption. Already stored suggestions remain available; nothing is applie
 
 Rebuilds recorded prompt evidence (`analysis_evidence_json`) for documents
 analyzed before evidence recording existed — the knowledge-migration path
-that avoids re-analysis. It recomputes the deterministic context (ranked
-candidates, inbound link sets, unmentioned siblings, entity paths,
-validation context) and acknowledges the current removal generation; merge
-bodies are model-chosen and left absent, biasing rows toward refresh rather
-than missed invalidation. No model calls. `--external` restamps the
-external lane's evidence columns instead.
+that avoids re-analysis. It recomputes deterministic context (ranked
+candidates, typed inbound graph edges, unmentioned siblings, entity paths,
+merge-body selection and validation context) and acknowledges the current
+removal generation. No model calls. `--external` restamps the external lane's
+evidence columns instead.
 
 ## `run`
 

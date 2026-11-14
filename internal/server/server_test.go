@@ -1728,12 +1728,13 @@ func TestOpsDryRunEstimatesQueueWithoutStartingAJob(t *testing.T) {
 		t.Fatalf("dry-run status=%d", res.StatusCode)
 	}
 	var estimate struct {
-		Documents    int                            `json:"documents"`
-		Pending      map[string]int                 `json:"pending"`
-		Dependents   int                            `json:"dependents"`
-		AnalyzeTotal int                            `json:"analyze_total"`
-		Warnings     []string                       `json:"warnings"`
-		Stamps       map[string]database.ModelStamp `json:"stamps"`
+		Documents        int                            `json:"documents"`
+		Pending          map[string]int                 `json:"pending"`
+		Dependents       int                            `json:"dependents"`
+		DependentReasons map[string]int                 `json:"dependent_reasons"`
+		AnalyzeTotal     int                            `json:"analyze_total"`
+		Warnings         []string                       `json:"warnings"`
+		Stamps           map[string]database.ModelStamp `json:"stamps"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&estimate); err != nil {
 		t.Fatal(err)
@@ -1776,10 +1777,11 @@ func TestOpsDryRunWarnsAndCountsDependents(t *testing.T) {
 	defer srv.Close()
 
 	type estimateResult struct {
-		Pending    map[string]int `json:"pending"`
-		Dependents int            `json:"dependents"`
-		Total      int            `json:"analyze_total"`
-		Warnings   []string       `json:"warnings"`
+		Pending          map[string]int `json:"pending"`
+		Dependents       int            `json:"dependents"`
+		DependentReasons map[string]int `json:"dependent_reasons"`
+		Total            int            `json:"analyze_total"`
+		Warnings         []string       `json:"warnings"`
 	}
 	decode := func(res *http.Response) estimateResult {
 		var e estimateResult
@@ -1881,6 +1883,9 @@ func TestOpsDryRunWarnsAndCountsDependents(t *testing.T) {
 	res.Body.Close()
 	if estimate.Pending["analyze"] != 1 || estimate.Dependents != 1 || estimate.Total != 2 {
 		t.Fatalf("estimate=%+v, want analyze pending=1 dependents=1 total=2", estimate)
+	}
+	if len(estimate.DependentReasons) != 1 || estimate.DependentReasons["consumed evidence changed"] != 1 {
+		t.Fatalf("estimate omitted dependent cause breakdown: %+v", estimate.DependentReasons)
 	}
 	if estimate.Pending["embed"] != 2 {
 		t.Fatalf("embed model change should re-queue both docs, pending=%+v", estimate.Pending)

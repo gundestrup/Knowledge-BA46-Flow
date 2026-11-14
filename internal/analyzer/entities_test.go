@@ -199,7 +199,7 @@ func TestRankCandidatesPrefersExactEntityEvidence(t *testing.T) {
 	mentions := map[string][]entityMention{
 		"frameworks/rails/README.md": {{path: "frameworks/rails/README.md", term: "Rails"}},
 	}
-	got := rankCandidates("notes/deploy.md", nil, documents, signature, sigs, docEmbedding, embeddings, mentions, 2)
+	got := rankCandidates("notes/deploy.md", nil, documents, signature, sigs, docEmbedding, embeddings, mentions, nil, 2)
 	if len(got) != 2 || got[0].doc.Path != "frameworks/rails/README.md" {
 		t.Fatalf("exact entity mention should outrank generic similarity: %+v", got)
 	}

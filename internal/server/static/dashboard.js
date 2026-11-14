@@ -354,6 +354,14 @@ window.knowledgeDashboard = () => ({
           " +{{.Dependents}} unchanged via changed evidence → {{.Total}} total",
           { Dependents: e.dependents, Total: e.analyze_total },
         );
+        const causes = Object.entries(e.dependent_reasons || {})
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([cause, count]) => `${count} ${cause}`);
+        if (causes.length > 0) {
+          line += this.t("ui.kb.estimate_dependent_reasons", " ({{.Causes}})", {
+            Causes: causes.join(", "),
+          });
+        }
       }
       lines.push(line);
     }

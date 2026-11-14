@@ -246,6 +246,12 @@ then `200` answers with the documents the selection would process:
   "documents": 521,
   "pending": { "enrich": 4, "embed": 521, "freshness": 3, "analyze": 12 },
   "dependents": 87,
+  "dependent_reasons": {
+    "consumed evidence changed": 25,
+    "entity source changed": 28,
+    "embedding neighbor changed": 16,
+    "new inbound reference": 18
+  },
   "analyze_total": 99,
   "stamps": {
     "analyzed": { "model": "gemma3:12b", "docs": 400 },
@@ -267,8 +273,11 @@ then `200` answers with the documents the selection would process:
 
 `pending.analyze` is the direct semantic/prompt/model queue;
 `dependents`/`analyze_total` show additional unchanged notes selected because
-the substantive content of evidence they rely on changed. The `analysis_reasons`
-facets may overlap. Graph-only link edits do not count as changed evidence.
+their recorded evidence changed; `dependent_reasons` explains the invalidation
+cause counts and is also shown in the dashboard estimate. Graph-edge additions,
+removals and kind changes are distinct from semantic body evidence. The
+`analysis_reasons` facets may overlap. Graph-only link edits do not count as
+changed semantic fingerprints, but inbound graph topology is tracked separately.
 Estimates use the latest scan snapshot, while execution scans again before work
 starts. `warnings` flags stale-snapshot risk and model choices that differ from
 the dominant recorded lineage — the `stamps` block — most importantly an

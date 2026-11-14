@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -1405,11 +1406,65 @@ func TestMigrationV17PreservesAnalysisStateAndAddsAppliedEdges(t *testing.T) {
 		t.Fatalf("user_version=%d want %d", stamped, schemaVersion)
 	}
 	// The recreated table is usable immediately.
-	require.NoError(t, db.RecordAppliedEdges(t.Context(), "a.md", map[string][]string{"related": {"b.md"}}))
-	ok, err := db.AppliedGraphEdgeExists(t.Context(), "a.md", "b.md")
+	require.NoError(t, db.RecordAppliedEdges(t.Context(), "a.md", "deadbeef", map[string][]string{"related": {"b.md"}}))
+	var sourceSHA string
+	require.NoError(t, db.QueryRow(`SELECT source_sha256 FROM applied_edges WHERE source_path='a.md' AND target_path='b.md'`).Scan(&sourceSHA))
+	if sourceSHA != "deadbeef" {
+		t.Fatalf("applied edge source version=%q want deadbeef", sourceSHA)
+	}
+}
+
+func TestMigrationV18AddsAppliedEdgeSourceVersionWithoutTouchingAnalysis(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := Open(t.Context(), path)
 	require.NoError(t, err)
-	if !ok {
-		t.Fatal("applied_edges row not queryable after migration")
+	_, err = db.UpsertScanned(t.Context(), Document{
+		Path: "a.md", SHA256: "source-v1", TagsJSON: "[]",
+	}, "scan")
+	require.NoError(t, err)
+	_, err = db.Exec(`UPDATE documents SET analysis_evidence_json='{"v":2,"inbound":["x.md"]}',
+analyzed_sha256='source-v1' WHERE path='a.md'`)
+	require.NoError(t, err)
+	require.NoError(t, db.ReplaceReferences(t.Context(), "a.md", "source-v1", []Reference{
+		{WrittenTarget: "b.md", TargetPath: "b.md", Kind: "related"},
+	}))
+	require.NoError(t, db.Close())
+
+	raw, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	_, err = raw.Exec(`DROP TABLE applied_edges;
+DROP TABLE document_fts;
+CREATE TABLE applied_edges (
+source_path TEXT NOT NULL, target_path TEXT NOT NULL, kind TEXT NOT NULL,
+applied_at TEXT NOT NULL, PRIMARY KEY(source_path,target_path,kind));
+INSERT INTO applied_edges(source_path,target_path,kind,applied_at)
+VALUES('a.md','b.md','related','2026-11-13T00:00:00Z');
+PRAGMA user_version=18`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	db, err = Open(t.Context(), path)
+	require.NoError(t, err)
+	defer db.Close()
+	var evidence, analyzed string
+	require.NoError(t, db.QueryRow(`SELECT analysis_evidence_json,analyzed_sha256 FROM documents WHERE path='a.md'`).Scan(&evidence, &analyzed))
+	if evidence != `{"v":2,"inbound":["x.md"]}` || analyzed != "source-v1" {
+		t.Fatalf("v18 migration changed analysis lineage evidence=%q analyzed=%q", evidence, analyzed)
+	}
+	var sourceHashColumn int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('applied_edges') WHERE name='source_sha256'`).Scan(&sourceHashColumn))
+	if sourceHashColumn != 1 {
+		t.Fatal("v18 migration did not add source_sha256")
+	}
+	matched, err := db.AppliedGraphEdgeExists(t.Context(), "a.md", "b.md", "related")
+	require.NoError(t, err)
+	if matched {
+		t.Fatal("unscoped v18 provenance must fail closed after migration")
+	}
+	var ftsTable int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='document_fts'`).Scan(&ftsTable))
+	if ftsTable != 1 {
+		t.Fatal("schema migration did not create the lexical index")
 	}
 }
 
@@ -2401,7 +2456,7 @@ func TestIndexedInboundLinksReadyAmbiguousAndFallback(t *testing.T) {
 	}
 	require.NoError(t, db.ReplaceReferences(ctx, "b.md", "b1", nil))
 	if err := db.ReplaceReferences(ctx, "e.md", "e1", []Reference{
-		{WrittenTarget: "old-name.md", TargetPath: "", TargetID: bID, Kind: "related"},
+		{WrittenTarget: "old-name.md", TargetPath: "", TargetID: bID, Kind: "contradicted_by"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -2418,6 +2473,13 @@ func TestIndexedInboundLinksReadyAmbiguousAndFallback(t *testing.T) {
 	}
 	if len(links) != 2 || links[0] != "a.md" || links[1] != "e.md" {
 		t.Fatalf("indexed inbound=%v, want [a.md e.md] (path and identity match)", links)
+	}
+	edges, ready, err := db.IndexedInboundEdges(ctx, "b.md")
+	if err != nil || !ready || !slices.Equal(edges, []InboundEdge{
+		{SourcePath: "a.md", Kind: "related"},
+		{SourcePath: "e.md", Kind: "contradicted_by"},
+	}) {
+		t.Fatalf("typed indexed inbound=%v ready=%v err=%v", edges, ready, err)
 	}
 	if helper, err := db.InboundLinks(ctx, "b.md"); err != nil || len(helper) != 2 {
 		t.Fatalf("InboundLinks should use the ready index: %v err=%v", helper, err)
@@ -2455,6 +2517,11 @@ func TestIndexedInboundLinksReadyAmbiguousAndFallback(t *testing.T) {
 	require.NoError(t, err)
 	if len(fallback) != 1 || fallback[0] != "d.md" {
 		t.Fatalf("frontmatter fallback=%v, want [d.md] only", fallback)
+	}
+	fallbackEdges, err := db.InboundEdges(ctx, "b.md")
+	require.NoError(t, err)
+	if !slices.Equal(fallbackEdges, []InboundEdge{{SourcePath: "d.md", Kind: "related"}}) {
+		t.Fatalf("typed frontmatter fallback=%v", fallbackEdges)
 	}
 }
 
