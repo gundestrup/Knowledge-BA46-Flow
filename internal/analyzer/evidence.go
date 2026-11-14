@@ -1034,16 +1034,17 @@ func RestampEvidence(ctx context.Context, c config.Config, db *database.DB, opts
 	return restamped, nil
 }
 
-// restampDoc reconstructs a v2 evidence record for one analyzed document.
-// Returns "" when the doc is unreadable or LLM-ineligible — callers keep
-// their fallback path in that case.
+// restampDoc reconstructs a v3 evidence record for one analyzed document.
+// Evidence is local bookkeeping — paths and edge kinds, never content — so
+// it is rebuilt even for no_llm_context documents; only unreadable or
+// unparseable files return "", where callers keep their fallback path.
 func (p *pipeline) restampDoc(doc database.Document) (string, error) {
 	content, err := scanner.ReadDocument(p.c, doc.Path)
 	if err != nil {
 		return "", nil
 	}
 	fm, _, err := frontmatter.Parse(content)
-	if err != nil || frontmatter.NoLLMContext(fm) {
+	if err != nil {
 		return "", nil
 	}
 	docSig := p.sigs[doc.Path]

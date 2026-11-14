@@ -521,6 +521,22 @@ primary-attributed items disappear; fewer may leave the queue if other
 evidence arms also select them. That post-run behavior has not yet been
 measured.
 
+**Live-run update (2026-11-14):** the convergence wave did NOT fully converge
+for skip-bound documents. Production job 133 ran the expected wave (10 direct
+
+- 133 dependents), but job 134 still queued 115: inspection showed ~42
+  records still on evidence v2 — nearly all stub `languages/*.md` notes — and
+  `stage_results` confirmed the same ~41 stubs were skipped in both jobs.
+  Root cause: `skipLLM` (the stub/`no_llm_context` path) stamps a document
+  while carrying its stored evidence blob, so skipped documents never upgrade
+  evidence. The `saveAnalysis` empty-evidence fallback also wrote `{"v":2,...}`,
+  priming every skipped record to loop on its first context delta. Fixed in
+  the same change set: the skip stamp now rebuilds the deterministic evidence
+  record (`restampDoc`, no model call) and the fallback writes v3, pinned by
+  `TestSkippedDocumentsConvergeStaleEvidence`, which asserts no requeue on the
+  following sweep. Remaining gap: unreadable/unparseable documents still keep
+  their old record (nothing safe to rebuild from).
+
 ### Further queue optimization
 
 - The 35 entity-source dependents are already filtered to prompt-visible

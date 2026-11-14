@@ -1945,6 +1945,84 @@ func TestLegacyEvidenceRecoversNewInboundLinkAndRestamps(t *testing.T) {
 	}
 }
 
+// TestSkippedDocumentsConvergeStaleEvidence pins the convergence invariant for
+// documents that never reach analyzeDoc: a stub or private document queued as
+// a dependent is stamped without a model call, but its recorded evidence must
+// still be rebuilt — otherwise every later sweep sees the same stale delta and
+// requeues it forever.
+func TestSkippedDocumentsConvergeStaleEvidence(t *testing.T) {
+	c, db := setup(t)
+	writeDoc(t, c.RepositoryPath, "stub-target.md",
+		"---\ntags: [stub]\n---\n# Stub target\n\nTwo lines.\n")
+	writeDoc(t, c.RepositoryPath, "private-target.md",
+		"---\nkb_policy:\n  no_llm_context: true\n---\n# Private target\n\nLong enough private body for analysis.\n")
+	writeDoc(t, c.RepositoryPath, "steady.md", "# Steady\n\nQuiet note about moss gardens and cold frames.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	reply := `{"title":"Note","summary":"Summary","tags":["x"],"obsolete":false,"suggestions":[]}`
+	if _, err := RunProgress(t.Context(), c, db, Generators{Analysis: &fakeLLM{reply: reply}}, RunOptions{}); err != nil {
+		t.Fatalf("initial run error=%v", err)
+	}
+	// Simulate records left behind by the old inbound contract: path-only
+	// entries whose deltas can no longer be proven bookkeeping.
+	stale := `{"v":2,"fm":["gone.md"],"full":["gone.md"],"inbound":["gone.md"]}`
+	for _, path := range []string{"stub-target.md", "private-target.md"} {
+		if _, err := db.Exec(`UPDATE documents SET analysis_evidence_json=? WHERE path=?`, stale, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// linker.md's new graph edge queues stub-target.md as a dependent; the
+	// private document's own body change queues it directly. Both take the
+	// skip path — but their recorded evidence must still converge.
+	writeDoc(t, c.RepositoryPath, "linker.md", "---\nrelated: [stub-target.md]\n---\n# Linker\n\nBrine ratios and crock weights.\n")
+	writeDoc(t, c.RepositoryPath, "private-target.md",
+		"---\nkb_policy:\n  no_llm_context: true\n---\n# Private target\n\nEdited private body, still comfortably long.\n")
+	if _, err := scanner.Scan(t.Context(), c, db); err != nil {
+		t.Fatal(err)
+	}
+	secondModel := &fakeLLM{reply: reply}
+	second, err := RunProgress(t.Context(), c, db, Generators{Analysis: secondModel}, RunOptions{})
+	if err != nil {
+		t.Fatalf("dependent run error=%v", err)
+	}
+	// No analysis prompt for skipped documents — and no private content may
+	// appear in any prompt sent to the model.
+	for _, prompt := range secondModel.prompts {
+		for _, line := range strings.Split(prompt, "\n") {
+			if strings.HasPrefix(line, "Current path: stub-target.md") ||
+				strings.HasPrefix(line, "Current path: private-target.md") {
+				t.Fatalf("skipped document received an analysis prompt: %s", line)
+			}
+		}
+		if strings.Contains(prompt, "private body") {
+			t.Fatal("private content leaked into a prompt")
+		}
+	}
+	if second.Dependents == 0 {
+		t.Fatalf("stale-evidence documents were not queued as dependents: %+v", second)
+	}
+	// The skip stamp must carry freshly rebuilt evidence, not the stale record.
+	for _, path := range []string{"stub-target.md", "private-target.md"} {
+		var raw string
+		if err := db.QueryRow(`SELECT analysis_evidence_json FROM documents WHERE path=?`, path).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		ev, ok := parseAnalysisEvidenceRecord(raw)
+		if !ok || ev.Version < 3 {
+			t.Fatalf("%s kept stale evidence after skip: %q", path, raw)
+		}
+	}
+	// Convergence: the next run sees no delta and requeues nothing.
+	third, err := RunProgress(t.Context(), c, db, Generators{Analysis: &fakeLLM{reply: reply}}, RunOptions{})
+	if err != nil {
+		t.Fatalf("convergence run error=%v", err)
+	}
+	if third.Processed != 0 || third.Dependents != 0 {
+		t.Fatalf("skipped documents requeued after evidence rebuild: %+v", third)
+	}
+}
+
 func TestLegacyBodyInboundRemovalIsConservative(t *testing.T) {
 	c, db := setup(t)
 	writeDoc(t, c.RepositoryPath, "target.md", "# Target\n\nNotes on harbor seal colonies.\n")

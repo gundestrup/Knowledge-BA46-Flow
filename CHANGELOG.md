@@ -9,6 +9,14 @@ tag is prepared.
 
 ## [Unreleased]
 
+### Fixed
+
+- Skipped documents (stubs, `no_llm_context` privacy docs) no longer requeue
+  on every scan+analysis: the skip path stamped them while carrying their
+  stale recorded evidence, so a once-drifted v2/pre-v3 record requeued the
+  document forever. The skip stamp now rebuilds the deterministic evidence
+  record — no model call — and the empty-evidence fallback writes v3.
+
 ## [0.6.0] - 2026-11-14
 
 ### Changed

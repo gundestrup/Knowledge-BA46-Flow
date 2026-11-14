@@ -518,7 +518,7 @@ func (p *pipeline) isLanePending(doc database.Document) bool {
 // the resolved analysis model for this run.
 func (p *pipeline) saveAnalysis(doc database.Document, title, summary string, tags []string, sugs []database.Suggestion, results ...database.StageResult) error {
 	if doc.AnalysisEvidenceJSON == "" {
-		doc.AnalysisEvidenceJSON = `{"v":2,"fm":[],"full":[],"inbound":[],"siblings":[],"validation_context":""}`
+		doc.AnalysisEvidenceJSON = `{"v":3,"fm":[],"full":[],"inbound_edges":[],"merge_bodies":[],"siblings":[],"validation_context":""}`
 	}
 	if p.external {
 		doc.SeenExternalRemovalGeneration = p.removalGeneration
@@ -925,6 +925,15 @@ func (p *pipeline) skipLLM(doc database.Document, fm map[string]any, content str
 	// An enrich-only run never stamps the analysis lane — deterministic fixes
 	// stay pending so the next full run still reviews them.
 	if !p.opts.EnrichOnly {
+		// A skipped document never reaches analyzeDoc, so stamping it while
+		// carrying stale evidence would requeue it on every sweep. Rebuild the
+		// deterministic record — no model call — so the next sweep compares
+		// against the context just measured.
+		if fresh, err := p.restampDoc(doc); err != nil {
+			return err
+		} else if fresh != "" {
+			doc.AnalysisEvidenceJSON = fresh
+		}
 		if err := p.saveAnalysis(doc, strings.TrimSpace(title), summary, tags, sugs, database.StageResult{Outcome: "skipped"}); err != nil {
 			return fmt.Errorf("record %s skip for %s: %w", detail, doc.Path, err)
 		}
