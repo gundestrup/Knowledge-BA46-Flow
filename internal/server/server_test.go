@@ -383,6 +383,69 @@ func TestWellKnownFiles(t *testing.T) {
 		t.Fatalf("sitemap.xml status=%d content-type=%q body=%q",
 			res.StatusCode, res.Header.Get("Content-Type"), body)
 	}
+
+	for _, tc := range []struct{ path, contentType string }{
+		{"/favicon.ico", "image/vnd.microsoft.icon"},
+		{"/site.webmanifest", "application/manifest+json"},
+	} {
+		res, err = http.Get(srv.URL + tc.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err = io.ReadAll(res.Body)
+		res.Body.Close()
+		if err != nil || res.StatusCode != http.StatusOK ||
+			res.Header.Get("Content-Type") != tc.contentType || len(body) == 0 {
+			t.Fatalf("%s status=%d content-type=%q bytes=%d",
+				tc.path, res.StatusCode, res.Header.Get("Content-Type"), len(body))
+		}
+	}
+}
+
+// TestStaticETagRevalidation covers the version-scoped ETag that turns
+// post-TTL cache checks into 304s while a stale tag still refetches.
+func TestStaticETagRevalidation(t *testing.T) {
+	_, _, srv := setup(t)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/static/base.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	etag := res.Header.Get("ETag")
+	if !strings.HasPrefix(etag, `W/"`) || !strings.HasSuffix(etag, `:/static/base.css"`) {
+		t.Fatalf("ETag=%q, want weak version:path tag", etag)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/static/base.css", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("If-None-Match", etag)
+	res, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(res.Body)
+	res.Body.Close()
+	if err != nil || res.StatusCode != http.StatusNotModified || len(body) != 0 {
+		t.Fatalf("revalidation status=%d body=%d bytes", res.StatusCode, len(body))
+	}
+
+	req, err = http.NewRequest(http.MethodGet, srv.URL+"/static/base.css", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("If-None-Match", `W/"stale:/static/base.css"`)
+	res, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("stale tag status=%d, want 200", res.StatusCode)
+	}
 }
 
 func TestListPendingSuggestions(t *testing.T) {

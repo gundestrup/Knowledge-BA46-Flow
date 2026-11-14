@@ -11,6 +11,10 @@ tag is prepared.
 
 ### Changed
 
+- Static dashboard assets now carry a version-scoped `ETag`, so post-TTL
+  browser cache checks return cheap 304 revalidations instead of full
+  refetches; `/favicon.ico` and `/site.webmanifest` are also served at the
+  site root for conventional browser/crawler lookups.
 - Inbound-link evidence now counts only frontmatter graph edges
   (`related`, `contradicted_by`) on both the indexed and the fallback
   query path. Body links are still indexed for link repair, but adding a

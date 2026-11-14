@@ -31,6 +31,7 @@ import (
 	"knowledge-ba46-flow/internal/paths"
 	repositoryreport "knowledge-ba46-flow/internal/report"
 	"knowledge-ba46-flow/internal/review"
+	"knowledge-ba46-flow/internal/version"
 )
 
 //go:embed static/index.html
@@ -44,6 +45,12 @@ var reportUI []byte
 
 //go:embed static/robots.txt
 var robotsTxt []byte
+
+//go:embed static/favicon.ico
+var faviconICO []byte
+
+//go:embed static/site.webmanifest
+var siteWebmanifest []byte
 
 //go:embed static
 var staticFiles embed.FS
@@ -120,6 +127,8 @@ func NewMux(c config.Config, db *database.DB, stop chan<- struct{}) http.Handler
 	mux.HandleFunc("GET /report/{$}", servePage(dev, "report.html", reportUI))
 	mux.Handle("GET /static/", staticCache(dev != nil, staticHandler(dev)))
 	mux.Handle("GET /robots.txt", staticCache(dev != nil, serveFile(dev, "robots.txt", robotsTxt, "text/plain; charset=utf-8")))
+	mux.Handle("GET /favicon.ico", staticCache(dev != nil, serveFile(dev, "favicon.ico", faviconICO, "image/vnd.microsoft.icon")))
+	mux.Handle("GET /site.webmanifest", staticCache(dev != nil, serveFile(dev, "site.webmanifest", siteWebmanifest, "application/manifest+json")))
 	mux.HandleFunc("GET /sitemap.xml", sitemapXML)
 	mux.HandleFunc("POST /api/client-log", clientLog)
 	mux.HandleFunc("GET /{$}", servePage(dev, "index.html", landingUI)) // {$} matches the root path only
@@ -318,8 +327,21 @@ func staticCache(dev bool, next http.Handler) http.Handler {
 			w.Header().Set("Cache-Control", "no-store")
 		} else {
 			// Assets have stable names across builds, so do not cache them
-			// immutably: an upgrade must become visible within one hour.
+			// immutably: an upgrade must become visible within one hour. The
+			// version-scoped ETag (weak: gzip rewrites the bytes) turns every
+			// post-TTL check into a cheap 304 revalidation instead of a full
+			// refetch, while an upgraded binary still busts the tag.
+			etag := `W/"` + version.Version + `:` + r.URL.Path + `"`
 			w.Header().Set("Cache-Control", "public, max-age=3600")
+			w.Header().Set("ETag", etag)
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+				for candidate := range strings.SplitSeq(r.Header.Get("If-None-Match"), ",") {
+					if tag := strings.TrimSpace(candidate); tag == etag || tag == "*" {
+						w.WriteHeader(http.StatusNotModified)
+						return
+					}
+				}
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
