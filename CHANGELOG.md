@@ -17,6 +17,12 @@ tag is prepared.
   document forever. The skip stamp now rebuilds the deterministic evidence
   record — no model call — and the empty-evidence fallback writes v3.
 
+### Security
+
+- Build toolchain bumped to Go 1.27.4 (`go.mod`, CI container images,
+  Dockerfile) for the `net/http` `MaxBytesReader` header-race fix
+  (GO-2026-6859).
+
 ## [0.6.0] - 2026-11-14
 
 ### Changed
