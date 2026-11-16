@@ -14,6 +14,6 @@ jobs:
     container:
       image: golang:1.27.4-trixie@sha256:b54b2639de8c1bfe538ec5ffc45f29b1932235ac5f6d63c059853646677112d9
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify release tag, VERSION, and changelog
         run: make release-check RELEASE_TAG="${GITHUB_REF_NAME}"
