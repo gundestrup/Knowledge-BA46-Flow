@@ -12,7 +12,11 @@
 [![Go 1.27+](https://img.shields.io/badge/Go-1.27%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Version][version-badge]][changelog]
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/gundestrup/Knowledge-BA46-Flow)
+<!-- markdownlint-disable MD033 -->
+
+[<img src="https://devin.ai/assets/askdeepwiki.png" alt="Ask DeepWiki" height="20"/>](https://deepwiki.com/gundestrup/Knowledge-BA46-Flow)
+<!-- markdownlint-enable MD033 -->
+
 [![Icons: Lucide](https://img.shields.io/badge/UI_icons-Lucide-F56565?logo=lucide&logoColor=white)](https://lucide.dev/icons/)
 [![Icons: Simple Icons](https://img.shields.io/badge/brand_icons-Simple%20Icons-111111?logo=simpleicons&logoColor=white)](https://simpleicons.org/)
 
