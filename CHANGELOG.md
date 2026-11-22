@@ -22,6 +22,12 @@ tag is prepared.
 - Build toolchain bumped to Go 1.27.4 (`go.mod`, CI container images,
   Dockerfile) for the `net/http` `MaxBytesReader` header-race fix
   (GO-2026-6859).
+- E2E screencast scripts no longer interpolate values into `page.eval`
+  expression strings: `browser.mjs` gains `callFunction(fn, ...args)`
+  backed by CDP `Runtime.callFunctionOn`, and `clickText`/`scrollToEl`/
+  `clickAll` now pass selectors, regex parts, and numbers as structured
+  arguments — removes the `js/bad-code-sanitization` code-injection
+  surface flagged by CodeQL.
 
 ## [0.6.0] - 2026-11-14
 

@@ -30,20 +30,42 @@ const frames = await startRecording(page, framesDir);
 const { pause, goto, step } = tour(page, baseURL, frames);
 try {
   const clickText = async (re) => {
-    const hit = await page.eval(
-      `(() => { const b = [...document.querySelectorAll("button, summary")].find(x => ${re}.test(x.textContent)); if (b) { window.__lastClick = b; b.click(); } return b ? b.textContent.trim().slice(0, 40) : null; })()`,
+    const hit = await page.callFunction(
+      (src, flags) => {
+        const re = new RegExp(src, flags);
+        const b = [...document.querySelectorAll("button, summary")].find(
+          (x) => re.test(x.textContent),
+        );
+        if (b) {
+          window.__lastClick = b;
+          b.click();
+        }
+        return b ? b.textContent.trim().slice(0, 40) : null;
+      },
+      re.source,
+      re.flags,
     );
     process.stderr.write(`  click ${re} -> ${hit ?? "MISS"}\n`);
   };
   const centerLast = () =>
     page.eval(`window.__lastClick?.scrollIntoView({ block: "center" })`);
   const scrollToEl = async (sel, ms = 1000, offset = 80) => {
-    const top = await page.eval(
-      `(() => { const el = document.querySelector(${JSON.stringify(sel)}); return el ? el.getBoundingClientRect().top + window.scrollY - ${Number(offset) || 0} : document.body.scrollHeight; })()`,
+    const top = await page.callFunction(
+      (selector, off) => {
+        const el = document.querySelector(selector);
+        return el
+          ? el.getBoundingClientRect().top + window.scrollY - (Number(off) || 0)
+          : document.body.scrollHeight;
+      },
+      sel,
+      offset,
     );
     const n = 10;
     for (let i = 1; i <= n; i++) {
-      await page.eval(`window.scrollTo(0, ${Math.round((top * i) / n)})`);
+      await page.callFunction(
+        (y) => window.scrollTo(0, y),
+        Math.round((top * i) / n),
+      );
       await pause(ms / n);
     }
   };

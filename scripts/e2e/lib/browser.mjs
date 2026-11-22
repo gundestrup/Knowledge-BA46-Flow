@@ -186,6 +186,26 @@ export class Page {
     return result.result.value;
   }
 
+  // callFunction invokes a function in the page with arguments passed as
+  // structured values, unlike eval — no string interpolation, so there is
+  // no code-injection surface. Arguments must be JSON-serializable.
+  async callFunction(fn, ...args) {
+    const result = await this.client.send("Runtime.callFunctionOn", {
+      functionDeclaration: fn.toString(),
+      arguments: args.map((value) => ({ value })),
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    if (result.exceptionDetails) {
+      const detail = result.exceptionDetails;
+      const description = detail.exception?.description || detail.text;
+      throw new Error(
+        `page callFunction failed: ${description} — in: ${String(fn).slice(0, 120)}`,
+      );
+    }
+    return result.result.value;
+  }
+
   // waitFor polls an expression until it returns truthy; use it to await
   // Alpine-driven DOM updates rather than fixed sleeps.
   async waitFor(
