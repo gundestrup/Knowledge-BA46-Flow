@@ -266,12 +266,16 @@ export function tour(page, baseURL, frames) {
     await pause(1800);
   };
   const clickAll = async (sel, max, pauseMs = 1200) => {
-    const count = await page.eval(
-      `document.querySelectorAll(${JSON.stringify(sel)}).length`,
+    const count = await page.callFunction(
+      (selector) => document.querySelectorAll(selector).length,
+      sel,
     );
     for (let i = 0; i < Math.min(count, max); i++) {
-      await page.eval(
-        `document.querySelectorAll(${JSON.stringify(sel)})[${i}]?.click()`,
+      await page.callFunction(
+        (selector, index) =>
+          document.querySelectorAll(selector)[index]?.click(),
+        sel,
+        i,
       );
       await pause(pauseMs);
     }
