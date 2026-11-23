@@ -33,8 +33,8 @@ try {
     const hit = await page.callFunction(
       (src, flags) => {
         const re = new RegExp(src, flags);
-        const b = [...document.querySelectorAll("button, summary")].find(
-          (x) => re.test(x.textContent),
+        const b = [...document.querySelectorAll("button, summary")].find((x) =>
+          re.test(x.textContent),
         );
         if (b) {
           window.__lastClick = b;
