@@ -28,11 +28,11 @@
   },
   "devDependencies": {
     "@alpinejs/csp": "3.17.5",
-    "@biomejs/biome": "2.6.6",
+    "@biomejs/biome": "2.6.8",
     "@creativebulma/bulma-tooltip": "1.2.0",
     "bulma": "1.0.4",
     "chart.js": "4.6.1",
     "flag-icons": "7.6.0",
-    "prettier": "3.9.10"
+    "prettier": "3.10.1"
   }
 }

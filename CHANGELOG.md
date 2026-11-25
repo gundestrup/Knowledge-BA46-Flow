@@ -9,6 +9,12 @@ tag is prepared.
 
 ## [Unreleased]
 
+### Changed
+
+- npm dev-deps: `prettier` 3.9.10 → 3.10.1, `@biomejs/biome` 2.6.6 →
+  2.6.8 (`min-release-age=7` filtered `chart.js` 4.6.2 and `biome` 2.6.9
+  — eligible for the next sweep).
+
 ### Fixed
 
 - Skipped documents (stubs, `no_llm_context` privacy docs) no longer requeue
